@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { Worker } from 'node:worker_threads';
 
@@ -48,7 +49,7 @@ test('SQLite receipt store retains an uncertain write outcome for deduplication'
   }
 });
 
-test('trusted inbound queue atomically claims FIFO messages across stores and ignores replay', () => {
+test('trusted inbound queue atomically claims FIFO messages across stores and requeues one replay', () => {
   const dir = mkdtempSync(join(tmpdir(), 'clawbot-inbound-queue-'));
   const path = join(dir, 'receipts.sqlite');
   let firstStore;
@@ -85,6 +86,10 @@ test('trusted inbound queue atomically claims FIFO messages across stores and ig
       now + 20_000,
     );
     assert.deepEqual(secondStore.claimTrustedInbound([senderKey], now), secondPayload);
+    assert.deepEqual(firstStore.claimTrustedInbound([sessionKey], now), {
+      messageId: 'message-1',
+      content: 'replayed and replaced',
+    });
     assert.equal(firstStore.claimTrustedInbound([sessionKey, senderKey], now), undefined);
   } finally {
     firstStore?.close();
@@ -99,9 +104,32 @@ test('trusted inbound queue lets only one concurrent store claim a message', asy
   let store;
   const workers = [];
   try {
-    store = new SqliteReceiptStore(path);
     const now = Date.now();
     const payload = { messageId: 'message-concurrent', content: '午饭7.2' };
+    const raceClaims = async () => {
+      const barrier = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+      const raceWorkers = [];
+      for (let index = 0; index < 2; index += 1) {
+        const worker = new Worker(new URL('./fixtures/claim-trusted-inbound-worker.mjs', import.meta.url), {
+          workerData: { path, lookupKey: 'concurrent-lookup-hash', now, barrier },
+        });
+        workers.push(worker);
+        raceWorkers.push(worker);
+      }
+      await Promise.all(raceWorkers.map((worker) => new Promise((resolve, reject) => {
+        worker.once('message', (message) => message.ready ? resolve() : reject(new Error('worker was not ready')));
+        worker.once('error', reject);
+      })));
+      const results = raceWorkers.map((worker) => new Promise((resolve, reject) => {
+        worker.once('message', (message) => resolve(message.result));
+        worker.once('error', reject);
+      }));
+      Atomics.store(new Int32Array(barrier), 0, 1);
+      Atomics.notify(new Int32Array(barrier), 0, raceWorkers.length);
+      return (await Promise.all(results)).filter(Boolean);
+    };
+
+    store = new SqliteReceiptStore(path);
     store.enqueueTrustedInbound(
       ['concurrent-lookup-hash'],
       'concurrent-message-hash',
@@ -111,24 +139,18 @@ test('trusted inbound queue lets only one concurrent store claim a message', asy
     store.close();
     store = undefined;
 
-    const barrier = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
-    for (let index = 0; index < 2; index += 1) {
-      workers.push(new Worker(new URL('./fixtures/claim-trusted-inbound-worker.mjs', import.meta.url), {
-        workerData: { path, lookupKey: 'concurrent-lookup-hash', now, barrier },
-      }));
-    }
-    await Promise.all(workers.map((worker) => new Promise((resolve, reject) => {
-      worker.once('message', (message) => message.ready ? resolve() : reject(new Error('worker was not ready')));
-      worker.once('error', reject);
-    })));
-    const results = workers.map((worker) => new Promise((resolve, reject) => {
-      worker.once('message', (message) => resolve(message.result));
-      worker.once('error', reject);
-    }));
-    Atomics.store(new Int32Array(barrier), 0, 1);
-    Atomics.notify(new Int32Array(barrier), 0, workers.length);
+    assert.deepEqual(await raceClaims(), [payload]);
 
-    assert.deepEqual((await Promise.all(results)).filter(Boolean), [payload]);
+    store = new SqliteReceiptStore(path);
+    store.enqueueTrustedInbound(
+      ['concurrent-lookup-hash'],
+      'concurrent-message-hash',
+      payload,
+      now + 20_000,
+    );
+    store.close();
+    store = undefined;
+    assert.deepEqual(await raceClaims(), [payload]);
   } finally {
     await Promise.all(workers.map((worker) => worker.terminate()));
     store?.close();
@@ -162,6 +184,86 @@ test('trusted inbound queue discards expired entries without disturbing receipt 
     assert.deepEqual(store.claim('receipt-history'), {
       status: 'created',
       transactionId: 'transaction-history',
+    });
+  } finally {
+    store?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrates valid legacy trusted messages, scrubs the old table, and preserves receipts', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-inbound-migration-'));
+  const path = join(dir, 'receipts.sqlite');
+  const now = Date.now();
+  const validPayload = {
+    channel: 'openclaw-weixin',
+    messageId: 'legacy-message-valid',
+    content: '午饭7.2',
+    timestamp: now - 1_000,
+    observedAt: now - 1_000,
+    timeSource: 'message',
+  };
+  const expiredPayload = { ...validPayload, messageId: 'legacy-message-expired' };
+  let store;
+  try {
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`
+      CREATE TABLE message_receipts (
+        receipt_key TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE trusted_inbound_messages (
+        lookup_key TEXT PRIMARY KEY,
+        payload_json TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
+      );
+    `);
+    legacy.prepare(`
+      INSERT INTO message_receipts (receipt_key, status, payload_json, updated_at)
+      VALUES (?, 'created', ?, ?)
+    `).run(
+      'openclaw-weixin:legacy-receipt',
+      JSON.stringify({ status: 'created', transactionId: 'legacy-transaction' }),
+      now,
+    );
+    const insertLegacy = legacy.prepare(`
+      INSERT INTO trusted_inbound_messages (lookup_key, payload_json, expires_at)
+      VALUES (?, ?, ?)
+    `);
+    insertLegacy.run('legacy-session-hash', JSON.stringify(validPayload), now + 10_000);
+    insertLegacy.run('legacy-sender-hash', JSON.stringify(validPayload), now + 10_000);
+    insertLegacy.run('legacy-expired-hash', JSON.stringify(expiredPayload), now - 1);
+    insertLegacy.run('legacy-malformed-json-hash', '{not-json', now + 10_000);
+    insertLegacy.run('legacy-invalid-payload-hash', JSON.stringify({ messageId: 'missing-fields' }), now + 10_000);
+    legacy.close();
+
+    store = new SqliteReceiptStore(path);
+    assert.deepEqual(store.claimTrustedInbound(['legacy-session-hash'], now), validPayload);
+    assert.equal(store.claimTrustedInbound(['legacy-sender-hash'], now), undefined);
+    assert.equal(store.claimTrustedInbound(['legacy-expired-hash'], now), undefined);
+    assert.equal(store.claimTrustedInbound(['legacy-malformed-json-hash'], now), undefined);
+    assert.equal(store.claimTrustedInbound(['legacy-invalid-payload-hash'], now), undefined);
+    assert.deepEqual(store.claim('openclaw-weixin:legacy-receipt'), {
+      status: 'created',
+      transactionId: 'legacy-transaction',
+    });
+    store.close();
+    store = undefined;
+
+    const inspector = new DatabaseSync(path);
+    assert.equal(inspector.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name = 'trusted_inbound_messages'
+    `).get(), undefined);
+    inspector.close();
+
+    store = new SqliteReceiptStore(path);
+    assert.equal(store.claimTrustedInbound(['legacy-session-hash', 'legacy-sender-hash'], now), undefined);
+    assert.deepEqual(store.claim('openclaw-weixin:legacy-receipt'), {
+      status: 'created',
+      transactionId: 'legacy-transaction',
     });
   } finally {
     store?.close();

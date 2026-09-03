@@ -1,9 +1,34 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_REQUEST_TIMEOUT_MS = 60_000;
+
+export function trustedInboundMessageKey(channel, messageId) {
+  return createHash('sha256').update(`message\u0000${channel}\u0000${messageId}`, 'utf8').digest('hex');
+}
+
+function normalizeTrustedInboundPayload(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || typeof value.channel !== 'string' || value.channel.trim() === ''
+    || typeof value.messageId !== 'string' || value.messageId.trim() === ''
+    || typeof value.content !== 'string'
+    || !Number.isFinite(value.timestamp) || value.timestamp <= 0
+    || !Number.isFinite(value.observedAt) || value.observedAt <= 0
+    || (value.timeSource !== 'message' && value.timeSource !== 'received')) {
+    return undefined;
+  }
+  return {
+    channel: value.channel,
+    messageId: value.messageId,
+    content: value.content,
+    timestamp: value.timestamp,
+    observedAt: value.observedAt,
+    timeSource: value.timeSource,
+  };
+}
 
 function expenseCategoryId(value) {
   if ((typeof value !== 'string' && typeof value !== 'number')
@@ -54,6 +79,7 @@ export class SqliteReceiptStore {
       PRAGMA journal_mode = WAL;
       PRAGMA synchronous = FULL;
       PRAGMA busy_timeout = 5000;
+      PRAGMA secure_delete = ON;
       CREATE TABLE IF NOT EXISTS message_receipts (
         receipt_key TEXT PRIMARY KEY,
         status TEXT NOT NULL,
@@ -75,6 +101,7 @@ export class SqliteReceiptStore {
       CREATE INDEX IF NOT EXISTS trusted_inbound_queue_lookup
       ON trusted_inbound_queue_lookups (lookup_key, message_key);
     `);
+    this.#migrateLegacyTrustedInboundMessages();
     this.insertPending = this.database.prepare(`
       INSERT OR IGNORE INTO message_receipts (receipt_key, status, payload_json, updated_at)
       VALUES (?, 'pending', '{"status":"pending"}', ?)
@@ -90,6 +117,15 @@ export class SqliteReceiptStore {
     this.insertTrustedInbound = this.database.prepare(`
       INSERT OR IGNORE INTO trusted_inbound_queue (message_key, payload_json, expires_at)
       VALUES (?, ?, ?)
+    `);
+    this.reactivateTrustedInbound = this.database.prepare(`
+      UPDATE trusted_inbound_queue
+      SET arrival_order = (
+            SELECT COALESCE(MAX(pending.arrival_order), 0) + 1
+            FROM trusted_inbound_queue AS pending
+          ),
+          payload_json = ?, expires_at = ?, claimed_at = NULL
+      WHERE message_key = ? AND claimed_at IS NOT NULL
     `);
     this.insertTrustedInboundLookup = this.database.prepare(`
       INSERT OR IGNORE INTO trusted_inbound_queue_lookups (lookup_key, message_key)
@@ -139,7 +175,10 @@ export class SqliteReceiptStore {
     this.#withImmediateTransaction(() => {
       this.#deleteExpiredTrustedInbound(Date.now());
       const inserted = this.insertTrustedInbound.run(messageKey, payloadJson, expiresAt);
-      if (Number(inserted.changes) !== 1) return;
+      const reactivated = Number(inserted.changes) === 1
+        ? inserted
+        : this.reactivateTrustedInbound.run(payloadJson, expiresAt, messageKey);
+      if (Number(reactivated.changes) !== 1) return;
       for (const key of keys) this.insertTrustedInboundLookup.run(key, messageKey);
     });
   }
@@ -174,6 +213,76 @@ export class SqliteReceiptStore {
   #deleteExpiredTrustedInbound(now) {
     this.deleteExpiredTrustedInboundLookups.run(now);
     this.deleteExpiredTrustedInboundMessages.run(now);
+  }
+
+  #migrateLegacyTrustedInboundMessages() {
+    this.#withImmediateTransaction(() => {
+      const legacyTable = this.database.prepare(`
+        SELECT name FROM sqlite_master
+        WHERE type = 'table' AND name = 'trusted_inbound_messages'
+      `).get();
+      if (!legacyTable) return;
+
+      const now = Date.now();
+      const groups = new Map();
+      for (const row of this.database.prepare(`
+        SELECT lookup_key, payload_json, expires_at FROM trusted_inbound_messages
+        WHERE typeof(lookup_key) = 'text'
+          AND typeof(payload_json) = 'text'
+          AND typeof(expires_at) = 'integer'
+          AND expires_at BETWEEN ? AND 9007199254740991
+      `).all(now)) {
+        if (typeof row.lookup_key !== 'string' || row.lookup_key.length === 0
+          || typeof row.payload_json !== 'string'
+          || !Number.isSafeInteger(row.expires_at)) continue;
+        let parsed;
+        try {
+          parsed = JSON.parse(row.payload_json);
+        } catch {
+          continue;
+        }
+        const payload = normalizeTrustedInboundPayload(parsed);
+        if (!payload) continue;
+        const messageKey = trustedInboundMessageKey(payload.channel, payload.messageId);
+        const payloadJson = JSON.stringify(payload);
+        const existing = groups.get(messageKey);
+        if (existing && existing.payloadJson !== payloadJson) {
+          existing.conflicted = true;
+          continue;
+        }
+        const group = existing ?? {
+          messageKey,
+          payloadJson,
+          expiresAt: row.expires_at,
+          observedAt: payload.observedAt,
+          lookupKeys: new Set(),
+          conflicted: false,
+        };
+        group.expiresAt = Math.max(group.expiresAt, row.expires_at);
+        group.lookupKeys.add(row.lookup_key);
+        groups.set(messageKey, group);
+      }
+
+      const insertMessage = this.database.prepare(`
+        INSERT OR IGNORE INTO trusted_inbound_queue (message_key, payload_json, expires_at)
+        VALUES (?, ?, ?)
+      `);
+      const insertLookup = this.database.prepare(`
+        INSERT OR IGNORE INTO trusted_inbound_queue_lookups (lookup_key, message_key)
+        VALUES (?, ?)
+      `);
+      const orderedGroups = [...groups.values()].sort(
+        (left, right) => left.observedAt - right.observedAt
+          || left.messageKey.localeCompare(right.messageKey),
+      );
+      for (const group of orderedGroups) {
+        if (group.conflicted) continue;
+        const inserted = insertMessage.run(group.messageKey, group.payloadJson, group.expiresAt);
+        if (Number(inserted.changes) !== 1) continue;
+        for (const lookupKey of group.lookupKeys) insertLookup.run(lookupKey, group.messageKey);
+      }
+      this.database.exec('DROP TABLE trusted_inbound_messages');
+    });
   }
 
   #withImmediateTransaction(action) {

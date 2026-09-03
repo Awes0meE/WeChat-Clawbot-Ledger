@@ -4,7 +4,11 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry';
 
-import { EzBookkeepingApi, SqliteReceiptStore } from './adapter.mjs';
+import {
+  EzBookkeepingApi,
+  SqliteReceiptStore,
+  trustedInboundMessageKey,
+} from './adapter.mjs';
 import {
   duplicateResponseText,
   ExpenseRecordingError,
@@ -37,10 +41,6 @@ const TRUSTED_INBOUND_MAX_AGE_MS = 10 * 60 * 1000;
 
 function trustedInboundLookupKey(kind: 'session' | 'sender', value: string) {
   return createHash('sha256').update(`${kind}\u0000${value}`, 'utf8').digest('hex');
-}
-
-function trustedInboundMessageKey(channel: string, messageId: string) {
-  return createHash('sha256').update(`message\u0000${channel}\u0000${messageId}`, 'utf8').digest('hex');
 }
 
 function trustedInboundLookupKeys({

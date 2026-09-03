@@ -163,6 +163,94 @@ test('returns the authoritative rich receipt after a trusted expense write', asy
   }
 });
 
+for (const scenario of [
+  {
+    name: 'created',
+    firstStatus: 'created',
+    duplicateText: '同一条微信消息已处理，未重复入账。',
+    fetchFailure: undefined,
+    expectedRequestCount: 3,
+    expectedPostCount: 1,
+  },
+  {
+    name: 'failed',
+    firstStatus: 'failed',
+    duplicateText: '上一处理尝试失败，未重复入账；请重新发送一条消息重试。',
+    fetchFailure: 'prewrite',
+    expectedRequestCount: 1,
+    expectedPostCount: 0,
+  },
+  {
+    name: 'unknown',
+    firstStatus: 'unknown',
+    duplicateText: '同一条微信消息正在处理或状态未确认，未重复入账。',
+    fetchFailure: 'post',
+    expectedRequestCount: 3,
+    expectedPostCount: 1,
+  },
+]) {
+  test(`re-materializes a ${scenario.name} trusted-message replay for durable deduplication`, async () => {
+    const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+    writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+    let requestCount = 0;
+    let postCount = 0;
+    const harness = createPluginHarness(tempDirectory, async (url) => {
+      requestCount += 1;
+      if (scenario.fetchFailure === 'prewrite') throw new Error('prewrite unavailable');
+      if (url.endsWith('/accounts/list.json')) {
+        return new Response(JSON.stringify({ success: true, result: [
+          { id: 'account-1', name: '日常支出', currency: 'SGD' },
+        ] }), { status: 200 });
+      }
+      if (url.endsWith('/transaction/categories/list.json')) {
+        return new Response(JSON.stringify({ success: true, result: {
+          2: [{ id: 'primary-1', name: '食品酒水', parentId: '0', subCategories: [
+            { id: 'secondary-1', name: '超市购物', parentId: 'primary-1' },
+          ] }],
+        } }), { status: 200 });
+      }
+      if (url.endsWith('/transactions/add.json')) {
+        postCount += 1;
+        if (scenario.fetchFailure === 'post') throw new Error('post outcome unavailable');
+        return new Response(JSON.stringify({ success: true, result: { id: 'transaction-replay' } }), { status: 200 });
+      }
+      throw new Error('unexpected test request');
+    });
+
+    const message = {
+      content: 'NTUC购物8.25，买了两根芹菜，一个菜板',
+      messageId: `wechat-message-replay-${scenario.name}`,
+    };
+    const params = {
+      amount: '8.25', primaryCategory: '食品酒水', subcategory: '超市购物',
+    };
+    try {
+      await receiveTrustedOwnerMessage(harness.inboundHooks, message);
+      const first = await harness.recordExpenseFactory(trustedOwnerContext()).execute(
+        `tool-call-replay-${scenario.name}-first`,
+        params,
+      );
+      assert.equal(first.details.status, scenario.firstStatus);
+      assert.equal(requestCount, scenario.expectedRequestCount);
+      assert.equal(postCount, scenario.expectedPostCount);
+
+      await receiveTrustedOwnerMessage(harness.inboundHooks, message);
+      const replay = await harness.recordExpenseFactory(trustedOwnerContext()).execute(
+        `tool-call-replay-${scenario.name}-second`,
+        params,
+      );
+
+      assert.equal(replay.content[0].text, scenario.duplicateText);
+      assert.equal(replay.details.status, 'duplicate');
+      assert.equal(requestCount, scenario.expectedRequestCount);
+      assert.equal(postCount, scenario.expectedPostCount);
+    } finally {
+      harness.restore();
+      rmSync(tempDirectory, { recursive: true, force: true });
+    }
+  });
+}
+
 test('keeps coupon arithmetic from replacing the requested expense amount', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
