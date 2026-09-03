@@ -448,6 +448,79 @@ test('fails both concurrent calls closed when different runs share one tool call
   }
 });
 
+test('invalidates an in-flight write when another run collides before POST', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  let releaseAccountLookup;
+  let signalAccountLookupStarted;
+  const accountLookupStarted = new Promise((resolve) => { signalAccountLookupStarted = resolve; });
+  const accountLookupReleased = new Promise((resolve) => { releaseAccountLookup = resolve; });
+  const harness = createPluginHarness(tempDirectory, async (url, options) => {
+    requests.push({ url, options });
+    if (url.endsWith('/accounts/list.json')) {
+      signalAccountLookupStarted();
+      await accountLookupReleased;
+      return new Response(JSON.stringify({ success: true, result: [
+        { id: 'account-1', name: '日常支出', currency: 'SGD' },
+      ] }), { status: 200 });
+    }
+    if (url.endsWith('/transaction/categories/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: {
+        2: [{ id: 'primary-1', name: '食品酒水', parentId: '0', subCategories: [
+          { id: 'secondary-1', name: '早午晚餐', parentId: 'primary-1' },
+        ] }],
+      } }), { status: 200 });
+    }
+    if (url.endsWith('/transactions/add.json')) {
+      return new Response(JSON.stringify({ success: true, result: { id: 'must-not-be-created' } }), { status: 200 });
+    }
+    throw new Error(`unexpected URL: ${url}`);
+  });
+
+  try {
+    const cachedTool = harness.rawRecordExpenseFactory(trustedOwnerContext());
+    const params = {
+      amount: '7.2',
+      primaryCategory: '食品酒水',
+      subcategory: '早午晚餐',
+    };
+    const firstRunId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭7.2',
+      messageId: 'in-flight-collision-first-message',
+    });
+    const firstExecution = executeForTurn(harness.inboundHooks, cachedTool, {
+      runId: firstRunId,
+      toolCallId: 'in-flight-shared-tool-call-id',
+      params,
+    });
+    await accountLookupStarted;
+
+    const secondRunId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '晚饭7.2',
+      messageId: 'in-flight-collision-second-message',
+    });
+    await bindToolCallForTurn(harness.inboundHooks, {
+      runId: secondRunId,
+      toolCallId: 'in-flight-shared-tool-call-id',
+      params,
+    });
+    const secondExecution = cachedTool.execute('in-flight-shared-tool-call-id', params);
+    releaseAccountLookup();
+
+    const [firstResult, secondResult] = await Promise.allSettled([firstExecution, secondExecution]);
+    assert.equal(firstResult.status, 'fulfilled');
+    assert.equal(firstResult.value.details.status, 'failed');
+    assert.equal(secondResult.status, 'rejected');
+    assert.match(secondResult.reason.message, /可信元数据/u);
+    assert.equal(requests.some(({ url }) => url.endsWith('/transactions/add.json')), false);
+  } finally {
+    releaseAccountLookup?.();
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
 test('keeps a reused tool call id ambiguous after the first run ends', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');

@@ -266,7 +266,14 @@ export function duplicateResponseText(result) {
   return '同一条微信消息已处理，未重复入账。';
 }
 
-export async function recordExpense({ api, store, input, inbound, accountName = '日常支出' }) {
+export async function recordExpense({
+  api,
+  store,
+  input,
+  inbound,
+  accountName = '日常支出',
+  validateBeforeWrite,
+}) {
   const receiptKey = messageReceiptKey(inbound);
   const sourceAmount = parseAmountToMinorUnits(input.amount);
   if (!isAuthorizedExpenseMessage(inbound.content, sourceAmount)) {
@@ -290,6 +297,22 @@ export async function recordExpense({ api, store, input, inbound, accountName = 
     sourceAccountId = await api.resolveAccountId(accountName);
     categoryId = await api.resolveExpenseCategoryId(input.primaryCategory, input.subcategory);
   } catch {
+    const dedupeStatus = persistOutcome(store, 'fail', receiptKey, {
+      status: 'failed',
+      clientSessionId,
+    });
+    throw new ExpenseRecordingError('not_written', { dedupeStatus });
+  }
+
+  let writeStillAuthorized = true;
+  if (typeof validateBeforeWrite === 'function') {
+    try {
+      writeStillAuthorized = validateBeforeWrite() === true;
+    } catch {
+      writeStillAuthorized = false;
+    }
+  }
+  if (!writeStillAuthorized) {
     const dedupeStatus = persistOutcome(store, 'fail', receiptKey, {
       status: 'failed',
       clientSessionId,

@@ -422,14 +422,16 @@ export default definePluginEntry({
             if (toolContext.senderIsOwner !== true) {
               throw new Error('无法确认消息发送者为账本所有者，已拒绝入账。');
             }
-            const slot = typeof _id === 'string'
-              ? toolCallSlots.get(transientBindingKey('tool-call', _id))
+            const toolCallKey = typeof _id === 'string'
+              ? transientBindingKey('tool-call', _id)
               : undefined;
+            const slot = toolCallKey ? toolCallSlots.get(toolCallKey) : undefined;
             const inbound = slot?.ambiguous === false ? slot.inbound : undefined;
             if (slot) delete slot.inbound;
-            if (!inbound) {
+            if (!slot || !inbound || !toolCallKey) {
               throw new Error('缺少当前微信消息的可信元数据，已拒绝入账。');
             }
+            const boundRunKey = slot.runKey;
             if (Date.now() - inbound.observedAt > TRUSTED_INBOUND_MAX_AGE_MS) {
               throw new Error('当前微信消息的可信元数据已过期，已拒绝入账。');
             }
@@ -445,6 +447,9 @@ export default definePluginEntry({
                 input: normalizedInput,
                 inbound,
                 accountName,
+                validateBeforeWrite: () => toolCallSlots.get(toolCallKey) === slot
+                  && slot.runKey === boundRunKey
+                  && slot.ambiguous === false,
               }) as RecordExpenseResult;
             } catch (error) {
               if (!(error instanceof ExpenseRecordingError)) throw error;
