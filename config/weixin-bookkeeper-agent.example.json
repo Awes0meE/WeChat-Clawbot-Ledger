@@ -3,12 +3,19 @@
     "path": "agents.entries.bookkeeper",
     "value": {
       "name": "bookkeeper",
-      "description": "微信专用本地记账代理",
+      "description": "微信专用 Codex 记账代理",
       "workspace": "<ABSOLUTE_PROJECT_PATH>\\openclaw-workspace",
       "model": {
-        "primary": "ollama/qwen3:8b"
+        "primary": "openai/gpt-5.6-sol"
       },
-      "thinkingDefault": "off",
+      "models": {
+        "openai/gpt-5.6-sol": {
+          "agentRuntime": {
+            "id": "codex"
+          }
+        }
+      },
+      "thinkingDefault": "low",
       "reasoningDefault": "off",
       "contextInjection": "continuation-skip",
       "bootstrapMaxChars": 4000,

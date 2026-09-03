@@ -74,6 +74,7 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
       context,
     ),
     rawRecordExpenseFactory: recordExpenseFactory,
+    rawPrepareExpenseFactory: prepareExpenseFactory,
     recordExpenseDefinition,
     logs,
     restore() {
@@ -137,7 +138,10 @@ async function bindToolCallForTurn(inboundHooks, {
     runId,
     toolCallId,
     sessionKey: 'agent:main:main',
+    channelId: 'openclaw-weixin',
     requester: {
+      channel: 'openclaw-weixin',
+      accountId: 'bot-account',
       senderId: 'owner-user',
       senderIsOwner: true,
     },
@@ -208,6 +212,47 @@ async function receiveTrustedOwnerMessage(inboundHooks, {
 }
 receiveTrustedOwnerMessage.sequence = 0;
 
+async function receiveTrustedOwnerMessageWithoutBeforeAgentRun(inboundHooks, {
+  content,
+  messageId,
+  timestamp = 1_788_425_460,
+}) {
+  const runId = `run-${messageId}-${++receiveTrustedOwnerMessage.sequence}`;
+  inboundHooks.latestRunId = runId;
+  const messageContext = {
+    channelId: 'openclaw-weixin',
+    accountId: 'bot-account',
+    messageId,
+    senderId: 'owner-user',
+    sessionKey: 'agent:main:main',
+  };
+  await inboundHooks.get('message_received')({
+    content,
+    timestamp,
+    messageId,
+    senderId: 'owner-user',
+    sessionKey: 'agent:main:main',
+  }, messageContext);
+  await inboundHooks.get('llm_input')?.({
+    runId,
+    sessionId: 'codex-session',
+    provider: 'openai',
+    model: 'gpt-5.6-sol',
+    prompt: `OpenClaw runtime context for this turn:\n...\n\nCurrent user request:\n${content}`,
+    historyMessages: [],
+    imagesCount: 0,
+  }, {
+    runId,
+    agentId: 'bookkeeper',
+    sessionKey: 'agent:main:main',
+    sessionId: 'codex-session',
+    channel: 'openclaw-weixin',
+    accountId: 'bot-account',
+    trigger: 'user',
+  });
+  return runId;
+}
+
 test('declares the fixed ledger display name in the plugin manifest', () => {
   const manifest = JSON.parse(readFileSync(new URL('../openclaw.plugin.json', import.meta.url), 'utf8'));
   assert.deepEqual(manifest.configSchema.properties.ledgerDisplayName, {
@@ -251,6 +296,208 @@ test('binds a trusted owner run when the embedded before-tool hook omits request
 
     assert.equal(result.details.status, 'created');
     assert.equal(requests.some(({ url }) => url.endsWith('/transactions/add.json')), true);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('binds a trusted owner message when Codex omits sender identity from llm_input', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not run while preparing confirmation');
+  });
+
+  try {
+    const runId = await receiveTrustedOwnerMessageWithoutBeforeAgentRun(harness.inboundHooks, {
+      content: '午饭8.8么？',
+      messageId: 'codex-without-before-agent-run',
+    });
+    const params = {
+      amount: '8.8',
+      primaryCategory: '食品酒水',
+      subcategory: '早午晚餐',
+      comment: '午饭',
+    };
+    const tool = harness.prepareExpenseFactory(trustedOwnerContext());
+    const prepared = await executeForTurn(harness.inboundHooks, tool, {
+      runId,
+      toolCallId: 'codex-prepare-call',
+      toolName: 'prepare_expense',
+      params,
+    });
+
+    assert.equal(prepared.details.status, 'pending_confirmation');
+    assert.match(prepared.content[0].text, /支出：8\.80 SGD/u);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('rejects a Codex tool requester that does not match the correlated sender', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const harness = createPluginHarness(tempDirectory, successfulExpenseFetch(requests));
+
+  try {
+    const runId = await receiveTrustedOwnerMessageWithoutBeforeAgentRun(harness.inboundHooks, {
+      content: '午饭8.8',
+      messageId: 'codex-requester-mismatch',
+    });
+    const params = {
+      amount: '8.8',
+      primaryCategory: '食品酒水',
+      subcategory: '早午晚餐',
+    };
+    await harness.inboundHooks.get('before_tool_call')?.({
+      toolName: 'record_expense',
+      params,
+      runId,
+      toolCallId: 'codex-requester-mismatch-call',
+    }, {
+      runId,
+      toolCallId: 'codex-requester-mismatch-call',
+      sessionKey: 'agent:main:main',
+      channelId: 'openclaw-weixin',
+      requester: {
+        channel: 'openclaw-weixin',
+        accountId: 'bot-account',
+        senderId: 'different-owner',
+        senderIsOwner: true,
+      },
+    });
+
+    await assert.rejects(
+      () => harness.rawRecordExpenseFactory(trustedOwnerContext()).execute(
+        'codex-requester-mismatch-call',
+        params,
+      ),
+      /可信元数据/u,
+    );
+    assert.equal(requests.length, 0);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('replays the first authoritative result when Codex calls a tool twice in one run', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not run while preparing confirmation');
+  });
+
+  try {
+    const runId = await receiveTrustedOwnerMessageWithoutBeforeAgentRun(harness.inboundHooks, {
+      content: '午饭8.8么？',
+      messageId: 'codex-duplicate-tool-call',
+    });
+    const params = {
+      amount: '8.8',
+      primaryCategory: '食品酒水',
+      subcategory: '早午晚餐',
+      comment: '午饭',
+    };
+    const tool = harness.rawPrepareExpenseFactory(trustedOwnerContext());
+    const first = await executeForTurn(harness.inboundHooks, tool, {
+      runId,
+      toolCallId: 'codex-first-call',
+      toolName: 'prepare_expense',
+      params,
+    });
+    const replay = await executeForTurn(harness.inboundHooks, tool, {
+      runId,
+      toolCallId: 'codex-second-call',
+      toolName: 'prepare_expense',
+      params,
+    });
+
+    assert.equal(first.details.status, 'pending_confirmation');
+    assert.strictEqual(replay, first);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('correlates a resumed Codex call when hook and execute ids differ', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not run while preparing confirmation');
+  });
+
+  try {
+    const runId = await receiveTrustedOwnerMessageWithoutBeforeAgentRun(harness.inboundHooks, {
+      content: '午饭8.8么？',
+      messageId: 'codex-resumed-id-mismatch',
+    });
+    const params = {
+      amount: '8.8',
+      primaryCategory: '食品酒水',
+      subcategory: '早午晚餐',
+      comment: '午饭',
+    };
+    await bindToolCallForTurn(harness.inboundHooks, {
+      runId,
+      toolCallId: 'codex-hook-call-id',
+      toolName: 'prepare_expense',
+      params: {
+        amount: params.amount,
+        primaryCategory: params.primaryCategory,
+        subcategory: params.subcategory,
+      },
+    });
+
+    const tool = harness.rawPrepareExpenseFactory(trustedOwnerContext());
+    const result = await tool.execute('codex-execute-call-id', params);
+
+    assert.equal(result.details.status, 'pending_confirmation');
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('correlates multiple Codex pre-execution events from the same run', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not run while preparing confirmation');
+  });
+
+  try {
+    const runId = await receiveTrustedOwnerMessageWithoutBeforeAgentRun(harness.inboundHooks, {
+      content: '午饭8.8么？',
+      messageId: 'codex-multiple-pre-execution-events',
+    });
+    const params = {
+      amount: '8.8',
+      primaryCategory: '食品酒水',
+      subcategory: '早午晚餐',
+      comment: '午饭',
+    };
+    await bindToolCallForTurn(harness.inboundHooks, {
+      runId,
+      toolCallId: 'codex-first-hook-id',
+      toolName: 'prepare_expense',
+      params,
+    });
+    await bindToolCallForTurn(harness.inboundHooks, {
+      runId,
+      toolCallId: 'codex-second-hook-id',
+      toolName: 'prepare_expense',
+      params,
+    });
+
+    const tool = harness.rawPrepareExpenseFactory(trustedOwnerContext());
+    const result = await tool.execute('codex-third-execute-id', params);
+
+    assert.equal(result.details.status, 'pending_confirmation');
   } finally {
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
@@ -854,59 +1101,6 @@ test('binds cached record tool calls to each inbound run without retaining a que
       { amount: 720, time: 1_788_425_460 },
       { amount: 300, time: 1_788_425_520 },
     ]);
-  } finally {
-    harness.restore();
-    rmSync(tempDirectory, { recursive: true, force: true });
-  }
-});
-
-test('narrows obvious confirmation, questioned expense, and summary turns to one tool', async () => {
-  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
-  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
-  const harness = createPluginHarness(tempDirectory, async () => {
-    throw new Error('HTTP must not run while routing a turn');
-  });
-
-  try {
-    const questionedRunId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
-      content: '午饭8.8么？',
-      messageId: 'route-questioned-expense',
-    });
-    const questioned = await harness.inboundHooks.get('before_prompt_build')?.({
-      prompt: '午饭8.8么？', messages: [],
-    }, { runId: questionedRunId, channelId: 'openclaw-weixin' });
-    assert.deepEqual(questioned.toolsAllow, ['prepare_expense']);
-    assert.match(questioned.prependSystemContext, /必须调用 `prepare_expense`/u);
-
-    const decisionRunId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
-      content: '不是',
-      messageId: 'route-cancel-decision',
-    });
-    const decision = await harness.inboundHooks.get('before_prompt_build')?.({
-      prompt: '不是', messages: [],
-    }, { runId: decisionRunId, channelId: 'openclaw-weixin' });
-    assert.deepEqual(decision.toolsAllow, ['resolve_expense_confirmation']);
-    assert.match(decision.prependSystemContext, /必须调用 `resolve_expense_confirmation`/u);
-
-    const summaryRunId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
-      content: '这个月我花了多少钱',
-      messageId: 'route-month-summary',
-    });
-    const summary = await harness.inboundHooks.get('before_prompt_build')?.({
-      prompt: '这个月我花了多少钱', messages: [],
-    }, { runId: summaryRunId, channelId: 'openclaw-weixin' });
-    assert.deepEqual(summary.toolsAllow, ['summarize_expenses']);
-    assert.match(summary.prependSystemContext, /必须调用 `summarize_expenses`/u);
-
-    const early = await harness.inboundHooks.get('before_prompt_build')?.({
-      prompt: '午饭8.8么？', messages: [],
-    }, { channel: 'openclaw-weixin', runId: 'early-question-route' });
-    assert.deepEqual(early.toolsAllow, ['prepare_expense']);
-    const retry = await harness.inboundHooks.get('before_prompt_build')?.({
-      prompt: '请给出可见答案。', messages: [],
-    }, { channel: 'openclaw-weixin', runId: 'early-question-route' });
-    assert.deepEqual(retry.toolsAllow, ['prepare_expense']);
-    assert.match(retry.prependSystemContext, /必须调用 `prepare_expense`/u);
   } finally {
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });

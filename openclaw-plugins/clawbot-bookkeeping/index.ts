@@ -67,6 +67,14 @@ type ResolveExpenseConfirmationParams = {
   decision: 'confirm' | 'cancel';
 };
 
+type ToolExecutionContext = {
+  senderIsOwner?: boolean;
+  sessionKey?: string;
+  messageChannel?: string;
+  agentAccountId?: string;
+  requesterSenderId?: string;
+};
+
 type RecordExpenseResult = {
   status: 'created' | 'duplicate';
   dedupeStatus?: 'unconfirmed';
@@ -99,8 +107,6 @@ const AUTHORITATIVE_REPLY_TOOL_NAMES = new Set([
 ]);
 const AFFIRMATIVE_REPLIES = new Set(['是', '对', '对的', '确认', '嗯', '嗯嗯', '好', '好的', '可以', '记吧', '记下吧']);
 const NEGATIVE_REPLIES = new Set(['不是', '否', '不对', '取消', '不用', '别记', '不要']);
-const SUMMARY_QUERY = /(?:今天|本周|这个月|本月|上个月|今年).{0,24}(?:花了多少|花多少|多少钱|支出|消费|总共|合计|汇总)/u;
-const EXPENSE_AMOUNT_CUE = /(?:\d+(?:\.\d{1,2})?|[一二两三四五六七八九十]+块(?:[零一二两三四五六七八九\d]{1,2})?)/u;
 
 function trustedInboundLookupKey(kind: 'session' | 'sender' | 'run' | 'message', value: string) {
   return createHash('sha256').update(`${kind}\u0000${value}`, 'utf8').digest('hex');
@@ -134,27 +140,8 @@ function confirmationDecision(content: string): 'confirm' | 'cancel' | undefined
   return undefined;
 }
 
-function obviousTurnRoute(content: string) {
-  const decision = confirmationDecision(content);
-  if (decision) {
-    return {
-      toolsAllow: ['resolve_expense_confirmation'],
-      prependSystemContext: `当前可信用户消息是单独的确认答复。你必须调用 \`resolve_expense_confirmation\`，decision 使用 \`${decision}\`；逐字返回工具结果后立即结束。`,
-    };
-  }
-  if (SUMMARY_QUERY.test(content)) {
-    return {
-      toolsAllow: ['summarize_expenses'],
-      prependSystemContext: '当前可信用户消息明确是在查询账本汇总。你必须调用 `summarize_expenses`；按消息选择 period 和筛选条件，逐字返回工具结果后立即结束。',
-    };
-  }
-  if (requiresExpenseConfirmation(content) && EXPENSE_AMOUNT_CUE.test(content)) {
-    return {
-      toolsAllow: ['prepare_expense'],
-      prependSystemContext: '当前可信用户消息是一笔带金额但语气不确定的候选支出。你必须调用 `prepare_expense`，不得直接入账；逐字返回工具确认单后立即结束。',
-    };
-  }
-  return undefined;
+function promptEndsWithInboundMessage(prompt: string, content: string) {
+  return prompt === content || prompt.endsWith(`\n${content}`);
 }
 
 function trustedInboundLookupKeys({
@@ -262,10 +249,14 @@ export default definePluginEntry({
     const receiptStore = new SqliteReceiptStore(stateDbPath);
     const preparedRuns = new Set<string>();
     const inboundByRun = new Map<string, InboundMessage>();
+    const unverifiedInboundByRun = new Map<string, InboundMessage>();
     const authoritativeRepliesByRun = new Map<string, { text: string; touchedAt: number }>();
-    const promptRoutesByRun = new Map<string, NonNullable<ReturnType<typeof obviousTurnRoute>>>();
+    const authoritativeToolResultsByRun = new Map<string, { response: unknown; touchedAt: number }>();
     const toolCallSlots = new Map<string, {
       runKey: string;
+      toolName: string;
+      sessionKey?: string;
+      requesterConversationKey?: string;
       conflictingRunKeys?: Set<string>;
       inbound?: InboundMessage;
       ambiguous: boolean;
@@ -280,6 +271,11 @@ export default definePluginEntry({
       for (const [runKey, reply] of authoritativeRepliesByRun) {
         if (now - reply.touchedAt > AUTHORITATIVE_REPLY_MAX_AGE_MS) {
           authoritativeRepliesByRun.delete(runKey);
+        }
+      }
+      for (const [runKey, result] of authoritativeToolResultsByRun) {
+        if (now - result.touchedAt > AUTHORITATIVE_REPLY_MAX_AGE_MS) {
+          authoritativeToolResultsByRun.delete(runKey);
         }
       }
     };
@@ -387,22 +383,46 @@ export default definePluginEntry({
       }
     });
 
-    api.on('before_prompt_build', (event, context) => {
-      const channel = context.channel ?? context.channelId ?? context.messageProvider;
-      if (channel !== 'openclaw-weixin') return;
-      const runId = context.runId;
-      const runKey = runId ? transientBindingKey('run', runId) : undefined;
-      const inbound = runKey ? inboundByRun.get(runKey) : undefined;
-      let route = obviousTurnRoute(inbound?.content ?? event.prompt);
-      if (route && runKey) {
-        promptRoutesByRun.set(runKey, route);
-      } else if (!route && runKey) {
-        route = promptRoutesByRun.get(runKey);
+    api.on('llm_input', (event, context) => {
+      const runId = event.runId ?? context.runId;
+      const channel = context.channel ?? context.messageProvider;
+      const channelSenderId = context.channelContext?.sender?.id;
+      const senderId = context.senderId
+        ?? (typeof channelSenderId === 'string' ? channelSenderId : undefined);
+      if (!runId || context.trigger !== 'user' || !channel || !context.sessionKey) {
+        api.logger?.info?.(
+          `clawbot-bookkeeping: llm input correlation run=${Boolean(runId)} user=${context.trigger === 'user'} channel=${Boolean(channel)} sender=${Boolean(senderId)} matched=false`,
+        );
+        return;
       }
+      const runKey = transientBindingKey('run', runId);
+      if (inboundByRun.has(runKey) || unverifiedInboundByRun.has(runKey)) return;
+      const now = Date.now();
+      const conversationKey = trustedConversationKey({
+        sessionKey: context.sessionKey,
+        channel,
+        accountId: context.accountId,
+        senderId,
+      });
+      const inbound = receiptStore.claimUniqueTrustedInboundMatching(
+        trustedInboundLookupKeys({ sessionKey: context.sessionKey, channel, senderId }),
+        (candidate: unknown) => {
+          if (!candidate || typeof candidate !== 'object') return false;
+          const trusted = candidate as Partial<InboundMessage>;
+          return trusted.channel === channel
+            && (!conversationKey || trusted.conversationKey === conversationKey)
+            && typeof trusted.content === 'string'
+            && promptEndsWithInboundMessage(event.prompt, trusted.content)
+            && typeof trusted.observedAt === 'number'
+            && now - trusted.observedAt >= 0
+            && now - trusted.observedAt <= TRUSTED_PROMPT_CORRELATION_MAX_AGE_MS;
+        },
+        now,
+      ) as InboundMessage | undefined;
+      if (inbound) unverifiedInboundByRun.set(runKey, inbound);
       api.logger?.info?.(
-        `clawbot-bookkeeping: prompt routing run=${Boolean(runId)} bound=${Boolean(inbound)} routed=${Boolean(route)}`,
+        `clawbot-bookkeeping: llm input correlation run=true user=true channel=true sender=${Boolean(senderId)} matched=${Boolean(inbound)}`,
       );
-      return route;
     });
 
     api.on('before_tool_call', (event, context) => {
@@ -414,8 +434,18 @@ export default definePluginEntry({
       if (!runId || !toolCallId) return;
       const runKey = transientBindingKey('run', runId);
       const toolCallKey = transientBindingKey('tool-call', toolCallId);
+      const requesterChannel = context.requester?.channel ?? context.channelId;
+      const requesterConversationKey = trustedConversationKey({
+        sessionKey: context.sessionKey,
+        channel: requesterChannel,
+        accountId: context.requester?.accountId,
+        senderId: context.requester?.senderId,
+      });
       const existingSlot = toolCallSlots.get(toolCallKey);
       if (existingSlot) {
+        api.logger?.info?.(
+          `clawbot-bookkeeping: existing tool binding sameRun=${existingSlot.runKey === runKey} ambiguous=${existingSlot.ambiguous} inbound=${Boolean(existingSlot.inbound)}`,
+        );
         if (existingSlot.runKey !== runKey) {
           existingSlot.ambiguous = true;
           existingSlot.conflictingRunKeys ??= new Set([existingSlot.runKey]);
@@ -434,14 +464,35 @@ export default definePluginEntry({
         }
         return;
       }
-      const inbound = inboundByRun.get(runKey);
+      let inbound = inboundByRun.get(runKey);
+      const embeddedBinding = Boolean(inbound);
+      if (!inbound && context.requester?.senderIsOwner === true) {
+        const unverifiedInbound = unverifiedInboundByRun.get(runKey);
+        if (unverifiedInbound
+          && requesterChannel
+          && requesterConversationKey
+          && unverifiedInbound.channel === requesterChannel
+          && unverifiedInbound.conversationKey === requesterConversationKey) {
+          inbound = unverifiedInbound;
+        }
+        inbound ??= receiptStore.claimTrustedInbound([
+          trustedInboundLookupKey('run', runId),
+        ]) as InboundMessage | undefined;
+      }
+      api.logger?.info?.(
+        `clawbot-bookkeeping: tool binding tool=${event.toolName} owner=${context.requester?.senderIsOwner === true} session=${Boolean(context.sessionKey)} conversation=${Boolean(requesterConversationKey)} embedded=${embeddedBinding} matched=${Boolean(inbound)}`,
+      );
       toolCallSlots.set(toolCallKey, {
         runKey,
+        toolName: event.toolName,
+        sessionKey: context.sessionKey,
+        requesterConversationKey,
         ...(inbound ? { inbound } : {}),
         ambiguous: false,
         touchedAt: now,
       });
       if (inbound) inboundByRun.delete(runKey);
+      if (inbound) unverifiedInboundByRun.delete(runKey);
     });
 
     api.on('after_tool_call', (event, context) => {
@@ -526,7 +577,8 @@ export default definePluginEntry({
       const runKey = transientBindingKey('run', runId);
       preparedRuns.delete(runKey);
       inboundByRun.delete(runKey);
-      promptRoutesByRun.delete(runKey);
+      unverifiedInboundByRun.delete(runKey);
+      authoritativeToolResultsByRun.delete(runKey);
       for (const slot of toolCallSlots.values()) {
         if (slot.runKey === runKey) {
           delete slot.inbound;
@@ -538,21 +590,67 @@ export default definePluginEntry({
     api.on('gateway_stop', () => {
       preparedRuns.clear();
       inboundByRun.clear();
+      unverifiedInboundByRun.clear();
       toolCallSlots.clear();
       authoritativeRepliesByRun.clear();
-      promptRoutesByRun.clear();
+      authoritativeToolResultsByRun.clear();
       receiptStore.close();
     });
 
-    const takeToolCallBinding = (_id: unknown) => {
+    const takeToolCallBinding = (
+      _id: unknown,
+      toolName: string,
+      toolContext: ToolExecutionContext,
+    ) => {
       pruneExpiredToolCallSlots();
       const toolCallKey = typeof _id === 'string'
         ? transientBindingKey('tool-call', _id)
         : undefined;
-      const slot = toolCallKey ? toolCallSlots.get(toolCallKey) : undefined;
+      let resolvedToolCallKey = toolCallKey;
+      let slot = toolCallKey ? toolCallSlots.get(toolCallKey) : undefined;
+      if (slot && slot.toolName !== toolName) {
+        slot.ambiguous = true;
+        delete slot.inbound;
+      }
+      let recoveredByExecutionContext = false;
+      if (!slot && toolContext.senderIsOwner === true) {
+        const executionConversationKey = trustedConversationKey({
+          sessionKey: toolContext.sessionKey,
+          channel: toolContext.messageChannel,
+          accountId: toolContext.agentAccountId,
+          senderId: toolContext.requesterSenderId,
+        });
+        if (executionConversationKey && toolContext.sessionKey) {
+          const availableCandidates = [...toolCallSlots.entries()].filter(([, candidate]) => (
+            candidate.ambiguous === false
+            && (Boolean(candidate.inbound) || authoritativeToolResultsByRun.has(candidate.runKey))
+          ));
+          const sameToolCandidates = availableCandidates.filter(([, candidate]) => candidate.toolName === toolName);
+          const sameSessionCandidates = sameToolCandidates.filter(([, candidate]) => (
+            candidate.sessionKey === toolContext.sessionKey
+          ));
+          const candidates = sameSessionCandidates.filter(([, candidate]) => (
+            candidate.requesterConversationKey === executionConversationKey
+          ));
+          const candidateRunKeys = new Set(candidates.map(([, candidate]) => candidate.runKey));
+          if (candidateRunKeys.size === 1) {
+            const selected = candidates.find(([, candidate]) => Boolean(candidate.inbound))
+              ?? candidates[0];
+            [resolvedToolCallKey, slot] = selected;
+            recoveredByExecutionContext = true;
+          }
+        }
+      }
       const inbound = slot?.ambiguous === false ? slot.inbound : undefined;
+      const cachedResponse = slot?.ambiguous === false
+        ? authoritativeToolResultsByRun.get(slot.runKey)?.response
+        : undefined;
+      api.logger?.info?.(
+        `clawbot-bookkeeping: take tool binding tool=${toolName} id=${Boolean(toolCallKey)} owner=${toolContext.senderIsOwner === true} session=${Boolean(toolContext.sessionKey)} channel=${Boolean(toolContext.messageChannel)} account=${Boolean(toolContext.agentAccountId)} sender=${Boolean(toolContext.requesterSenderId)} slot=${Boolean(slot)} recovered=${recoveredByExecutionContext} ambiguous=${slot?.ambiguous === true} inbound=${Boolean(inbound)} cached=${Boolean(cachedResponse)}`,
+      );
+      if (cachedResponse !== undefined) return { cachedResponse };
       if (slot) delete slot.inbound;
-      if (!slot || !inbound || !toolCallKey) {
+      if (!slot || !inbound || !resolvedToolCallKey) {
         if (slot?.runKey && !authoritativeRepliesByRun.has(slot.runKey)) {
           authoritativeRepliesByRun.set(slot.runKey, {
             text: '这次没记成功，账本里没有新增记录～ 请重新发一条新消息吧。',
@@ -586,9 +684,15 @@ export default definePluginEntry({
               touchedAt: Date.now(),
             });
           }
+          if (!authoritativeToolResultsByRun.has(boundRunKey)) {
+            authoritativeToolResultsByRun.set(boundRunKey, {
+              response,
+              touchedAt: Date.now(),
+            });
+          }
           return response;
         },
-        isStillAuthorized: () => toolCallSlots.get(toolCallKey) === slot
+        isStillAuthorized: () => toolCallSlots.get(resolvedToolCallKey) === slot
           && slot.runKey === boundRunKey
           && slot.ambiguous === false,
       };
@@ -682,7 +786,8 @@ export default definePluginEntry({
         async execute(_id, params: SummaryParams) {
           if (toolContext.senderIsOwner !== true) {
             try {
-              takeToolCallBinding(_id);
+              const binding = takeToolCallBinding(_id, 'summarize_expenses', toolContext);
+              if ('cachedResponse' in binding) return binding.cachedResponse;
             } catch {
               throw new Error('无法确认消息发送者为账本 owner，已拒绝查询。');
             }
@@ -756,7 +861,9 @@ export default definePluginEntry({
           ].join('\n'),
           parameters: EXPENSE_PARAMETERS,
           async execute(_id, params: RecordExpenseParams) {
-            const { inbound, isStillAuthorized, authoritativeResponse } = takeToolCallBinding(_id);
+            const binding = takeToolCallBinding(_id, 'record_expense', toolContext);
+            if ('cachedResponse' in binding) return binding.cachedResponse;
+            const { inbound, isStillAuthorized, authoritativeResponse } = binding;
             const normalizedInput = {
               ...params,
               subcategory: normalizeSubcategory(params.primaryCategory, params.subcategory),
@@ -836,7 +943,9 @@ export default definePluginEntry({
         ].join('\n'),
         parameters: EXPENSE_PARAMETERS,
         async execute(_id, params: RecordExpenseParams) {
-          const { inbound, isStillAuthorized, authoritativeResponse } = takeToolCallBinding(_id);
+          const binding = takeToolCallBinding(_id, 'prepare_expense', toolContext);
+          if ('cachedResponse' in binding) return binding.cachedResponse;
+          const { inbound, isStillAuthorized, authoritativeResponse } = binding;
           const normalizedInput = {
             ...params,
             subcategory: normalizeSubcategory(params.primaryCategory, params.subcategory),
@@ -899,7 +1008,9 @@ export default definePluginEntry({
           decision: Type.Union([Type.Literal('confirm'), Type.Literal('cancel')]),
         }, { additionalProperties: false }),
         async execute(_id, params: ResolveExpenseConfirmationParams) {
-          const { inbound, isStillAuthorized, authoritativeResponse } = takeToolCallBinding(_id);
+          const binding = takeToolCallBinding(_id, 'resolve_expense_confirmation', toolContext);
+          if ('cachedResponse' in binding) return binding.cachedResponse;
+          const { inbound, isStillAuthorized, authoritativeResponse } = binding;
           const trustedDecision = confirmationDecision(inbound.content);
           if (trustedDecision === undefined || trustedDecision !== params.decision) {
             return authoritativeResponse({

@@ -4,7 +4,7 @@ import test from 'node:test';
 
 const prompt = readFileSync(new URL('../../../openclaw-workspace/AGENTS.md', import.meta.url), 'utf8');
 
-test('makes the local model responsible for conversational intent and grounded notes', () => {
+test('makes the model responsible for conversational intent and grounded notes', () => {
   assert.match(prompt, /负责理解语义、选择分类、提炼有依据的备注/u);
   assert.match(prompt, /不要因为出现某个关键词就机械调用工具/u);
   assert.equal(prompt.includes('麦当劳7.2'), true);
@@ -58,7 +58,9 @@ test('allows exactly the conversational bookkeeping and read tools', () => {
     'ezbookkeeping__query_transactions',
   ]);
   assert.equal(bookkeeper.tools.profile, 'minimal');
-  assert.equal(bookkeeper.thinkingDefault, 'off');
+  assert.equal(bookkeeper.model.primary, 'openai/gpt-5.6-sol');
+  assert.equal(bookkeeper.models['openai/gpt-5.6-sol'].agentRuntime.id, 'codex');
+  assert.equal(bookkeeper.thinkingDefault, 'low');
   assert.equal(bookkeeper.reasoningDefault, 'off');
   assert.equal(bookkeeper.tools.loopDetection.enabled, true);
   assert.equal(bookkeeper.contextInjection, 'continuation-skip');
