@@ -312,6 +312,11 @@ export default definePluginEntry({
               api.logger?.error?.(
                 `clawbot-bookkeeping: ExpenseRecordingError outcome=${error.outcome} message=${error.message}`,
               );
+              if (error.dedupeStatus === 'unconfirmed') {
+                api.logger?.warn?.(
+                  `clawbot-bookkeeping: ExpenseRecordingError outcome=${error.outcome} deduplication persistence is unconfirmed`,
+                );
+              }
               const unknown = error.outcome === 'unknown';
               const rejected = error.outcome === 'rejected';
               return {
@@ -323,7 +328,10 @@ export default definePluginEntry({
                       ? '记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。'
                       : '账本暂时连不上，本次没有写入任何数据，请稍后再试。',
                 }],
-                details: { status: rejected ? 'rejected' : unknown ? 'unknown' : 'failed' },
+                details: {
+                  status: rejected ? 'rejected' : unknown ? 'unknown' : 'failed',
+                  ...(error.dedupeStatus === undefined ? {} : { dedupeStatus: error.dedupeStatus }),
+                },
               };
             }
             if (result.dedupeStatus === 'unconfirmed') {

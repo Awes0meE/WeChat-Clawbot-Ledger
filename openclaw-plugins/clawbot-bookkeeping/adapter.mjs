@@ -166,8 +166,13 @@ export class EzBookkeepingApi {
   }
 
   async #request(path, { method = 'GET', body, query } = {}) {
-    const token = readFileSync(this.tokenPath, 'utf8').trim();
-    if (!token) throw new Error('ezBookkeeping API token file is empty');
+    let token;
+    try {
+      token = readFileSync(this.tokenPath, 'utf8').trim();
+      if (!token) throw new Error('empty credential');
+    } catch {
+      throw new Error('ezBookkeeping credential unavailable');
+    }
     const url = new URL(`/api/v1/${path}`, this.baseUrl);
     for (const [key, value] of Object.entries(query ?? {})) {
       if (value !== undefined && value !== null && String(value) !== '') {

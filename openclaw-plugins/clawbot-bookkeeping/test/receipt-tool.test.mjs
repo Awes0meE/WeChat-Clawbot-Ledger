@@ -12,6 +12,7 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
   const inboundHooks = new Map();
   let recordExpenseFactory;
   let recordExpenseDefinition;
+  const logs = [];
   const pluginApi = {
     pluginConfig: {
       serverBaseUrl: 'http://127.0.0.1:8180',
@@ -30,6 +31,11 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
       }
     },
     registerMcpServerConnectionResolver() {},
+    logger: {
+      error(message) { logs.push(message); },
+      warn(message) { logs.push(message); },
+      info() {},
+    },
   };
   const originalFetch = globalThis.fetch;
   globalThis.fetch = fetchImpl;
@@ -39,6 +45,7 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
     inboundHooks,
     recordExpenseFactory,
     recordExpenseDefinition,
+    logs,
     restore() {
       inboundHooks.get('gateway_stop')?.({}, {});
       globalThis.fetch = originalFetch;
@@ -515,6 +522,73 @@ test('keeps a confirmed rich receipt when receipt completion cannot be persisted
     assert.equal(result.details.dedupeStatus, 'unconfirmed');
   } finally {
     SqliteReceiptStore.prototype.complete = originalComplete;
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('keeps the stable failed result when failed-state persistence is unavailable', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const originalFail = SqliteReceiptStore.prototype.fail;
+  SqliteReceiptStore.prototype.fail = () => { throw new Error('receipt state unavailable'); };
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('prewrite connection failed');
+  });
+
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, { messageId: 'wechat-message-fail-persistence' });
+    const result = await harness.recordExpenseFactory(trustedOwnerContext()).execute(
+      'tool-call-fail-persistence',
+      { amount: '8.25', primaryCategory: '食品酒水', subcategory: '超市购物' },
+    );
+
+    assert.equal(result.content[0].text, '账本暂时连不上，本次没有写入任何数据，请稍后再试。');
+    assert.deepEqual(result.details, { status: 'failed', dedupeStatus: 'unconfirmed' });
+    assert.equal(harness.logs.some((entry) => /deduplication persistence is unconfirmed/u.test(entry)), true);
+    assert.equal(result.content[0].text.includes('unconfirmed'), false);
+  } finally {
+    SqliteReceiptStore.prototype.fail = originalFail;
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('keeps the stable unknown result when uncertain-state persistence is unavailable', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const originalUncertain = SqliteReceiptStore.prototype.uncertain;
+  SqliteReceiptStore.prototype.uncertain = () => { throw new Error('receipt state unavailable'); };
+  const harness = createPluginHarness(tempDirectory, async (url) => {
+    if (url.endsWith('/accounts/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: [
+        { id: 'account-1', name: '日常支出', currency: 'SGD' },
+      ] }), { status: 200 });
+    }
+    if (url.endsWith('/transaction/categories/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: {
+        2: [{ id: 'primary-1', name: '食品酒水', parentId: '0', subCategories: [
+          { id: 'secondary-1', name: '超市购物', parentId: 'primary-1' },
+        ] }],
+      } }), { status: 200 });
+    }
+    if (url.endsWith('/transactions/add.json')) throw new Error('post outcome unavailable');
+    throw new Error('unexpected test request');
+  });
+
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, { messageId: 'wechat-message-uncertain-persistence' });
+    const result = await harness.recordExpenseFactory(trustedOwnerContext()).execute(
+      'tool-call-uncertain-persistence',
+      { amount: '8.25', primaryCategory: '食品酒水', subcategory: '超市购物' },
+    );
+
+    assert.equal(result.content[0].text, '记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。');
+    assert.deepEqual(result.details, { status: 'unknown', dedupeStatus: 'unconfirmed' });
+    assert.equal(harness.logs.some((entry) => /deduplication persistence is unconfirmed/u.test(entry)), true);
+    assert.equal(result.content[0].text.includes('unconfirmed'), false);
+  } finally {
+    SqliteReceiptStore.prototype.uncertain = originalUncertain;
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
   }

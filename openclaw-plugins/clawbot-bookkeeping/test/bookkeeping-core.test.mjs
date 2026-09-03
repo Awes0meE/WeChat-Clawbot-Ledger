@@ -214,6 +214,8 @@ for (const [label, addResult] of [
   ['non-string', { id: 123 }],
   ['empty', { id: '' }],
   ['blank', { id: '  \r\n' }],
+  ['control-character', { id: 'transaction-1\nforged' }],
+  ['overlong', { id: 'a'.repeat(129) }],
 ]) {
   test(`treats a ${label} transaction id as unknown and deduplicates replay`, async () => {
     let addCount = 0;
@@ -419,6 +421,55 @@ test('classifies an account lookup failure as definitely not written after it is
   );
   assert.equal(receipts.get('ilink:not-written-1').status, 'failed');
 });
+
+test('preserves a definite no-write outcome when failed-state persistence throws', async () => {
+  await assert.rejects(
+    () => recordExpense({
+      api: {
+        async resolveAccountId() { throw new Error('local connection refused'); },
+      },
+      store: {
+        claim() { return null; },
+        fail() { throw new Error('receipt state unavailable'); },
+      },
+      input: { amount: '7.2', primaryCategory: '食品酒水', subcategory: '早午晚餐' },
+      inbound: {
+        channel: 'ilink', messageId: 'failed-persistence', content: '午饭7.2', timestamp: 1_788_425_460,
+      },
+    }),
+    (error) => error instanceof ExpenseRecordingError
+      && error.outcome === 'not_written'
+      && error.dedupeStatus === 'unconfirmed',
+  );
+});
+
+for (const [label, addTransaction] of [
+  ['POST failure', async () => { throw new Error('request timed out'); }],
+  ['malformed create response', async () => ({})],
+]) {
+  test(`preserves an unknown ${label} outcome when uncertain-state persistence throws`, async () => {
+    await assert.rejects(
+      () => recordExpense({
+        api: {
+          async resolveAccountId() { return 'account-1'; },
+          async resolveExpenseCategoryId() { return 'category-1'; },
+          addTransaction,
+        },
+        store: {
+          claim() { return null; },
+          uncertain() { throw new Error('receipt state unavailable'); },
+        },
+        input: { amount: '7.2', primaryCategory: '食品酒水', subcategory: '早午晚餐' },
+        inbound: {
+          channel: 'ilink', messageId: `unknown-persistence-${label}`, content: '午饭7.2', timestamp: 1_788_425_460,
+        },
+      }),
+      (error) => error instanceof ExpenseRecordingError
+        && error.outcome === 'unknown'
+        && error.dedupeStatus === 'unconfirmed',
+    );
+  });
+}
 
 test('duplicate replies distinguish confirmed, failed, and uncertain prior attempts', () => {
   assert.equal(

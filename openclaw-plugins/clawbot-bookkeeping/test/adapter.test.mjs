@@ -422,3 +422,30 @@ test('API client clears the request timeout after fetch completes', async () => 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('API client sanitizes token-file read failures without contacting the server', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-api-private-'));
+  const tokenPath = join(dir, 'private-token-location.txt');
+  let fetchCount = 0;
+  const api = new EzBookkeepingApi({
+    serverBaseUrl: 'http://127.0.0.1:8180',
+    tokenPath,
+    fetchImpl: async () => {
+      fetchCount += 1;
+      throw new Error('fetch must not run');
+    },
+  });
+
+  try {
+    await assert.rejects(
+      () => api.resolveAccountId('日常支出'),
+      (error) => error instanceof Error
+        && error.message === 'ezBookkeeping credential unavailable'
+        && !error.message.includes(tokenPath)
+        && !error.message.includes('private-token-location'),
+    );
+    assert.equal(fetchCount, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

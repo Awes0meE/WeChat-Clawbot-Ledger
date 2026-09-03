@@ -9,7 +9,7 @@ const INSTRUCTION_INJECTION = /(?:record_expense|summarize_expenses|query_transa
 const QUANTITY_OR_TIME_UNIT = /^(?:个|位|人|根|件|张|瓶|杯|盒|包|份|次|天|小时|分钟|秒|公里|千米|米|厘米|毫米|km|kg|公斤|斤|克|年|月|日|号|点)/iu;
 
 export class ExpenseRecordingError extends Error {
-  constructor(outcome) {
+  constructor(outcome, { dedupeStatus } = {}) {
     const message = outcome === 'not_written'
       ? 'expense was not written'
       : outcome === 'rejected'
@@ -18,6 +18,7 @@ export class ExpenseRecordingError extends Error {
     super(message);
     this.name = 'ExpenseRecordingError';
     this.outcome = outcome;
+    if (dedupeStatus) this.dedupeStatus = dedupeStatus;
   }
 }
 
@@ -72,6 +73,24 @@ function isAuthorizedExpenseMessage(content, requestedAmountMinor) {
     if (disallowedContext) blockedByEarlierClause = true;
   }
   return false;
+}
+
+function normalizeTransactionId(value) {
+  if (typeof value !== 'string') return '';
+  const transactionId = value.trim();
+  if (Array.from(transactionId).length > 128 || /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(transactionId)) {
+    return '';
+  }
+  return transactionId;
+}
+
+function persistOutcome(store, method, receiptKey, payload) {
+  try {
+    store[method](receiptKey, payload);
+    return undefined;
+  } catch {
+    return 'unconfirmed';
+  }
 }
 
 export function extractVerbatimComment(content) {
@@ -179,11 +198,11 @@ export async function recordExpense({ api, store, input, inbound, accountName = 
     sourceAccountId = await api.resolveAccountId(accountName);
     categoryId = await api.resolveExpenseCategoryId(input.primaryCategory, input.subcategory);
   } catch {
-    store.fail(receiptKey, {
+    const dedupeStatus = persistOutcome(store, 'fail', receiptKey, {
       status: 'failed',
       clientSessionId,
     });
-    throw new ExpenseRecordingError('not_written');
+    throw new ExpenseRecordingError('not_written', { dedupeStatus });
   }
 
   const body = {
@@ -205,19 +224,19 @@ export async function recordExpense({ api, store, input, inbound, accountName = 
   try {
     created = await api.addTransaction(body);
   } catch {
-    store.uncertain(receiptKey, {
+    const dedupeStatus = persistOutcome(store, 'uncertain', receiptKey, {
       status: 'unknown',
       clientSessionId,
     });
-    throw new ExpenseRecordingError('unknown');
+    throw new ExpenseRecordingError('unknown', { dedupeStatus });
   }
-  const transactionId = typeof created?.id === 'string' ? created.id.trim() : '';
+  const transactionId = normalizeTransactionId(created?.id);
   if (!transactionId) {
-    store.uncertain(receiptKey, {
+    const dedupeStatus = persistOutcome(store, 'uncertain', receiptKey, {
       status: 'unknown',
       clientSessionId,
     });
-    throw new ExpenseRecordingError('unknown');
+    throw new ExpenseRecordingError('unknown', { dedupeStatus });
   }
   const receipt = {
     status: 'created',
