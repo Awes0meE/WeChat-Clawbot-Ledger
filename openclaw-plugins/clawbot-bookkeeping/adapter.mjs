@@ -110,10 +110,16 @@ export class EzBookkeepingApi {
     this.fetch = fetchImpl;
   }
 
-  async #request(path, { method = 'GET', body } = {}) {
+  async #request(path, { method = 'GET', body, query } = {}) {
     const token = readFileSync(this.tokenPath, 'utf8').trim();
     if (!token) throw new Error('ezBookkeeping API token file is empty');
-    const response = await this.fetch(`${this.baseUrl}/api/v1/${path}`, {
+    const url = new URL(`/api/v1/${path}`, this.baseUrl);
+    for (const [key, value] of Object.entries(query ?? {})) {
+      if (value !== undefined && value !== null && String(value) !== '') {
+        url.searchParams.set(key, String(value));
+      }
+    }
+    const response = await this.fetch(url.toString(), {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
@@ -175,6 +181,63 @@ export class EzBookkeepingApi {
       throw new Error(`expected exactly one subcategory ${primaryName}/${subcategoryName}; found ${secondaryMatches.length}`);
     }
     return secondaryMatches[0].id;
+  }
+
+  async listExpenseCategories() {
+    const categories = await this.#request('transaction/categories/list.json');
+    if (!Array.isArray(categories?.['2'])) {
+      throw new Error('expense category list response is invalid');
+    }
+    return categories['2']
+      .filter((category) => category?.hidden !== true)
+      .map((category) => ({
+        ...category,
+        ...(Array.isArray(category?.subCategories)
+          ? { subCategories: category.subCategories.filter((subcategory) => subcategory?.hidden !== true) }
+          : {}),
+      }));
+  }
+
+  async resolveExpenseCategoryFilterId(primaryName, subcategoryName, preloadedCategories) {
+    if (!primaryName) return undefined;
+    const categories = preloadedCategories ?? await this.listExpenseCategories();
+    const primaryMatches = categories.filter(
+      (category) => category?.name === primaryName && category.parentId === '0' && category.hidden !== true,
+    );
+    if (primaryMatches.length !== 1) {
+      throw new Error(`expected exactly one expense category named ${primaryName}; found ${primaryMatches.length}`);
+    }
+    if (!subcategoryName) return primaryMatches[0].id;
+    const secondaryMatches = (Array.isArray(primaryMatches[0].subCategories)
+      ? primaryMatches[0].subCategories
+      : []).filter(
+      (category) => category?.name === subcategoryName
+        && category.parentId === primaryMatches[0].id
+        && category.hidden !== true,
+    );
+    if (secondaryMatches.length !== 1) {
+      throw new Error(`expected exactly one subcategory ${primaryName}/${subcategoryName}; found ${secondaryMatches.length}`);
+    }
+    return secondaryMatches[0].id;
+  }
+
+  async listExpenseTransactions({ accountId, startTime, endTime, categoryId, keyword } = {}) {
+    const transactions = await this.#request('transactions/list/all.json', {
+      query: {
+        type: 3,
+        account_ids: accountId,
+        category_ids: categoryId,
+        start_time: startTime,
+        end_time: endTime,
+        keyword,
+        trim_account: true,
+        trim_tag: true,
+      },
+    });
+    if (!Array.isArray(transactions)) {
+      throw new Error('expense transaction list response is invalid');
+    }
+    return transactions;
   }
 
   async addTransaction(body) {

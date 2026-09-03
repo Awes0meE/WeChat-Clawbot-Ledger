@@ -6,7 +6,8 @@
   "contracts": {
     "tools": [
       "bookkeeping_health",
-      "record_expense"
+      "record_expense",
+      "summarize_expenses"
     ]
   },
   "activation": {
@@ -17,6 +18,9 @@
       "profiles": ["minimal"]
     },
     "record_expense": {
+      "profiles": ["minimal"]
+    },
+    "summarize_expenses": {
       "profiles": ["minimal"]
     }
   },

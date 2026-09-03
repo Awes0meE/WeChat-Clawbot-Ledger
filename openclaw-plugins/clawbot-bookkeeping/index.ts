@@ -12,8 +12,14 @@ import {
 import {
   CATEGORY_GUIDE,
   PRIMARY_CATEGORIES,
+  SUBCATEGORIES,
   normalizeSubcategory,
 } from './categories.mjs';
+import {
+  aggregateExpenseSummary,
+  formatExpenseSummary,
+  resolveExpenseRange,
+} from './expense-summary.mjs';
 
 type InboundMessage = {
   channel: string;
@@ -54,6 +60,23 @@ function additiveAmountFromMessage(content: string): string | undefined {
     .split(/[+＋]/u)
     .reduce((sum, part) => sum + Math.round(Number(part.trim()) * 100), 0);
   return (totalCents / 100).toFixed(2).replace(/\.00$/u, '').replace(/(\.\d)0$/u, '$1');
+}
+
+function primaryCategoryById(categories: unknown[]): Map<string, string> {
+  const result = new Map<string, string>();
+  for (const category of categories) {
+    if (!category || typeof category !== 'object') continue;
+    const primary = category as { id?: unknown; name?: unknown; subCategories?: unknown };
+    if (typeof primary.id !== 'string' || typeof primary.name !== 'string') continue;
+    result.set(primary.id, primary.name);
+    if (!Array.isArray(primary.subCategories)) continue;
+    for (const subcategory of primary.subCategories) {
+      if (!subcategory || typeof subcategory !== 'object') continue;
+      const child = subcategory as { id?: unknown };
+      if (typeof child.id === 'string') result.set(child.id, primary.name);
+    }
+  }
+  return result;
 }
 
 export default definePluginEntry({
@@ -124,6 +147,75 @@ export default definePluginEntry({
         };
       },
     });
+
+    api.registerTool(
+      (toolContext) => ({
+        name: 'summarize_expenses',
+        catalogMode: 'direct-only',
+        description: '权威的确定性本地账本查询：按时间、分类或关键词汇总 SGD 支出总额、笔数、分类和最大三笔；不会写入账本。',
+        parameters: Type.Object({
+          period: Type.Union([
+            Type.Literal('today'),
+            Type.Literal('this_week'),
+            Type.Literal('this_month'),
+            Type.Literal('last_month'),
+            Type.Literal('this_year'),
+            Type.Literal('custom'),
+          ]),
+          startDate: Type.Optional(Type.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' })),
+          endDate: Type.Optional(Type.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' })),
+          primaryCategory: Type.Optional(Type.Union(PRIMARY_CATEGORIES.map((value) => Type.Literal(value)))),
+          subcategory: Type.Optional(Type.Union(SUBCATEGORIES.map((value) => Type.Literal(value)))),
+          keyword: Type.Optional(Type.String({ minLength: 1, maxLength: 255 })),
+        }, { additionalProperties: false }),
+        async execute(_id, params) {
+          if (toolContext.senderIsOwner !== true) {
+            throw new Error('无法确认消息发送者为账本 owner，已拒绝查询。');
+          }
+          if (params.subcategory !== undefined && params.primaryCategory === undefined) {
+            throw new Error('二级分类查询必须同时指定一级分类。');
+          }
+          const subcategory = params.subcategory === undefined
+            ? undefined
+            : normalizeSubcategory(params.primaryCategory, params.subcategory);
+          const keyword = params.keyword?.trim();
+          if (params.keyword !== undefined && !keyword) {
+            throw new Error('查询关键词不能为空白。');
+          }
+          const range = resolveExpenseRange(params);
+
+          try {
+            const accountId = await bookkeepingApi.resolveAccountId(accountName);
+            const categories = await bookkeepingApi.listExpenseCategories();
+            const categoryId = await bookkeepingApi.resolveExpenseCategoryFilterId(
+              params.primaryCategory,
+              subcategory,
+              categories,
+            );
+            const transactions = await bookkeepingApi.listExpenseTransactions({
+              accountId,
+              startTime: range.startTime,
+              endTime: range.endTime,
+              categoryId,
+              keyword,
+            });
+            const summary = aggregateExpenseSummary(transactions, primaryCategoryById(categories));
+            return {
+              content: [{ type: 'text', text: formatExpenseSummary(range.label, summary) }],
+              details: { status: 'ok', ...range, ...summary },
+            };
+          } catch (error) {
+            const errorClass = error instanceof Error ? error.constructor.name : 'UnknownError';
+            api.logger?.error?.(`clawbot-bookkeeping: expense summary read failed errorClass=${errorClass}`);
+            return {
+              content: [{ type: 'text', text: '账本暂时连不上，本次没有读取任何数据，请稍后再试。' }],
+              details: { status: 'failed' },
+            };
+          }
+        },
+      }),
+      { name: 'summarize_expenses' },
+    );
 
     api.registerTool(
       (toolContext) => ({
