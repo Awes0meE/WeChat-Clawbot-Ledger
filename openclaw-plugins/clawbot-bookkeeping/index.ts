@@ -386,12 +386,17 @@ export default definePluginEntry({
       }
     });
 
-    api.on('before_prompt_build', (_event, context) => {
+    api.on('before_prompt_build', (event, context) => {
+      const channel = context.channel ?? context.channelId ?? context.messageProvider;
+      if (channel !== 'openclaw-weixin') return;
       const runId = context.runId;
       const runKey = runId ? transientBindingKey('run', runId) : undefined;
       const inbound = runKey ? inboundByRun.get(runKey) : undefined;
-      if (!inbound || inbound.channel !== 'openclaw-weixin') return;
-      return obviousTurnRoute(inbound.content);
+      const route = obviousTurnRoute(inbound?.content ?? event.prompt);
+      api.logger?.info?.(
+        `clawbot-bookkeeping: prompt routing run=${Boolean(runId)} bound=${Boolean(inbound)} routed=${Boolean(route)}`,
+      );
+      return route;
     });
 
     api.on('before_tool_call', (event, context) => {

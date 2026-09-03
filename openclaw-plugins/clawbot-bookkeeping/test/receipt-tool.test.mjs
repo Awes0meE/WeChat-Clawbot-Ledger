@@ -897,6 +897,11 @@ test('narrows obvious confirmation, questioned expense, and summary turns to one
     }, { runId: summaryRunId, channelId: 'openclaw-weixin' });
     assert.deepEqual(summary.toolsAllow, ['summarize_expenses']);
     assert.match(summary.prependSystemContext, /必须调用 `summarize_expenses`/u);
+
+    const early = await harness.inboundHooks.get('before_prompt_build')?.({
+      prompt: '午饭8.8么？', messages: [],
+    }, { channel: 'openclaw-weixin' });
+    assert.deepEqual(early.toolsAllow, ['prepare_expense']);
   } finally {
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
