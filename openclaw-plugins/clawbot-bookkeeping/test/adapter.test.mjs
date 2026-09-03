@@ -102,7 +102,7 @@ test('trusted inbound queue lets only one concurrent store claim a message', asy
   const dir = mkdtempSync(join(tmpdir(), 'clawbot-inbound-queue-'));
   const path = join(dir, 'receipts.sqlite');
   let store;
-  const workers = [];
+  const workerStates = [];
   try {
     const now = Date.now();
     const payload = { messageId: 'message-concurrent', content: '午饭7.2' };
@@ -113,20 +113,31 @@ test('trusted inbound queue lets only one concurrent store claim a message', asy
         const worker = new Worker(new URL('./fixtures/claim-trusted-inbound-worker.mjs', import.meta.url), {
           workerData: { path, lookupKey: 'concurrent-lookup-hash', now, barrier },
         });
-        workers.push(worker);
-        raceWorkers.push(worker);
+        const state = { worker, exited: false };
+        workerStates.push(state);
+        raceWorkers.push(state);
       }
-      await Promise.all(raceWorkers.map((worker) => new Promise((resolve, reject) => {
+      await Promise.all(raceWorkers.map(({ worker }) => new Promise((resolve, reject) => {
         worker.once('message', (message) => message.ready ? resolve() : reject(new Error('worker was not ready')));
         worker.once('error', reject);
       })));
-      const results = raceWorkers.map((worker) => new Promise((resolve, reject) => {
+      const results = raceWorkers.map(({ worker }) => new Promise((resolve, reject) => {
         worker.once('message', (message) => resolve(message.result));
         worker.once('error', reject);
       }));
+      const exits = raceWorkers.map((state) => new Promise((resolve, reject) => {
+        state.worker.once('error', reject);
+        state.worker.once('exit', (code) => {
+          state.exited = true;
+          if (code === 0) resolve();
+          else reject(new Error(`claim worker exited with code ${code}`));
+        });
+      }));
       Atomics.store(new Int32Array(barrier), 0, 1);
       Atomics.notify(new Int32Array(barrier), 0, raceWorkers.length);
-      return (await Promise.all(results)).filter(Boolean);
+      const claimed = (await Promise.all(results)).filter(Boolean);
+      await Promise.all(exits);
+      return claimed;
     };
 
     store = new SqliteReceiptStore(path);
@@ -152,9 +163,11 @@ test('trusted inbound queue lets only one concurrent store claim a message', asy
     store = undefined;
     assert.deepEqual(await raceClaims(), [payload]);
   } finally {
-    await Promise.all(workers.map((worker) => worker.terminate()));
+    await Promise.all(workerStates
+      .filter(({ exited }) => !exited)
+      .map(({ worker }) => worker.terminate()));
     store?.close();
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 

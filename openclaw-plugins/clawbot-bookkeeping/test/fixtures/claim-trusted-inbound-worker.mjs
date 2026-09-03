@@ -6,9 +6,11 @@ const store = new SqliteReceiptStore(workerData.path);
 parentPort.postMessage({ ready: true });
 Atomics.wait(new Int32Array(workerData.barrier), 0, 0);
 
+let result;
 try {
-  const result = store.claimTrustedInbound([workerData.lookupKey], workerData.now);
-  parentPort.postMessage({ result: result ?? null });
+  result = store.claimTrustedInbound([workerData.lookupKey], workerData.now);
 } finally {
   store.close();
 }
+parentPort.postMessage({ result: result ?? null });
+parentPort.close();
