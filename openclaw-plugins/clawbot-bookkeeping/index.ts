@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry';
 
 import { EzBookkeepingApi, SqliteReceiptStore } from './adapter.mjs';
-import { duplicateResponseText, recordExpense } from './bookkeeping-core.mjs';
+import { duplicateResponseText, formatExpenseReceipt, recordExpense } from './bookkeeping-core.mjs';
 
 const PRIMARY_CATEGORIES = [
   '食品酒水', '行车交通', '居家物业', '交流通讯', '衣服饰品', '休闲娱乐',
@@ -120,6 +120,7 @@ export default definePluginEntry({
       ? config.stateDbPath
       : 'D:\\Clawbot\\state\\message-receipts.sqlite';
     const accountName = typeof config.accountName === 'string' ? config.accountName : '日常支出';
+    const ledgerDisplayName = typeof config.ledgerDisplayName === 'string' ? config.ledgerDisplayName : '日常账本';
 
     const bookkeepingApi = new EzBookkeepingApi({ serverBaseUrl, tokenPath });
     const receiptStore = new SqliteReceiptStore(stateDbPath);
@@ -179,6 +180,7 @@ export default definePluginEntry({
         description: [
           '将当前一条消费消息记为一笔 SGD 支出。必须由你理解用户消息并选择金额、一级和二级分类。',
           '不要把“备注”后的文字放进参数；工具会从可信原始消息中原样提取。',
+          '若原始消息未明确标注“备注”，可提供简短且有依据的商户、商品或用途说明；不得编造信息。',
           '超市消费整笔归食品酒水/超市购物；网线归学习进修/数码装备。',
           '早餐、午餐、晚餐、早饭、午饭、晚饭或一般餐饮，二级分类一律使用“早午晚餐”，不要使用“餐饮”“午餐”等非正式名称。',
           '同一消息中的加法金额表示一笔消费总额，例如“6.5+2.5”必须只调用一次并传入“9”。',
@@ -189,6 +191,7 @@ export default definePluginEntry({
           amount: Type.String({ pattern: '^(?:0|[1-9]\\d*)(?:\\.\\d{1,2})?$' }),
           primaryCategory: Type.Union(PRIMARY_CATEGORIES.map((value) => Type.Literal(value))),
           subcategory: Type.String({ minLength: 1, maxLength: 20 }),
+          comment: Type.Optional(Type.String({ maxLength: 255 })),
         }, { additionalProperties: false }),
         async execute(_id, params) {
           if (toolContext.senderIsOwner !== true) {
@@ -215,13 +218,24 @@ export default definePluginEntry({
             amount: additiveAmountFromMessage(inbound.content) ?? params.amount,
             subcategory: normalizeSubcategory(params.primaryCategory, params.subcategory),
           };
-          const result = await recordExpense({
-            api: bookkeepingApi,
-            store: receiptStore,
-            input: normalizedInput,
-            inbound,
-            accountName,
-          });
+          let result;
+          try {
+            result = await recordExpense({
+              api: bookkeepingApi,
+              store: receiptStore,
+              input: normalizedInput,
+              inbound,
+              accountName,
+            });
+          } catch (error) {
+            api.logger?.error?.(
+              `clawbot-bookkeeping: record_expense failed ${error instanceof Error ? error.constructor.name : typeof error}: ${error instanceof Error ? error.message : String(error)}`,
+            );
+            return {
+              content: [{ type: 'text', text: '账本暂时连不上，本次没有写入任何数据，请稍后再试。' }],
+              details: { status: 'failed' },
+            };
+          }
           const details = { ...result, currency: 'SGD', timeSource: inbound.timeSource };
           if (result.status === 'duplicate') {
             return {
@@ -229,11 +243,17 @@ export default definePluginEntry({
               details,
             };
           }
-          const noteText = result.comment ? `；备注：${result.comment}` : '';
           return {
             content: [{
               type: 'text',
-              text: `已记账：S$${normalizedInput.amount}；${normalizedInput.primaryCategory} / ${normalizedInput.subcategory}${noteText}。`,
+              text: formatExpenseReceipt({
+                ledgerDisplayName,
+                amountMinor: result.amountMinor,
+                primaryCategory: normalizedInput.primaryCategory,
+                subcategory: normalizedInput.subcategory,
+                comment: result.comment,
+                time: result.time,
+              }),
             }],
             details,
           };

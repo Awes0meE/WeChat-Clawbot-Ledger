@@ -4,9 +4,11 @@ import test from 'node:test';
 import {
   duplicateResponseText,
   extractVerbatimComment,
+  formatExpenseReceipt,
   normalizeMessageTimestamp,
   parseAmountToMinorUnits,
   recordExpense,
+  resolveExpenseComment,
 } from '../bookkeeping-core.mjs';
 
 test('parses SGD amounts into integer minor units', () => {
@@ -28,6 +30,46 @@ test('extracts only the verbatim text after the first 备注 delimiter', () => {
 
 test('rejects comments longer than ezBookkeeping supports', () => {
   assert.throws(() => extractVerbatimComment(`测试1，备注${'字'.repeat(256)}`));
+});
+
+test('uses an explicit 备注 in preference to a grounded semantic note', () => {
+  assert.equal(
+    resolveExpenseComment('NTUC购物8.25，备注家里补货', '两根芹菜，一个菜板'),
+    '家里补货',
+  );
+});
+
+test('uses a grounded semantic note when the message has no explicit 备注', () => {
+  assert.equal(
+    resolveExpenseComment('NTUC购物8.25，买了两根芹菜，一个菜板', '两根芹菜，一个菜板'),
+    '两根芹菜，一个菜板',
+  );
+  assert.equal(resolveExpenseComment('午饭7.2', ''), '');
+});
+
+test('rejects a semantic note longer than ezBookkeeping supports', () => {
+  assert.throws(() => resolveExpenseComment('午饭7.2', '字'.repeat(256)));
+});
+
+test('formats a verified expense receipt in Singapore time', () => {
+  assert.equal(
+    formatExpenseReceipt({
+      ledgerDisplayName: '日常账本',
+      amountMinor: 720,
+      primaryCategory: '食品酒水',
+      subcategory: '早午晚餐',
+      comment: '',
+      time: 1_788_425_460,
+    }),
+    [
+      '记下来啦！🧾',
+      '账本：[ 日常账本 ]',
+      '支出：7.20 SGD',
+      '分类：食品酒水 - 早午晚餐',
+      '备注：无',
+      '时间：2026/09/03 16:51',
+    ].join('\n'),
+  );
 });
 
 test('normalizes second and millisecond event timestamps', () => {

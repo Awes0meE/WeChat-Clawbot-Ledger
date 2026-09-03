@@ -22,11 +22,49 @@ export function extractVerbatimComment(content) {
   const delimiterIndex = text.indexOf('备注');
   if (delimiterIndex < 0) return '';
 
-  const comment = text.slice(delimiterIndex + '备注'.length);
+  return validateComment(text.slice(delimiterIndex + '备注'.length));
+}
+
+export function validateComment(value) {
+  const comment = String(value ?? '').trim();
   if (Array.from(comment).length > MAX_COMMENT_CHARACTERS) {
     throw new Error('comment exceeds ezBookkeeping 255-character limit');
   }
-  return comment;
+  return comment === '无' ? '' : comment;
+}
+
+export function resolveExpenseComment(content, semanticComment = '') {
+  if (String(content ?? '').includes('备注')) {
+    return extractVerbatimComment(content);
+  }
+  return validateComment(semanticComment);
+}
+
+export function formatExpenseReceipt({
+  ledgerDisplayName,
+  amountMinor,
+  primaryCategory,
+  subcategory,
+  comment,
+  time,
+}) {
+  const singaporeTime = new Date((Number(time) + 8 * 60 * 60) * 1000);
+  const twoDigits = (value) => String(value).padStart(2, '0');
+  const formattedTime = [
+    singaporeTime.getUTCFullYear(),
+    twoDigits(singaporeTime.getUTCMonth() + 1),
+    twoDigits(singaporeTime.getUTCDate()),
+  ].join('/') + ` ${twoDigits(singaporeTime.getUTCHours())}:${twoDigits(singaporeTime.getUTCMinutes())}`;
+  const resolvedComment = validateComment(comment);
+
+  return [
+    '记下来啦！🧾',
+    `账本：[ ${ledgerDisplayName} ]`,
+    `支出：${(Number(amountMinor) / 100).toFixed(2)} SGD`,
+    `分类：${primaryCategory} - ${subcategory}`,
+    `备注：${resolvedComment || '无'}`,
+    `时间：${formattedTime}`,
+  ].join('\n');
 }
 
 export function normalizeMessageTimestamp(timestamp) {
@@ -73,7 +111,7 @@ export async function recordExpense({ api, store, input, inbound, accountName = 
   const clientSessionId = clientSessionIdFor(receiptKey);
   try {
     const sourceAmount = parseAmountToMinorUnits(input.amount);
-    const comment = extractVerbatimComment(inbound.content);
+    const comment = resolveExpenseComment(inbound.content, input.comment);
     const time = normalizeMessageTimestamp(inbound.timestamp);
     const sourceAccountId = await api.resolveAccountId(accountName);
     const categoryId = await api.resolveExpenseCategoryId(input.primaryCategory, input.subcategory);
@@ -97,7 +135,7 @@ export async function recordExpense({ api, store, input, inbound, accountName = 
       status: 'created',
       transactionId: created.id,
       clientSessionId,
-      amount: input.amount,
+      amountMinor: sourceAmount,
       primaryCategory: input.primaryCategory,
       subcategory: input.subcategory,
       time,
