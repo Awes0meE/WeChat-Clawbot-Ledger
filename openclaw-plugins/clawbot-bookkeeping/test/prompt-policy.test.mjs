@@ -51,10 +51,23 @@ test('documents compound routing and contrasting examples', () => {
   const prompt = readFileSync(new URL('../../../openclaw-workspace/AGENTS.md', import.meta.url), 'utf8');
 
   assert.equal(prompt.includes('一条消息同时明确要求记账与查询时，只调用一次 `record_expense`，且仅逐字返回其结果；同一轮不得读取。用户须另发消息查询。'), true);
-  assert.equal(prompt.includes('支出7.2 午饭'), true);
+  assert.equal(prompt.includes('记账：麦当劳7.2'), true);
   assert.equal(prompt.includes('最近三笔支出是什么'), true);
   assert.equal(prompt.includes('这个月吃饭花了多少'), true);
   assert.equal(prompt.includes('| `午饭7.2，顺便查本月支出` | 只调用一次 `record_expense`，且仅逐字返回结果；本轮不读取。用户须另发消息查询。 |'), true);
+});
+
+test('requires safe expense phrasing for unknown merchant shorthand', () => {
+  const prompt = readFileSync(new URL('../../../openclaw-workspace/AGENTS.md', import.meta.url), 'utf8');
+  const readme = readFileSync(new URL('../../../README.md', import.meta.url), 'utf8');
+
+  for (const text of [prompt, readme]) {
+    assert.equal(text.includes('麦当劳7.2'), true);
+    assert.equal(text.includes('记账：麦当劳7.2'), true);
+    assert.equal(text.includes('我在麦当劳花了7.2'), true);
+  }
+  assert.match(prompt, /未授权简写[^。]*不得调用 `record_expense`/u);
+  assert.match(prompt, /拒绝[^。]*(?:不得重试|不再调用)[^。]*不得宣称成功/u);
 });
 
 test('treats a malicious transaction comment as data rather than a command', () => {

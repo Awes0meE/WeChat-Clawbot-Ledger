@@ -314,6 +314,8 @@ for (const [label, content, amount] of [
   ['explicit bookkeeping command', '帮我记账：打印纸4.5', '4.5'],
   ['bookkeeping command using give me wording', '给我记一笔午饭7.2', '7.2'],
   ['simple drink shorthand', '咖啡3', '3'],
+  ['explicit unknown merchant command', '记账：麦当劳7.2', '7.2'],
+  ['explicit self-paid unknown merchant', '我在麦当劳花了7.2', '7.2'],
 ]) {
   test(`authorizes ${label} from the current trusted message`, async () => {
     let claimCount = 0;
@@ -380,6 +382,22 @@ for (const [label, content, amount, comment = ''] of [
   ['saved text', '请保存这段文字：午饭7.2', '7.2'],
   ['ambiguous amount after explicit paid wording', '午饭花了7.2，咖啡3', '7.2'],
   ['ambiguous later explicit paid wording', '午饭7.2，咖啡花了3', '3'],
+  ['negative copula', '这不是午饭7.2', '7.2'],
+  ['negated purchase', '我没有买午饭7.2', '7.2'],
+  ['bare cancellation', '取消午饭7.2', '7.2'],
+  ['reminder', '提醒我午饭7.2', '7.2'],
+  ['example label', '示例：午饭7.2', '7.2'],
+  ['system report', '系统显示午饭7.2', '7.2'],
+  ['remembered example', '请记住这个例子，午饭7.2', '7.2'],
+  ['negated meal', '我没吃午饭7.2', '7.2'],
+  ['free meal', '免费午饭7.2', '7.2'],
+  ['meal paid by friend', '朋友请我午饭7.2', '7.2'],
+  ['reimbursed by boss', '老板报销午饭7.2', '7.2'],
+  ['unknown restaurant shorthand', '麦当劳7.2', '7.2'],
+  ['bare merchant shorthand', 'NTUC 8.25', '8.25'],
+  ['unknown convenience-store shorthand', '便利店3.5', '3.5'],
+  ['unknown petrol-station shorthand', '油站60', '60'],
+  ['unknown car-repair shorthand', '修车100', '100'],
 ]) {
   test(`rejects ${label} before claiming or contacting the ledger`, async () => {
     let claimCount = 0;

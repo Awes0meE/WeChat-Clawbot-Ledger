@@ -420,6 +420,7 @@ test('returns the authoritative rich receipt after a trusted expense write', asy
     assert.equal(requests.length, 3);
     assert.equal(harness.recordExpenseDefinition({}).parameters.properties.comment.maxLength, 255);
     assert.equal(harness.recordExpenseDefinition({}).parameters.required.includes('comment'), false);
+    assert.match(harness.recordExpenseDefinition({}).description, /未授权简写[^。]*不得调用或重试/u);
     const addRequest = requests.find(({ url }) => url.endsWith('/transactions/add.json'));
     assert.equal(addRequest.options.method, 'POST');
     const addBody = JSON.parse(addRequest.options.body);
@@ -847,7 +848,7 @@ test('returns a terminal no-write result when current-message authorization reje
       },
     );
 
-    assert.equal(result.content[0].text, '这条消息无法确认是一笔金额一致的已发生消费，本次没有入账。');
+    assert.equal(result.content[0].text, '这条消息无法确认是一笔金额一致的已发生消费，本次没有入账。请用“记账：麦当劳7.2”或“我在麦当劳花了7.2”的明确句式重新发送。');
     assert.deepEqual(result.details, { status: 'rejected' });
     assert.equal(requestCount, 0);
   } finally {

@@ -3,18 +3,23 @@ import { createHash } from 'node:crypto';
 const MAX_EZBOOKKEEPING_AMOUNT_MINOR = 9_999_999_999_999;
 const MAX_COMMENT_CHARACTERS = 255;
 const AMOUNT_EXPRESSION = /\d+(?:\.\d{1,2})?(?:\s*[+＋]\s*\d+(?:\.\d{1,2})?)*/gu;
-const QUERY_CONTEXT = /(?:多少|几笔|什么|哪些|哪笔|查询|查一下|查下|查看|查账|统计|汇总|合计|总计|历史|最近|买过|有没有|是否)/u;
-const BARE_QUERY_CUE = /(?:^|帮我|请|想|要|麻烦)查(?=本|这|上|最|账|支出|消费|交易|记录|历史)/u;
-const EXPLICIT_WRITE_CUE = /(?:(?:帮我|给我|请|麻烦|能帮我)(?:记(?:账|一笔)?|记录(?:一下)?|入账)|记账|记一笔|入账)/u;
-const NON_ACTUAL_CONTEXT = /(?:不要记|不用记|别记|不记账|不要入账|别入账|取消记账|取消入账|撤销|比如|例如|举例|假如|假设|如果|要是|倘若|预计|估计|预算|计划|打算|可能|明天|后天|下周|下个月|以后再|待会|一会儿|还没付(?:款)?|尚未付(?:款)?|未付(?:款)?|没付(?:款)?|待付(?:款)?)/u;
-const INCOMING_OR_REVERSAL_CONTEXT = /(?:(?:转|付|还)(?:给)?我|给我(?!记|记录|入账)|收到|收款|收入|工资|奖金|到账|进账|退款|退回|返款|返现)/u;
-const REPORTED_OR_TEXT_CONTEXT = /(?:(?:说|表示|告诉我|发来|发给我|发我的?消息|消息是).{0,32}\d|(?:引用|转述|转发).{0,32}\d|(?:保存|复制|复述|记住).{0,16}(?:这?段|文字|内容|消息))/u;
 const INSTRUCTION_INJECTION = /(?:record_expense|summarize_expenses|query_transactions|绕过.{0,8}(?:安全|限制|规则)|(?:忽略|无视|跳过).{0,12}(?:之前|前面|以上|规则|指令)|(?:调用|执行|使用).{0,8}(?:工具|函数))/iu;
 const QUANTITY_OR_TIME_UNIT = /^(?:个|位|人|根|件|张|瓶|杯|盒|包|份|次|天|小时|分钟|秒|公里|千米|米|厘米|毫米|km|kg|公斤|斤|克|年|月|日|号|点)/iu;
 const ADMIN_AMOUNT_CUE = /(?:订单(?:号)?|余额|原价|标价|用券|券|优惠(?:后)?|折扣|编号|单号)\s*$/u;
 const ADMIN_AMOUNT_CLAUSE = /^\s*(?:订单(?:号)?|余额|原价|标价|用券|优惠|折扣|编号|单号)/u;
-const EXPENSE_OBJECT_CUE = /(?:早饭|早餐|午饭|午餐|晚饭|晚餐|夜宵|咖啡|奶茶|饮料|甜品|零食|水果|超市|购物|买菜|食阁|餐饮|吃饭|打车|出租车|公交|地铁|停车|加油|房租|水电|话费|网费|药品?|医院|健身|电影|旅行|旅游|日用品|[\p{L}\d]{1,16}(?:费|票|租|税))\s*$/iu;
-const EXPENSE_ACTION_CUE = /(?:花了?|消费了?|支出|买了?|购入|吃了?)\s*$/u;
+const EXPLICIT_COMMAND_PREFIX = /^(?:(?:(?:请|麻烦)?(?:帮我|给我)?(?:记账|记一笔|记|记录一下|记录|入账))|(?:能帮我(?:记账|记一笔|记|记录一下|记录|入账)))\s*[：:]?\s*/u;
+const SAFE_SHORTHAND = /^(?:早饭|早餐|午饭|午餐|晚饭|晚餐|夜宵|咖啡|奶茶|餐饮|买菜|NTUC购物|食阁吃饭|检查费)$/iu;
+const SAFE_DESCRIPTION = /^[\p{L}\p{N}][\p{L}\p{N}\s·&（）()\-]{0,59}$/u;
+const CURRENCY_OR_MODAL_SUFFIX = /^\s*(?:(?:SGD|新币|新元|人民币|块钱|块|元)\s*)?(?:吗|嘛|呢)?[?？]?\s*$/iu;
+const SELF_TRAILING_ACTION = /^我(?:刚刚?|刚才|今天|昨晚|中午|晚上)?(?:在)?(.+?)(?:花了?|消费了?|支付了?|付了?|付款)$/u;
+const SELF_LEADING_ACTION = /^我(?:刚刚?|刚才|今天|昨晚|中午|晚上)?(?:买了?|购入|吃了?)(.+)$/u;
+const SHORTHAND_TRAILING_ACTION = /^(.*?)(?:花了?|消费了?)$/u;
+const ORDER_REFERENCE_CLAUSE = /^订单(?:号)?\s*\d+$/u;
+const ADMIN_SUFFIX_CLAUSE = /^(?:余额|用券)\s*\d+(?:\.\d{1,2})?(?:\s*[+＋]\s*\d+(?:\.\d{1,2})?)*$/u;
+const READ_AFTER_WRITE_CLAUSE = /^顺便(?:查|查询)(?:本月|这个月|本周|今天|上月|上个月|今年)?(?:支出|消费|账单|记录)$/u;
+const PURCHASE_DETAIL_START = /^买了(?:[一二两三四五六七八九十百千万]+(?:个|根|件|张|瓶|杯|盒|包|份))?[\p{L}]{1,30}$/u;
+const PURCHASE_DETAIL_ITEM = /^(?:[一二两三四五六七八九十百千万]+(?:个|根|件|张|瓶|杯|盒|包|份))?[\p{L}]{1,30}$/u;
+const ORIGINAL_PRICE_CLAUSE = /^(早饭|早餐|午饭|午餐|晚饭|晚餐|夜宵|咖啡|奶茶|餐饮|买菜|NTUC购物|食阁吃饭|检查费)原价\d+(?:\.\d{1,2})?$/iu;
 
 export class ExpenseRecordingError extends Error {
   constructor(outcome, { dedupeStatus } = {}) {
@@ -54,19 +59,6 @@ function expressionAmountToMinorUnits(expression) {
   }
 }
 
-function hasExpenseContextText(clause) {
-  const residue = clause
-    .replace(AMOUNT_EXPRESSION, '')
-    .replace(/(?:SGD|新币|新元|人民币|块钱|块|元)/giu, '')
-    .replace(/[年月日号点分秒￥¥$\s+\-*/=：:（）()【】\[\]]/gu, '');
-  return /\p{L}/u.test(residue);
-}
-
-function isQueryClause(clause) {
-  if (QUERY_CONTEXT.test(clause) || BARE_QUERY_CUE.test(clause)) return true;
-  return /[吗嘛呢?？]/u.test(clause) && !EXPLICIT_WRITE_CUE.test(clause);
-}
-
 function eligibleAmountCandidates(clause, clauseIndex) {
   if (ADMIN_AMOUNT_CLAUSE.test(clause)) return [];
   const candidates = [];
@@ -83,22 +75,68 @@ function eligibleAmountCandidates(clause, clauseIndex) {
       clause,
       clauseIndex,
       matchIndex,
+      expressionLength: match[0].length,
     });
   }
   return candidates;
 }
 
-function hasProvableExpenseSyntax(candidate) {
+function classifyProvableExpenseClause(candidate) {
   const prefix = candidate.clause.slice(0, candidate.matchIndex).trim();
-  if (EXPLICIT_WRITE_CUE.test(prefix)) return true;
-  if (/^(?:(?:我|本人).{0,12})?(?:花了?|消费了?|支出|买了?|购入|吃了?)/u.test(prefix)) return true;
-  if (/(?:(?:我|本人).{0,12}(?:支付了?|付了?|付款)|实付|实际支付|已付)\s*$/u.test(prefix)) return true;
-  if (EXPENSE_OBJECT_CUE.test(prefix)) return true;
+  const suffix = candidate.clause.slice(candidate.matchIndex + candidate.expressionLength);
+  if (!CURRENCY_OR_MODAL_SUFFIX.test(suffix)) return undefined;
 
-  const actionMatch = prefix.match(EXPENSE_ACTION_CUE);
-  if (!actionMatch) return false;
-  const object = prefix.slice(0, actionMatch.index).replace(/^(?:我|本人)/u, '').trim();
-  return EXPENSE_OBJECT_CUE.test(object);
+  const command = prefix.match(EXPLICIT_COMMAND_PREFIX);
+  if (command) {
+    const description = prefix.slice(command[0].length).trim();
+    return SAFE_DESCRIPTION.test(description) ? { kind: 'command', description } : undefined;
+  }
+
+  const selfTrailing = prefix.match(SELF_TRAILING_ACTION);
+  if (selfTrailing && SAFE_DESCRIPTION.test(selfTrailing[1].trim())) {
+    return { kind: 'self-action', description: selfTrailing[1].trim() };
+  }
+  const selfLeading = prefix.match(SELF_LEADING_ACTION);
+  if (selfLeading && SAFE_DESCRIPTION.test(selfLeading[1].trim())) {
+    return { kind: 'self-action', description: selfLeading[1].trim() };
+  }
+
+  if (SAFE_SHORTHAND.test(prefix)) return { kind: 'shorthand', description: prefix };
+  const shorthandAction = prefix.match(SHORTHAND_TRAILING_ACTION);
+  if (shorthandAction && SAFE_SHORTHAND.test(shorthandAction[1].trim())) {
+    return { kind: 'shorthand-action', description: shorthandAction[1].trim() };
+  }
+  if (/^(?:实付|实际支付|已付)$/u.test(prefix)) {
+    return { kind: 'actual-paid', description: '' };
+  }
+  return undefined;
+}
+
+function hasFullyMatchedAuthorization(clauses, candidate, syntax) {
+  let purchaseDetailsStarted = false;
+  for (let index = 0; index < clauses.length; index += 1) {
+    if (index === candidate.clauseIndex) continue;
+    const clause = clauses[index].trim();
+    if (index < candidate.clauseIndex) {
+      if (ORDER_REFERENCE_CLAUSE.test(clause)) continue;
+      if (syntax.kind === 'actual-paid'
+        && index === candidate.clauseIndex - 1
+        && ORIGINAL_PRICE_CLAUSE.test(clause)) continue;
+      return false;
+    }
+
+    if (ADMIN_SUFFIX_CLAUSE.test(clause) || READ_AFTER_WRITE_CLAUSE.test(clause)) continue;
+    if (syntax.description.toUpperCase() === 'NTUC购物'.toUpperCase()) {
+      if (!purchaseDetailsStarted && PURCHASE_DETAIL_START.test(clause)) {
+        purchaseDetailsStarted = true;
+        continue;
+      }
+      if (purchaseDetailsStarted && PURCHASE_DETAIL_ITEM.test(clause)) continue;
+    }
+    return false;
+  }
+  return syntax.kind !== 'actual-paid'
+    || (candidate.clauseIndex > 0 && ORIGINAL_PRICE_CLAUSE.test(clauses[candidate.clauseIndex - 1].trim()));
 }
 
 function isAuthorizedExpenseMessage(content, requestedAmountMinor) {
@@ -106,20 +144,15 @@ function isAuthorizedExpenseMessage(content, requestedAmountMinor) {
   const commentIndex = originalText.indexOf('备注');
   const text = (commentIndex < 0 ? originalText : originalText.slice(0, commentIndex)).trim();
   if (!text || INSTRUCTION_INJECTION.test(text)) return false;
-  if (NON_ACTUAL_CONTEXT.test(text)
-    || INCOMING_OR_REVERSAL_CONTEXT.test(text)
-    || REPORTED_OR_TEXT_CONTEXT.test(text)) return false;
-  if (/付款/u.test(text) && !/(?:(?:我|本人).{0,12}付款|实际付款|已付款)/u.test(text)) return false;
 
   const clauses = text.split(/[，,。；;！!\r\n]+/u).filter(Boolean);
   const candidates = clauses.flatMap((clause, clauseIndex) => eligibleAmountCandidates(clause, clauseIndex));
   if (candidates.length !== 1) return false;
 
   const candidate = candidates[0];
-  if (candidate.amountMinor !== requestedAmountMinor
-    || !hasExpenseContextText(candidate.clause)
-    || !hasProvableExpenseSyntax(candidate)) return false;
-  return !clauses.slice(0, candidate.clauseIndex + 1).some(isQueryClause);
+  if (candidate.amountMinor !== requestedAmountMinor) return false;
+  const syntax = classifyProvableExpenseClause(candidate);
+  return syntax !== undefined && hasFullyMatchedAuthorization(clauses, candidate, syntax);
 }
 
 function normalizeTransactionId(value) {
