@@ -6,17 +6,38 @@
   "contracts": {
     "tools": [
       "bookkeeping_health",
-      "record_expense"
+      "record_expense",
+      "prepare_expense",
+      "resolve_expense_confirmation",
+      "summarize_expenses"
     ]
   },
   "activation": {
     "onStartup": true
+  },
+  "mcpServers": {
+    "ezbookkeeping": {
+      "transport": "streamable-http",
+      "url": "http://127.0.0.1:8180/mcp",
+      "toolFilter": {
+        "include": ["query_transactions"]
+      }
+    }
   },
   "toolMetadata": {
     "bookkeeping_health": {
       "profiles": ["minimal"]
     },
     "record_expense": {
+      "profiles": ["minimal"]
+    },
+    "prepare_expense": {
+      "profiles": ["minimal"]
+    },
+    "resolve_expense_confirmation": {
+      "profiles": ["minimal"]
+    },
+    "summarize_expenses": {
       "profiles": ["minimal"]
     }
   },
@@ -32,6 +53,10 @@
         "type": "string",
         "minLength": 1
       },
+      "mcpTokenPath": {
+        "type": "string",
+        "minLength": 1
+      },
       "stateDbPath": {
         "type": "string",
         "minLength": 1
@@ -39,6 +64,16 @@
       "accountName": {
         "type": "string",
         "const": "日常支出"
+      },
+      "ledgerDisplayName": {
+        "type": "string",
+        "const": "日常账本"
+      },
+      "requestTimeoutMs": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 60000,
+        "default": 10000
       }
     }
   }

@@ -34,6 +34,7 @@ test('correlates trusted metadata across isolated plugin instances', async () =>
       inboundHooks.set(name, handler);
     },
     registerTool() {},
+    registerMcpServerConnectionResolver() {},
   };
   const toolApi = {
     pluginConfig,
@@ -45,6 +46,7 @@ test('correlates trusted metadata across isolated plugin instances', async () =>
         recordExpenseFactory = definition;
       }
     },
+    registerMcpServerConnectionResolver() {},
   };
 
   try {
@@ -59,12 +61,26 @@ test('correlates trusted metadata across isolated plugin instances', async () =>
       messageId: 'wechat-message-2',
       senderId: 'owner-user',
       sessionKey: 'agent:main:main',
+      runId: 'run-cross-instance',
     }, {
       channelId: 'openclaw-weixin',
       accountId: 'bot-account',
       messageId: 'wechat-message-2',
       senderId: 'owner-user',
       sessionKey: 'agent:main:main',
+      runId: 'run-cross-instance',
+    });
+
+    await toolHooks.get('before_agent_run')({
+      prompt: '午饭12.5',
+      messages: [],
+      senderIsOwner: true,
+    }, {
+      channel: 'openclaw-weixin',
+      accountId: 'bot-account',
+      senderId: 'owner-user',
+      sessionKey: 'agent:main:main',
+      runId: 'run-cross-instance',
     });
 
     const tool = recordExpenseFactory({
@@ -73,6 +89,21 @@ test('correlates trusted metadata across isolated plugin instances', async () =>
       messageChannel: 'openclaw-weixin',
       agentAccountId: 'bot-account',
       requesterSenderId: 'owner-user',
+    });
+    await toolHooks.get('before_tool_call')({
+      toolName: 'record_expense',
+      params: {
+        amount: '12.5',
+        primaryCategory: '食品酒水',
+        subcategory: '早午晚餐',
+      },
+      runId: 'run-cross-instance',
+      toolCallId: 'tool-call-1',
+    }, {
+      toolName: 'record_expense',
+      runId: 'run-cross-instance',
+      toolCallId: 'tool-call-1',
+      requester: { senderId: 'owner-user', senderIsOwner: true },
     });
     const result = await tool.execute('tool-call-1', {
       amount: '12.5',

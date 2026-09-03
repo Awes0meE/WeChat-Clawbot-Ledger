@@ -17,8 +17,11 @@
       "tools": {
         "profile": "minimal",
         "allow": [
-          "bookkeeping_health",
-          "record_expense"
+          "record_expense",
+          "prepare_expense",
+          "resolve_expense_confirmation",
+          "summarize_expenses",
+          "ezbookkeeping__query_transactions"
         ],
         "loopDetection": {
           "enabled": true
