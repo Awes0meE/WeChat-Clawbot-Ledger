@@ -451,6 +451,23 @@ export default definePluginEntry({
       };
     });
 
+    api.on('message_sending', (event, context) => {
+      const channel = context.channelId
+        ?? (typeof event.metadata?.channel === 'string' ? event.metadata.channel : undefined);
+      if (channel !== 'openclaw-weixin') return;
+      const runId = typeof event.metadata?.runId === 'string'
+        ? event.metadata.runId
+        : context.runId;
+      const runKey = runId ? transientBindingKey('run', runId) : undefined;
+      const authoritative = runKey ? authoritativeRepliesByRun.get(runKey) : undefined;
+      api.logger?.info?.(
+        `clawbot-bookkeeping: WeChat send authority run=${Boolean(runId)} matched=${Boolean(authoritative)}`,
+      );
+      if (!runKey || !authoritative) return;
+      authoritativeRepliesByRun.delete(runKey);
+      return { content: authoritative.text };
+    });
+
     api.on('agent_end', (event, context) => {
       const now = Date.now();
       pruneExpiredToolCallSlots(now);

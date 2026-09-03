@@ -662,6 +662,48 @@ test('replaces the model final text with the authoritative bookkeeping receipt',
   }
 });
 
+test('replaces a WeChat provider send with the authoritative tool receipt', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not run for a confirmation');
+  });
+
+  try {
+    const runId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭8.8么？',
+      messageId: 'authoritative-wechat-confirmation',
+    });
+    const result = await harness.prepareExpenseFactory(trustedOwnerContext()).execute(
+      'authoritative-wechat-confirmation-call',
+      {
+        amount: '8.8',
+        primaryCategory: '食品酒水',
+        subcategory: '早午晚餐',
+        comment: '午饭',
+      },
+    );
+    const outgoing = await harness.inboundHooks.get('message_sending')?.({
+      to: 'owner-user',
+      content: '是',
+      metadata: {
+        channel: 'openclaw-weixin',
+        accountId: 'bot-account',
+        runId,
+      },
+    }, {
+      channelId: 'openclaw-weixin',
+      accountId: 'bot-account',
+    });
+
+    assert.equal(outgoing.content, result.content[0].text);
+    assert.match(outgoing.content, /^帮你核对一下这笔～🤔\n- 账本：/u);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
 test('binds cached record tool calls to each inbound run without retaining a query turn', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
