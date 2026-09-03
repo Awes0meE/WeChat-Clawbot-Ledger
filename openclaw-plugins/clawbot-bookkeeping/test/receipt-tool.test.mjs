@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
 import plugin from '../index.ts';
+import { SqliteReceiptStore } from '../adapter.mjs';
 
 function createPluginHarness(tempDirectory, fetchImpl) {
   const inboundHooks = new Map();
   let recordExpenseFactory;
+  let recordExpenseDefinition;
   const pluginApi = {
     pluginConfig: {
       serverBaseUrl: 'http://127.0.0.1:8180',
@@ -22,6 +24,7 @@ function createPluginHarness(tempDirectory, fetchImpl) {
     registerTool(definition, options) {
       if (typeof definition === 'function' && options?.name === 'record_expense') {
         recordExpenseFactory = definition;
+        recordExpenseDefinition = definition;
       }
     },
   };
@@ -32,6 +35,7 @@ function createPluginHarness(tempDirectory, fetchImpl) {
   return {
     inboundHooks,
     recordExpenseFactory,
+    recordExpenseDefinition,
     restore() {
       inboundHooks.get('gateway_stop')?.({}, {});
       globalThis.fetch = originalFetch;
@@ -49,21 +53,32 @@ function trustedOwnerContext() {
   };
 }
 
-async function receiveTrustedOwnerMessage(inboundHooks) {
+async function receiveTrustedOwnerMessage(inboundHooks, {
+  content = 'NTUC购物8.25，买了两根芹菜，一个菜板',
+  messageId = 'wechat-message-3',
+} = {}) {
   await inboundHooks.get('message_received')({
-    content: 'NTUC购物8.25，买了两根芹菜，一个菜板',
+    content,
     timestamp: 1_788_425_460,
-    messageId: 'wechat-message-3',
+    messageId,
     senderId: 'owner-user',
     sessionKey: 'agent:main:main',
   }, {
     channelId: 'openclaw-weixin',
     accountId: 'bot-account',
-    messageId: 'wechat-message-3',
+    messageId,
     senderId: 'owner-user',
     sessionKey: 'agent:main:main',
   });
 }
+
+test('declares the fixed ledger display name in the plugin manifest', () => {
+  const manifest = JSON.parse(readFileSync(new URL('../openclaw.plugin.json', import.meta.url), 'utf8'));
+  assert.deepEqual(manifest.configSchema.properties.ledgerDisplayName, {
+    type: 'string',
+    const: '日常账本',
+  });
+});
 
 test('returns the authoritative rich receipt after a trusted expense write', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
@@ -108,14 +123,36 @@ test('returns the authoritative rich receipt after a trusted expense write', asy
       '时间：2026/09/03 16:51',
     ].join('\n'));
     assert.equal(result.details.status, 'created');
+    assert.equal(result.details.amountMinor, 825);
     assert.equal(requests.length, 3);
+    assert.equal(harness.recordExpenseDefinition({}).parameters.properties.comment.maxLength, 255);
+    assert.equal(harness.recordExpenseDefinition({}).parameters.required.includes('comment'), false);
+    const addRequest = requests.find(({ url }) => url.endsWith('/transactions/add.json'));
+    assert.equal(addRequest.options.method, 'POST');
+    const addBody = JSON.parse(addRequest.options.body);
+    assert.match(addBody.clientSessionId, /^[a-f0-9]{64}$/u);
+    assert.deepEqual(addBody, {
+      type: 3,
+      categoryId: 'secondary-1',
+      time: 1_788_425_460,
+      utcOffset: 480,
+      sourceAccountId: 'account-1',
+      sourceAmount: 825,
+      destinationAccountId: '0',
+      destinationAmount: 0,
+      hideAmount: false,
+      tagIds: [],
+      pictureIds: [],
+      comment: '两根芹菜，一个菜板',
+      clientSessionId: addBody.clientSessionId,
+    });
   } finally {
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
   }
 });
 
-test('returns a stable failure receipt when ezBookkeeping cannot be reached', async () => {
+test('returns a no-write receipt when account lookup cannot reach ezBookkeeping', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
   let requestCount = 0;
@@ -137,6 +174,158 @@ test('returns a stable failure receipt when ezBookkeeping cannot be reached', as
     assert.equal(result.content[0].text, '账本暂时连不上，本次没有写入任何数据，请稍后再试。');
     assert.deepEqual(result.details, { status: 'failed' });
     assert.equal(requestCount, 1);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('returns an unknown outcome and prevents retry after a transaction transport failure', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async (url) => {
+    if (url.endsWith('/accounts/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: [
+        { id: 'account-1', name: '日常支出', currency: 'SGD' },
+      ] }), { status: 200 });
+    }
+    if (url.endsWith('/transaction/categories/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: {
+        2: [{ id: 'primary-1', name: '食品酒水', parentId: '0', subCategories: [
+          { id: 'secondary-1', name: '超市购物', parentId: 'primary-1' },
+        ] }],
+      } }), { status: 200 });
+    }
+    if (url.endsWith('/transactions/add.json')) {
+      throw new Error('transport lost after dispatch');
+    }
+    throw new Error(`unexpected URL: ${url}`);
+  });
+
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, { messageId: 'wechat-message-unknown' });
+    const tool = harness.recordExpenseFactory(trustedOwnerContext());
+    const params = {
+      amount: '8.25',
+      primaryCategory: '食品酒水',
+      subcategory: '超市购物',
+      comment: '两根芹菜，一个菜板',
+    };
+    const first = await tool.execute('tool-call-unknown-1', params);
+    const retry = await tool.execute('tool-call-unknown-2', params);
+
+    assert.equal(first.content[0].text, '记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。');
+    assert.deepEqual(first.details, { status: 'unknown' });
+    assert.equal(retry.content[0].text, '同一条微信消息正在处理或状态未确认，未重复入账。');
+    assert.equal(retry.details.status, 'duplicate');
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('keeps a confirmed rich receipt when receipt completion cannot be persisted', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const originalComplete = SqliteReceiptStore.prototype.complete;
+  SqliteReceiptStore.prototype.complete = () => {
+    throw new Error('receipt database unavailable');
+  };
+  const harness = createPluginHarness(tempDirectory, async (url) => {
+    if (url.endsWith('/accounts/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: [
+        { id: 'account-1', name: '日常支出', currency: 'SGD' },
+      ] }), { status: 200 });
+    }
+    if (url.endsWith('/transaction/categories/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: {
+        2: [{ id: 'primary-1', name: '食品酒水', parentId: '0', subCategories: [
+          { id: 'secondary-1', name: '超市购物', parentId: 'primary-1' },
+        ] }],
+      } }), { status: 200 });
+    }
+    if (url.endsWith('/transactions/add.json')) {
+      return new Response(JSON.stringify({ success: true, result: { id: 'transaction-confirmed' } }), { status: 200 });
+    }
+    throw new Error(`unexpected URL: ${url}`);
+  });
+
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, { messageId: 'wechat-message-unconfirmed' });
+    const tool = harness.recordExpenseFactory(trustedOwnerContext());
+    const result = await tool.execute('tool-call-unconfirmed', {
+      amount: '8.25',
+      primaryCategory: '食品酒水',
+      subcategory: '超市购物',
+      comment: '两根芹菜，一个菜板',
+    });
+
+    assert.equal(result.content[0].text, [
+      '记下来啦！🧾',
+      '账本：[ 日常账本 ]',
+      '支出：8.25 SGD',
+      '分类：食品酒水 - 超市购物',
+      '备注：两根芹菜，一个菜板',
+      '时间：2026/09/03 16:51',
+    ].join('\n'));
+    assert.equal(result.details.status, 'created');
+    assert.equal(result.details.dedupeStatus, 'unconfirmed');
+  } finally {
+    SqliteReceiptStore.prototype.complete = originalComplete;
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('does not translate validation or receipt-store claim errors into a no-write receipt', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not be reached');
+  });
+
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, { messageId: 'wechat-message-invalid-amount' });
+    const tool = harness.recordExpenseFactory(trustedOwnerContext());
+    await assert.rejects(
+      () => tool.execute('tool-call-invalid-amount', {
+        amount: '999999999999.99',
+        primaryCategory: '食品酒水',
+        subcategory: '超市购物',
+      }),
+      /amount/i,
+    );
+
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: `NTUC购物8.25，备注${'字'.repeat(256)}`,
+      messageId: 'wechat-message-invalid-note',
+    });
+    await assert.rejects(
+      () => tool.execute('tool-call-invalid-note', {
+        amount: '8.25',
+        primaryCategory: '食品酒水',
+        subcategory: '超市购物',
+      }),
+      /comment/i,
+    );
+
+    const originalClaim = SqliteReceiptStore.prototype.claim;
+    SqliteReceiptStore.prototype.claim = () => {
+      throw new Error('receipt store unavailable');
+    };
+    try {
+      await receiveTrustedOwnerMessage(harness.inboundHooks, { messageId: 'wechat-message-claim-error' });
+      await assert.rejects(
+        () => tool.execute('tool-call-claim-error', {
+          amount: '8.25',
+          primaryCategory: '食品酒水',
+          subcategory: '超市购物',
+        }),
+        /receipt store unavailable/i,
+      );
+    } finally {
+      SqliteReceiptStore.prototype.claim = originalClaim;
+    }
   } finally {
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });

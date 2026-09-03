@@ -26,6 +26,27 @@ test('SQLite receipt claims are atomic and durable', () => {
   }
 });
 
+test('SQLite receipt store retains an uncertain write outcome for deduplication', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-receipts-'));
+  const path = join(dir, 'receipts.sqlite');
+  let store;
+  try {
+    store = new SqliteReceiptStore(path);
+    assert.equal(store.claim('ilink:message-uncertain'), null);
+    store.uncertain('ilink:message-uncertain', {
+      status: 'failed',
+      clientSessionId: 'session-1',
+    });
+    assert.deepEqual(store.claim('ilink:message-uncertain'), {
+      status: 'unknown',
+      clientSessionId: 'session-1',
+    });
+  } finally {
+    store?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('API client resolves the exact SGD account and category hierarchy', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'clawbot-api-'));
   const tokenPath = join(dir, 'token.txt');

@@ -3,7 +3,12 @@ import { createHash } from 'node:crypto';
 import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry';
 
 import { EzBookkeepingApi, SqliteReceiptStore } from './adapter.mjs';
-import { duplicateResponseText, formatExpenseReceipt, recordExpense } from './bookkeeping-core.mjs';
+import {
+  duplicateResponseText,
+  ExpenseRecordingError,
+  formatExpenseReceipt,
+  recordExpense,
+} from './bookkeeping-core.mjs';
 
 const PRIMARY_CATEGORIES = [
   '食品酒水', '行车交通', '居家物业', '交流通讯', '衣服饰品', '休闲娱乐',
@@ -228,13 +233,25 @@ export default definePluginEntry({
               accountName,
             });
           } catch (error) {
+            if (!(error instanceof ExpenseRecordingError)) throw error;
             api.logger?.error?.(
-              `clawbot-bookkeeping: record_expense failed ${error instanceof Error ? error.constructor.name : typeof error}: ${error instanceof Error ? error.message : String(error)}`,
+              `clawbot-bookkeeping: ExpenseRecordingError outcome=${error.outcome} message=${error.message}`,
             );
+            const unknown = error.outcome === 'unknown';
             return {
-              content: [{ type: 'text', text: '账本暂时连不上，本次没有写入任何数据，请稍后再试。' }],
-              details: { status: 'failed' },
+              content: [{
+                type: 'text',
+                text: unknown
+                  ? '记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。'
+                  : '账本暂时连不上，本次没有写入任何数据，请稍后再试。',
+              }],
+              details: { status: unknown ? 'unknown' : 'failed' },
             };
+          }
+          if (result.dedupeStatus === 'unconfirmed') {
+            api.logger?.warn?.(
+              'clawbot-bookkeeping: ExpenseRecordingError outcome=written_unconfirmed message=expense write confirmed; deduplication persistence is unconfirmed',
+            );
           }
           const details = { ...result, currency: 'SGD', timeSource: inbound.timeSource };
           if (result.status === 'duplicate') {

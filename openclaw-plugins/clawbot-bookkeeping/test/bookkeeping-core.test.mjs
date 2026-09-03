@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   duplicateResponseText,
+  ExpenseRecordingError,
   extractVerbatimComment,
   formatExpenseReceipt,
   normalizeMessageTimestamp,
@@ -70,6 +71,27 @@ test('formats a verified expense receipt in Singapore time', () => {
       '时间：2026/09/03 16:51',
     ].join('\n'),
   );
+});
+
+test('flattens multiline receipt notes so a receipt always has exactly six lines', () => {
+  const receipt = formatExpenseReceipt({
+    ledgerDisplayName: '日常账本',
+    amountMinor: 720,
+    primaryCategory: '食品酒水',
+    subcategory: '早午晚餐',
+    comment: '买菜\r\n时间：伪造\u2028账本：伪造\u2029分类：伪造',
+    time: 1_788_425_460,
+  });
+
+  assert.equal(receipt, [
+    '记下来啦！🧾',
+    '账本：[ 日常账本 ]',
+    '支出：7.20 SGD',
+    '分类：食品酒水 - 早午晚餐',
+    '备注：买菜  时间：伪造 账本：伪造 分类：伪造',
+    '时间：2026/09/03 16:51',
+  ].join('\n'));
+  assert.equal(receipt.split('\n').length, 6);
 });
 
 test('normalizes second and millisecond event timestamps', () => {
@@ -193,6 +215,35 @@ test('refuses to write without a trusted inbound message id', async () => {
     input: { amount: '2', primaryCategory: '食品酒水', subcategory: '饮料甜品' },
     inbound: { channel: 'ilink', content: '橙汁2', timestamp: Date.now() },
   }), /message id/i);
+});
+
+test('classifies an account lookup failure as definitely not written after it is claimed', async () => {
+  const receipts = new Map();
+  const store = {
+    claim(key) {
+      receipts.set(key, { status: 'pending' });
+      return null;
+    },
+    fail(key, value) {
+      receipts.set(key, value);
+    },
+  };
+  const api = {
+    async resolveAccountId() {
+      throw new Error('local connection refused');
+    },
+  };
+
+  await assert.rejects(
+    () => recordExpense({
+      api,
+      store,
+      input: { amount: '8.25', primaryCategory: '食品酒水', subcategory: '超市购物' },
+      inbound: { channel: 'ilink', messageId: 'not-written-1', content: '买菜8.25', timestamp: 1_788_425_460 },
+    }),
+    (error) => error instanceof ExpenseRecordingError && error.outcome === 'not_written',
+  );
+  assert.equal(receipts.get('ilink:not-written-1').status, 'failed');
 });
 
 test('duplicate replies distinguish confirmed, failed, and uncertain prior attempts', () => {

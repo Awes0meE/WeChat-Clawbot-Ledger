@@ -65,6 +65,10 @@ export class SqliteReceiptStore {
     this.#update(key, 'failed', payload);
   }
 
+  uncertain(key, payload) {
+    this.#update(key, 'unknown', { ...payload, status: 'unknown' });
+  }
+
   putTrustedInbound(lookupKeys, payload, expiresAt) {
     const keys = [...new Set(lookupKeys.filter((key) => typeof key === 'string' && key.length > 0))];
     if (keys.length === 0) return;

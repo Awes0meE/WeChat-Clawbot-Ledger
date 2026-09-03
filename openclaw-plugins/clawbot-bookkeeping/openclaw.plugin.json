@@ -39,6 +39,10 @@
       "accountName": {
         "type": "string",
         "const": "日常支出"
+      },
+      "ledgerDisplayName": {
+        "type": "string",
+        "const": "日常账本"
       }
     }
   }

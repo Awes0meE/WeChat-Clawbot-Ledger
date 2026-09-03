@@ -3,6 +3,17 @@ import { createHash } from 'node:crypto';
 const MAX_EZBOOKKEEPING_AMOUNT_MINOR = 9_999_999_999_999;
 const MAX_COMMENT_CHARACTERS = 255;
 
+export class ExpenseRecordingError extends Error {
+  constructor(outcome) {
+    const message = outcome === 'not_written'
+      ? 'expense was not written'
+      : 'expense write outcome is unknown';
+    super(message);
+    this.name = 'ExpenseRecordingError';
+    this.outcome = outcome;
+  }
+}
+
 export function parseAmountToMinorUnits(value) {
   const text = String(value ?? '');
   if (!/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(text)) {
@@ -56,13 +67,14 @@ export function formatExpenseReceipt({
     twoDigits(singaporeTime.getUTCDate()),
   ].join('/') + ` ${twoDigits(singaporeTime.getUTCHours())}:${twoDigits(singaporeTime.getUTCMinutes())}`;
   const resolvedComment = validateComment(comment);
+  const displayComment = resolvedComment.replace(/[\r\n\u2028\u2029]/gu, ' ');
 
   return [
     '记下来啦！🧾',
     `账本：[ ${ledgerDisplayName} ]`,
     `支出：${(Number(amountMinor) / 100).toFixed(2)} SGD`,
     `分类：${primaryCategory} - ${subcategory}`,
-    `备注：${resolvedComment || '无'}`,
+    `备注：${displayComment || '无'}`,
     `时间：${formattedTime}`,
   ].join('\n');
 }
@@ -99,6 +111,10 @@ export function duplicateResponseText(result) {
 
 export async function recordExpense({ api, store, input, inbound, accountName = '日常支出' }) {
   const receiptKey = messageReceiptKey(inbound);
+  const sourceAmount = parseAmountToMinorUnits(input.amount);
+  const comment = resolveExpenseComment(inbound.content, input.comment);
+  const time = normalizeMessageTimestamp(inbound.timestamp);
+  const clientSessionId = clientSessionIdFor(receiptKey);
   const existing = store.claim(receiptKey);
   if (existing) {
     return {
@@ -108,47 +124,58 @@ export async function recordExpense({ api, store, input, inbound, accountName = 
     };
   }
 
-  const clientSessionId = clientSessionIdFor(receiptKey);
+  let sourceAccountId;
+  let categoryId;
   try {
-    const sourceAmount = parseAmountToMinorUnits(input.amount);
-    const comment = resolveExpenseComment(inbound.content, input.comment);
-    const time = normalizeMessageTimestamp(inbound.timestamp);
-    const sourceAccountId = await api.resolveAccountId(accountName);
-    const categoryId = await api.resolveExpenseCategoryId(input.primaryCategory, input.subcategory);
-    const body = {
-      type: 3,
-      categoryId,
-      time,
-      utcOffset: 480,
-      sourceAccountId,
-      sourceAmount,
-      destinationAccountId: '0',
-      destinationAmount: 0,
-      hideAmount: false,
-      tagIds: [],
-      pictureIds: [],
-      comment,
-      clientSessionId,
-    };
-    const created = await api.addTransaction(body);
-    const receipt = {
-      status: 'created',
-      transactionId: created.id,
-      clientSessionId,
-      amountMinor: sourceAmount,
-      primaryCategory: input.primaryCategory,
-      subcategory: input.subcategory,
-      time,
-      comment,
-    };
-    store.complete(receiptKey, receipt);
-    return receipt;
-  } catch (error) {
+    sourceAccountId = await api.resolveAccountId(accountName);
+    categoryId = await api.resolveExpenseCategoryId(input.primaryCategory, input.subcategory);
+  } catch {
     store.fail(receiptKey, {
       status: 'failed',
-      error: error instanceof Error ? error.message : String(error),
       clientSessionId,
     });
-    throw error;
+    throw new ExpenseRecordingError('not_written');
   }
+
+  const body = {
+    type: 3,
+    categoryId,
+    time,
+    utcOffset: 480,
+    sourceAccountId,
+    sourceAmount,
+    destinationAccountId: '0',
+    destinationAmount: 0,
+    hideAmount: false,
+    tagIds: [],
+    pictureIds: [],
+    comment,
+    clientSessionId,
+  };
+  let created;
+  try {
+    created = await api.addTransaction(body);
+  } catch {
+    store.uncertain(receiptKey, {
+      status: 'unknown',
+      clientSessionId,
+    });
+    throw new ExpenseRecordingError('unknown');
+  }
+  const receipt = {
+    status: 'created',
+    transactionId: created.id,
+    clientSessionId,
+    amountMinor: sourceAmount,
+    primaryCategory: input.primaryCategory,
+    subcategory: input.subcategory,
+    time,
+    comment,
+  };
+  try {
+    store.complete(receiptKey, receipt);
+  } catch {
+    return { ...receipt, dedupeStatus: 'unconfirmed' };
+  }
+  return receipt;
 }
