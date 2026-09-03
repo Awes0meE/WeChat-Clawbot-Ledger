@@ -86,6 +86,7 @@ const TRUSTED_INBOUND_MAX_AGE_MS = 10 * 60 * 1000;
 const PENDING_CONFIRMATION_TTL_MS = 10 * 60 * 1000;
 const TOOL_CALL_SLOT_RETENTION_MS = TRUSTED_INBOUND_MAX_AGE_MS;
 const AUTHORITATIVE_REPLY_MAX_AGE_MS = TRUSTED_INBOUND_MAX_AGE_MS;
+const MISSING_TRUSTED_INBOUND_ERROR = '缺少当前微信消息的可信元数据，已拒绝操作账本。';
 const EXPENSE_TOOL_NAMES = new Set([
   'record_expense',
   'prepare_expense',
@@ -98,8 +99,31 @@ const AUTHORITATIVE_REPLY_TOOL_NAMES = new Set([
 const AFFIRMATIVE_REPLIES = new Set(['是', '对', '对的', '确认', '嗯', '嗯嗯', '好', '好的', '可以', '记吧', '记下吧']);
 const NEGATIVE_REPLIES = new Set(['不是', '否', '不对', '取消', '不用', '别记', '不要']);
 
-function trustedInboundLookupKey(kind: 'session' | 'sender' | 'run', value: string) {
+function trustedInboundLookupKey(kind: 'session' | 'sender' | 'run' | 'message', value: string) {
   return createHash('sha256').update(`${kind}\u0000${value}`, 'utf8').digest('hex');
+}
+
+function currentTrustedMessageId(messages: unknown, channel: string): string | undefined {
+  if (!Array.isArray(messages)) return undefined;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const candidate = messages[index];
+    if (!candidate || typeof candidate !== 'object') continue;
+    const message = candidate as {
+      role?: unknown;
+      __openclaw?: {
+        senderIsOwner?: unknown;
+        transport?: { channel?: unknown; messageId?: unknown };
+      };
+    };
+    if (message.role !== 'user') continue;
+    if (message.__openclaw?.senderIsOwner !== true) return undefined;
+    const transport = message.__openclaw.transport;
+    if (transport?.channel !== channel
+      || typeof transport.messageId !== 'string'
+      || transport.messageId.length === 0) return undefined;
+    return transport.messageId;
+  }
+  return undefined;
 }
 
 function transientBindingKey(kind: 'run' | 'tool-call', value: string) {
@@ -288,6 +312,10 @@ export default definePluginEntry({
         conversationKey,
       } satisfies InboundMessage;
       const lookupKeys = trustedInboundLookupKeys({ sessionKey, channel, senderId });
+      lookupKeys.push(trustedInboundLookupKey(
+        'message',
+        `${channel}\u0000${senderId}\u0000${messageId}`,
+      ));
       const runId = context.runId ?? event.runId;
       if (runId) lookupKeys.push(trustedInboundLookupKey('run', runId));
       receiptStore.enqueueTrustedInbound(
@@ -306,20 +334,20 @@ export default definePluginEntry({
 
       const channel = context.channel ?? context.channelId ?? event.channelId;
       const senderId = context.senderId ?? event.senderId;
-      const fallbackKeys = channel && senderId
-        ? trustedInboundLookupKeys({
-          sessionKey: context.sessionKey,
-          channel,
-          senderId,
-        })
-        : [];
-      const inbound = runId
+      const messageId = channel ? currentTrustedMessageId(event.messages, channel) : undefined;
+      let inbound = runId
         ? receiptStore.claimTrustedInbound([trustedInboundLookupKey('run', runId)]) as InboundMessage | undefined
         : undefined;
-
-      if (!inbound && fallbackKeys.length > 0) {
-        // Consume but never bind an inbound that cannot be correlated to this exact run.
-        receiptStore.claimTrustedInbound(fallbackKeys);
+      if (!inbound
+        && runId
+        && channel
+        && senderId
+        && messageId
+        && context.trigger === 'user'
+        && event.senderIsOwner === true) {
+        inbound = receiptStore.claimTrustedInbound([
+          trustedInboundLookupKey('message', `${channel}\u0000${senderId}\u0000${messageId}`),
+        ]) as InboundMessage | undefined;
       }
       if (inbound && runKey && event.senderIsOwner === true) {
         if (confirmationDecision(inbound.content) === undefined) {
@@ -359,20 +387,33 @@ export default definePluginEntry({
     });
 
     api.on('after_tool_call', (event, context) => {
-      if (!AUTHORITATIVE_REPLY_TOOL_NAMES.has(event.toolName) || event.error) return;
+      if (!AUTHORITATIVE_REPLY_TOOL_NAMES.has(event.toolName)) return;
       const runId = context.runId ?? event.runId;
-      if (!runId || !event.result || typeof event.result !== 'object') return;
-      const content = (event.result as { content?: unknown }).content;
-      if (!Array.isArray(content)) return;
-      const text = content.find((item) => item
-        && typeof item === 'object'
-        && (item as { type?: unknown }).type === 'text'
-        && typeof (item as { text?: unknown }).text === 'string') as { text: string } | undefined;
-      if (!text) return;
+      if (!runId) return;
       const runKey = transientBindingKey('run', runId);
       if (authoritativeRepliesByRun.has(runKey)) return;
+      let authoritativeText: string | undefined;
+      if (event.error) {
+        if (EXPENSE_TOOL_NAMES.has(event.toolName)) {
+          authoritativeText = String(event.error) === MISSING_TRUSTED_INBOUND_ERROR
+            ? '记账失败，没有写入账本。请重新发送一条新消息。'
+            : '记账结果无法确认，请先查看账本，暂时不要重复发送。';
+        } else {
+          authoritativeText = '查询失败，请稍后重试。';
+        }
+      } else if (event.result && typeof event.result === 'object') {
+        const content = (event.result as { content?: unknown }).content;
+        if (Array.isArray(content)) {
+          const text = content.find((item) => item
+            && typeof item === 'object'
+            && (item as { type?: unknown }).type === 'text'
+            && typeof (item as { text?: unknown }).text === 'string') as { text: string } | undefined;
+          authoritativeText = text?.text;
+        }
+      }
+      if (!authoritativeText) return;
       authoritativeRepliesByRun.set(runKey, {
-        text: text.text,
+        text: authoritativeText,
         touchedAt: Date.now(),
       });
     });
@@ -426,7 +467,7 @@ export default definePluginEntry({
       const inbound = slot?.ambiguous === false ? slot.inbound : undefined;
       if (slot) delete slot.inbound;
       if (!slot || !inbound || !toolCallKey) {
-        throw new Error('缺少当前微信消息的可信元数据，已拒绝操作账本。');
+        throw new Error(MISSING_TRUSTED_INBOUND_ERROR);
       }
       if (Date.now() - inbound.observedAt > TRUSTED_INBOUND_MAX_AGE_MS) {
         throw new Error('当前微信消息的可信元数据已过期，已拒绝操作账本。');

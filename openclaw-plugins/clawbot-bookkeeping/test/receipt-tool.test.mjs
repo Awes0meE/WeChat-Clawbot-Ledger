@@ -257,6 +257,241 @@ test('binds a trusted owner run when the embedded before-tool hook omits request
   }
 });
 
+test('binds the exact owner conversation when the channel and embedded run ids differ', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const harness = createPluginHarness(tempDirectory, successfulExpenseFetch(requests));
+
+  try {
+    const commonContext = {
+      channelId: 'openclaw-weixin',
+      accountId: 'bot-account',
+      senderId: 'owner-user',
+      sessionKey: 'agent:main:main',
+    };
+    await harness.inboundHooks.get('message_received')?.({
+      content: '/status',
+      timestamp: 1_788_425_400,
+      messageId: 'command-without-agent-run',
+      senderId: 'owner-user',
+      sessionKey: 'agent:main:main',
+    }, {
+      ...commonContext,
+      messageId: 'command-without-agent-run',
+    });
+    await harness.inboundHooks.get('message_received')?.({
+      content: '昨天中午在食阁吃饭，花了6块五加两块五',
+      timestamp: 1_788_425_460,
+      messageId: 'live-host-message',
+      senderId: 'owner-user',
+      sessionKey: 'agent:main:main',
+    }, {
+      ...commonContext,
+      messageId: 'live-host-message',
+    });
+    await harness.inboundHooks.get('before_agent_run')?.({
+      prompt: '昨天中午在食阁吃饭，花了6块五加两块五',
+      messages: [{
+        role: 'user',
+        content: '昨天中午在食阁吃饭，花了6块五加两块五',
+        __openclaw: {
+          senderIsOwner: true,
+          transport: {
+            channel: 'openclaw-weixin',
+            messageId: 'live-host-message',
+          },
+        },
+      }],
+      senderIsOwner: true,
+    }, {
+      ...commonContext,
+      runId: 'embedded-run-id',
+      trigger: 'user',
+    });
+    const params = {
+      amount: '9',
+      primaryCategory: '食品酒水',
+      subcategory: '早午晚餐',
+      comment: '食阁',
+    };
+    await bindToolCallForTurn(harness.inboundHooks, {
+      runId: 'embedded-run-id',
+      toolCallId: 'live-host-call',
+      params,
+    });
+    const result = await harness.rawRecordExpenseFactory(trustedOwnerContext()).execute(
+      'live-host-call',
+      params,
+    );
+
+    assert.equal(result.details.status, 'created');
+    assert.equal(requests.some(({ url }) => url.endsWith('/transactions/add.json')), true);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('does not claim a definite no-write outcome for an unknown tool exception', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not be reached');
+  });
+
+  try {
+    await harness.inboundHooks.get('after_tool_call')?.({
+      toolName: 'record_expense',
+      params: { amount: '9' },
+      runId: 'unknown-error-run',
+      toolCallId: 'unknown-error-call',
+      result: { content: [{ type: 'text', text: '{"status":"error"}' }], isError: true },
+      error: 'post-write cleanup failed: 缺少当前微信消息的可信元数据，已拒绝操作账本。',
+    }, {
+      runId: 'unknown-error-run',
+      sessionKey: 'agent:main:main',
+      toolName: 'record_expense',
+    });
+    const outgoing = await harness.inboundHooks.get('reply_payload_sending')?.({
+      payload: { text: '已记账' },
+      kind: 'final',
+      channel: 'openclaw-weixin',
+      sessionKey: 'agent:main:main',
+      runId: 'unknown-error-run',
+    }, {
+      channelId: 'openclaw-weixin',
+      sessionKey: 'agent:main:main',
+      runId: 'unknown-error-run',
+    });
+
+    assert.equal(outgoing.payload.text, '记账结果无法确认，请先查看账本，暂时不要重复发送。');
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('does not fall back to an older trusted user message when the current metadata is missing', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const harness = createPluginHarness(tempDirectory, successfulExpenseFetch(requests));
+  const commonContext = {
+    channelId: 'openclaw-weixin',
+    accountId: 'bot-account',
+    senderId: 'owner-user',
+    sessionKey: 'agent:main:main',
+  };
+
+  try {
+    await harness.inboundHooks.get('message_received')?.({
+      content: '午饭9',
+      timestamp: 1_788_425_400,
+      messageId: 'older-nine-dollar-message',
+      senderId: 'owner-user',
+      sessionKey: 'agent:main:main',
+    }, {
+      ...commonContext,
+      messageId: 'older-nine-dollar-message',
+    });
+    await harness.inboundHooks.get('message_received')?.({
+      content: '晚饭9',
+      timestamp: 1_788_425_460,
+      messageId: 'current-message-with-missing-hook-metadata',
+      senderId: 'owner-user',
+      sessionKey: 'agent:main:main',
+    }, {
+      ...commonContext,
+      messageId: 'current-message-with-missing-hook-metadata',
+    });
+    await harness.inboundHooks.get('before_agent_run')?.({
+      prompt: '晚饭9',
+      messages: [{
+        role: 'user',
+        content: '午饭9',
+        __openclaw: {
+          senderIsOwner: true,
+          transport: {
+            channel: 'openclaw-weixin',
+            messageId: 'older-nine-dollar-message',
+          },
+        },
+      }, {
+        role: 'user',
+        content: '晚饭9',
+      }],
+      senderIsOwner: true,
+    }, {
+      ...commonContext,
+      runId: 'current-run-with-missing-message-metadata',
+      trigger: 'user',
+    });
+    const params = {
+      amount: '9',
+      primaryCategory: '食品酒水',
+      subcategory: '早午晚餐',
+      comment: '晚饭',
+    };
+    await bindToolCallForTurn(harness.inboundHooks, {
+      runId: 'current-run-with-missing-message-metadata',
+      toolCallId: 'missing-current-metadata-call',
+      params,
+    });
+
+    await assert.rejects(
+      () => harness.rawRecordExpenseFactory(trustedOwnerContext()).execute(
+        'missing-current-metadata-call',
+        params,
+      ),
+      /可信元数据/u,
+    );
+    assert.equal(requests.length, 0);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('replaces a false success claim with an authoritative no-write result', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not be reached');
+  });
+
+  try {
+    await harness.inboundHooks.get('after_tool_call')?.({
+      toolName: 'record_expense',
+      params: { amount: '9' },
+      runId: 'failed-live-run',
+      toolCallId: 'failed-live-call',
+      result: { content: [{ type: 'text', text: '{"status":"error"}' }], isError: true },
+      error: '缺少当前微信消息的可信元数据，已拒绝操作账本。',
+    }, {
+      runId: 'failed-live-run',
+      sessionKey: 'agent:main:main',
+      toolName: 'record_expense',
+    });
+    const outgoing = await harness.inboundHooks.get('reply_payload_sending')?.({
+      payload: { text: '已记账' },
+      kind: 'final',
+      channel: 'openclaw-weixin',
+      sessionKey: 'agent:main:main',
+      runId: 'failed-live-run',
+    }, {
+      channelId: 'openclaw-weixin',
+      sessionKey: 'agent:main:main',
+      runId: 'failed-live-run',
+    });
+
+    assert.equal(outgoing.payload.text, '记账失败，没有写入账本。请重新发送一条新消息。');
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
 test('turns a questioned direct-record call into a confirmation without writing', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
