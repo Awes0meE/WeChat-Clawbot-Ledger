@@ -41,9 +41,24 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
   globalThis.fetch = fetchImpl;
   plugin.register(pluginApi);
 
+  const materializeRecordExpense = (toolContext) => {
+    const tool = recordExpenseFactory(toolContext);
+    return {
+      ...tool,
+      async execute(toolCallId, params) {
+        return executeForTurn(inboundHooks, tool, {
+          runId: inboundHooks.latestRunId,
+          toolCallId,
+          params,
+        });
+      },
+    };
+  };
+
   return {
     inboundHooks,
-    recordExpenseFactory,
+    recordExpenseFactory: materializeRecordExpense,
+    rawRecordExpenseFactory: recordExpenseFactory,
     recordExpenseDefinition,
     logs,
     restore() {
@@ -51,6 +66,57 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
       globalThis.fetch = originalFetch;
     },
   };
+}
+
+async function beginTrustedOwnerTurn(inboundHooks, {
+  content,
+  messageId,
+  runId,
+  timestamp = 1_788_425_460,
+}) {
+  const messageContext = {
+    channelId: 'openclaw-weixin',
+    accountId: 'bot-account',
+    messageId,
+    senderId: 'owner-user',
+    sessionKey: 'agent:main:main',
+    runId,
+  };
+  await inboundHooks.get('message_received')({
+    content,
+    timestamp,
+    messageId,
+    senderId: 'owner-user',
+    sessionKey: 'agent:main:main',
+    runId,
+  }, messageContext);
+  await inboundHooks.get('before_agent_run')?.({
+    prompt: content,
+    messages: [],
+    senderIsOwner: true,
+  }, messageContext);
+}
+
+async function executeForTurn(inboundHooks, tool, {
+  runId,
+  toolCallId,
+  params,
+}) {
+  await inboundHooks.get('before_tool_call')?.({
+    toolName: 'record_expense',
+    params,
+    runId,
+    toolCallId,
+  }, {
+    runId,
+    toolCallId,
+    sessionKey: 'agent:main:main',
+    requester: {
+      senderId: 'owner-user',
+      isOwner: true,
+    },
+  });
+  return tool.execute(toolCallId, params);
 }
 
 function trustedOwnerContext() {
@@ -68,20 +134,32 @@ async function receiveTrustedOwnerMessage(inboundHooks, {
   messageId = 'wechat-message-3',
   timestamp = 1_788_425_460,
 } = {}) {
+  const runId = `run-${messageId}-${++receiveTrustedOwnerMessage.sequence}`;
+  inboundHooks.latestRunId = runId;
+  const messageContext = {
+    channelId: 'openclaw-weixin',
+    accountId: 'bot-account',
+    messageId,
+    senderId: 'owner-user',
+    sessionKey: 'agent:main:main',
+    runId,
+  };
   await inboundHooks.get('message_received')({
     content,
     timestamp,
     messageId,
     senderId: 'owner-user',
     sessionKey: 'agent:main:main',
-  }, {
-    channelId: 'openclaw-weixin',
-    accountId: 'bot-account',
-    messageId,
-    senderId: 'owner-user',
-    sessionKey: 'agent:main:main',
-  });
+    runId,
+  }, messageContext);
+  await inboundHooks.get('before_agent_run')?.({
+    prompt: content,
+    messages: [],
+    senderIsOwner: true,
+  }, messageContext);
+  return runId;
 }
+receiveTrustedOwnerMessage.sequence = 0;
 
 test('declares the fixed ledger display name in the plugin manifest', () => {
   const manifest = JSON.parse(readFileSync(new URL('../openclaw.plugin.json', import.meta.url), 'utf8'));
@@ -89,6 +167,151 @@ test('declares the fixed ledger display name in the plugin manifest', () => {
     type: 'string',
     const: '日常账本',
   });
+});
+
+test('binds cached record tool calls to each inbound run without retaining a query turn', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const postedBodies = [];
+  const harness = createPluginHarness(tempDirectory, async (url, options) => {
+    if (url.endsWith('/accounts/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: [
+        { id: 'account-1', name: '日常支出', currency: 'SGD' },
+      ] }), { status: 200 });
+    }
+    if (url.endsWith('/transaction/categories/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: {
+        2: [{ id: 'primary-1', name: '食品酒水', parentId: '0', subCategories: [
+          { id: 'secondary-meal', name: '早午晚餐', parentId: 'primary-1' },
+          { id: 'secondary-drink', name: '饮料甜品', parentId: 'primary-1' },
+        ] }],
+      } }), { status: 200 });
+    }
+    if (url.endsWith('/transactions/add.json')) {
+      postedBodies.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({
+        success: true,
+        result: { id: `transaction-${postedBodies.length}` },
+      }), { status: 200 });
+    }
+    throw new Error(`unexpected URL: ${url}`);
+  });
+
+  try {
+    const cachedTool = harness.rawRecordExpenseFactory(trustedOwnerContext());
+
+    await beginTrustedOwnerTurn(harness.inboundHooks, {
+      content: '这个月我花了多少钱',
+      messageId: 'query-message',
+      runId: 'run-query',
+    });
+    await harness.inboundHooks.get('agent_end')?.({}, { runId: 'run-query' });
+
+    await beginTrustedOwnerTurn(harness.inboundHooks, {
+      content: '午饭7.2',
+      messageId: 'first-expense-message',
+      runId: 'run-first-expense',
+      timestamp: 1_788_425_460,
+    });
+    const first = await executeForTurn(harness.inboundHooks, cachedTool, {
+      runId: 'run-first-expense',
+      toolCallId: 'call-first-expense',
+      params: {
+        amount: '7.2',
+        primaryCategory: '食品酒水',
+        subcategory: '早午晚餐',
+      },
+    });
+    await harness.inboundHooks.get('agent_end')?.({}, { runId: 'run-first-expense' });
+
+    await beginTrustedOwnerTurn(harness.inboundHooks, {
+      content: '咖啡3',
+      messageId: 'second-expense-message',
+      runId: 'run-second-expense',
+      timestamp: 1_788_425_520,
+    });
+    const second = await executeForTurn(harness.inboundHooks, cachedTool, {
+      runId: 'run-second-expense',
+      toolCallId: 'call-second-expense',
+      params: {
+        amount: '3',
+        primaryCategory: '食品酒水',
+        subcategory: '饮料甜品',
+      },
+    });
+
+    assert.equal(first.details.status, 'created');
+    assert.equal(second.details.status, 'created');
+    assert.deepEqual(postedBodies.map((body) => ({ amount: body.sourceAmount, time: body.time })), [
+      { amount: 720, time: 1_788_425_460 },
+      { amount: 300, time: 1_788_425_520 },
+    ]);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('discards an uncorrelated query turn and fails closed without run metadata', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  let requestCount = 0;
+  const harness = createPluginHarness(tempDirectory, async () => {
+    requestCount += 1;
+    throw new Error('HTTP must not be reached');
+  });
+
+  try {
+    const cachedTool = harness.rawRecordExpenseFactory(trustedOwnerContext());
+    const uncorrelatedContext = {
+      channelId: 'openclaw-weixin',
+      accountId: 'bot-account',
+      messageId: 'query-without-run',
+      senderId: 'owner-user',
+      sessionKey: 'agent:main:main',
+    };
+    await harness.inboundHooks.get('message_received')({
+      content: '最近三笔支出是什么',
+      timestamp: 1_788_425_460,
+      messageId: 'query-without-run',
+      senderId: 'owner-user',
+      sessionKey: 'agent:main:main',
+    }, uncorrelatedContext);
+    await harness.inboundHooks.get('before_agent_run')({
+      prompt: '最近三笔支出是什么',
+      messages: [],
+      senderIsOwner: true,
+    }, uncorrelatedContext);
+
+    await assert.rejects(
+      () => cachedTool.execute('call-without-run-binding', {
+        amount: '7.2',
+        primaryCategory: '食品酒水',
+        subcategory: '早午晚餐',
+      }),
+      /可信元数据/u,
+    );
+
+    await beginTrustedOwnerTurn(harness.inboundHooks, {
+      content: '午饭7.2',
+      messageId: 'expense-after-uncorrelated-query',
+      runId: 'run-expense-after-uncorrelated-query',
+    });
+    await executeForTurn(harness.inboundHooks, cachedTool, {
+      runId: 'run-expense-after-uncorrelated-query',
+      toolCallId: 'call-expense-after-uncorrelated-query',
+      params: {
+        amount: '7.2',
+        primaryCategory: '食品酒水',
+        subcategory: '早午晚餐',
+      },
+    });
+
+    assert.equal(requestCount, 1);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
 });
 
 test('returns the authoritative rich receipt after a trusted expense write', async () => {
@@ -294,7 +517,7 @@ test('keeps coupon arithmetic from replacing the requested expense amount', asyn
   }
 });
 
-test('binds a record tool to the trusted message present when the tool is materialized', async () => {
+test('keeps a tool call bound to its inbound run when a later message arrives', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
   let addBody;
@@ -319,21 +542,25 @@ test('binds a record tool to the trusted message present when the tool is materi
   });
 
   try {
-    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+    const cachedTool = harness.rawRecordExpenseFactory(trustedOwnerContext());
+    const firstRunId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
       content: '午饭7.2，备注鸡饭',
       messageId: 'wechat-message-first',
       timestamp: 1_788_425_460,
     });
-    const firstTool = harness.recordExpenseFactory(trustedOwnerContext());
     await receiveTrustedOwnerMessage(harness.inboundHooks, {
       content: '出租车7.2，备注回家',
       messageId: 'wechat-message-second',
       timestamp: 1_788_425_520,
     });
-    const result = await firstTool.execute('tool-call-bound-first', {
-      amount: '7.2',
-      primaryCategory: '食品酒水',
-      subcategory: '早午晚餐',
+    const result = await executeForTurn(harness.inboundHooks, cachedTool, {
+      runId: firstRunId,
+      toolCallId: 'tool-call-bound-first',
+      params: {
+        amount: '7.2',
+        primaryCategory: '食品酒水',
+        subcategory: '早午晚餐',
+      },
     });
 
     const expectedSessionId = createHash('sha256')
@@ -349,7 +576,7 @@ test('binds a record tool to the trusted message present when the tool is materi
   }
 });
 
-test('binds two queued messages to successive record tool materializations in arrival order', async () => {
+test('binds overlapping inbound runs independently of tool materialization order', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
   const addBodies = [];
@@ -374,20 +601,23 @@ test('binds two queued messages to successive record tool materializations in ar
   });
 
   try {
-    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+    const cachedTool = harness.rawRecordExpenseFactory(trustedOwnerContext());
+    const firstRunId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
       content: '午饭7.2，备注第一笔', messageId: 'wechat-message-fifo-1', timestamp: 1_788_425_460,
     });
-    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+    const secondRunId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
       content: '晚饭8.3，备注第二笔', messageId: 'wechat-message-fifo-2', timestamp: 1_788_425_520,
     });
-    const firstTool = harness.recordExpenseFactory(trustedOwnerContext());
-    const secondTool = harness.recordExpenseFactory(trustedOwnerContext());
 
-    const first = await firstTool.execute('tool-call-fifo-1', {
-      amount: '7.2', primaryCategory: '食品酒水', subcategory: '早午晚餐',
+    const first = await executeForTurn(harness.inboundHooks, cachedTool, {
+      runId: firstRunId,
+      toolCallId: 'tool-call-fifo-1',
+      params: { amount: '7.2', primaryCategory: '食品酒水', subcategory: '早午晚餐' },
     });
-    const second = await secondTool.execute('tool-call-fifo-2', {
-      amount: '8.3', primaryCategory: '食品酒水', subcategory: '早午晚餐',
+    const second = await executeForTurn(harness.inboundHooks, cachedTool, {
+      runId: secondRunId,
+      toolCallId: 'tool-call-fifo-2',
+      params: { amount: '8.3', primaryCategory: '食品酒水', subcategory: '早午晚餐' },
     });
 
     assert.equal(first.details.status, 'created');
@@ -402,58 +632,7 @@ test('binds two queued messages to successive record tool materializations in ar
   }
 });
 
-test('advances a queued query even when its record tool is not initially called', async () => {
-  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
-  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
-  const addBodies = [];
-  const harness = createPluginHarness(tempDirectory, async (url, options) => {
-    if (url.endsWith('/accounts/list.json')) {
-      return new Response(JSON.stringify({ success: true, result: [
-        { id: 'account-1', name: '日常支出', currency: 'SGD' },
-      ] }), { status: 200 });
-    }
-    if (url.endsWith('/transaction/categories/list.json')) {
-      return new Response(JSON.stringify({ success: true, result: {
-        2: [{ id: 'primary-1', name: '食品酒水', parentId: '0', subCategories: [
-          { id: 'secondary-1', name: '早午晚餐', parentId: 'primary-1' },
-        ] }],
-      } }), { status: 200 });
-    }
-    if (url.endsWith('/transactions/add.json')) {
-      addBodies.push(JSON.parse(options.body));
-      return new Response(JSON.stringify({ success: true, result: { id: 'transaction-after-query' } }), { status: 200 });
-    }
-    throw new Error('unexpected test request');
-  });
-
-  try {
-    await receiveTrustedOwnerMessage(harness.inboundHooks, {
-      content: '这个月我花了多少钱', messageId: 'wechat-message-query-first', timestamp: 1_788_425_460,
-    });
-    await receiveTrustedOwnerMessage(harness.inboundHooks, {
-      content: '午饭7.2', messageId: 'wechat-message-expense-second', timestamp: 1_788_425_520,
-    });
-    const unusedQueryTurnTool = harness.recordExpenseFactory(trustedOwnerContext());
-    const expenseTurnTool = harness.recordExpenseFactory(trustedOwnerContext());
-
-    const delayedQueryCall = await unusedQueryTurnTool.execute('tool-call-query-delayed', {
-      amount: '7.2', primaryCategory: '食品酒水', subcategory: '早午晚餐',
-    });
-    const expense = await expenseTurnTool.execute('tool-call-expense-after-query', {
-      amount: '7.2', primaryCategory: '食品酒水', subcategory: '早午晚餐',
-    });
-
-    assert.equal(delayedQueryCall.details.status, 'rejected');
-    assert.equal(expense.details.status, 'created');
-    assert.equal(addBodies.length, 1);
-    assert.equal(addBodies[0].time, 1_788_425_520);
-  } finally {
-    harness.restore();
-    rmSync(tempDirectory, { recursive: true, force: true });
-  }
-});
-
-test('keeps a materialized record tool closed when it had no trusted message snapshot', async () => {
+test('keeps a cached record tool closed without a tool-call binding', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
   let requestCount = 0;
@@ -463,7 +642,7 @@ test('keeps a materialized record tool closed when it had no trusted message sna
   });
 
   try {
-    const toolWithoutSnapshot = harness.recordExpenseFactory(trustedOwnerContext());
+    const toolWithoutSnapshot = harness.rawRecordExpenseFactory(trustedOwnerContext());
     await receiveTrustedOwnerMessage(harness.inboundHooks, {
       content: '午饭7.2',
       messageId: 'wechat-message-arrived-later',
@@ -543,6 +722,7 @@ test('returns an unknown outcome and prevents retry after a transaction transpor
       comment: '两根芹菜，一个菜板',
     };
     const first = await tool.execute('tool-call-unknown-1', params);
+    await receiveTrustedOwnerMessage(harness.inboundHooks, { messageId: 'wechat-message-unknown' });
     const retry = await tool.execute('tool-call-unknown-2', params);
 
     assert.equal(first.content[0].text, '记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。');
@@ -652,6 +832,7 @@ test('returns unknown and prevents a second POST when transaction creation times
     };
     const startedAt = Date.now();
     const first = await tool.execute('tool-call-post-timeout-1', params);
+    await receiveTrustedOwnerMessage(harness.inboundHooks, { messageId: 'wechat-message-post-timeout' });
     const replay = await tool.execute('tool-call-post-timeout-2', params);
 
     assert.equal(first.content[0].text, '记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。');

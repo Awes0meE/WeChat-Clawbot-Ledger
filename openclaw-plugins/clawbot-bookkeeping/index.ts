@@ -39,7 +39,11 @@ type InboundMessage = {
 
 const TRUSTED_INBOUND_MAX_AGE_MS = 10 * 60 * 1000;
 
-function trustedInboundLookupKey(kind: 'session' | 'sender', value: string) {
+function trustedInboundLookupKey(kind: 'session' | 'sender' | 'run', value: string) {
+  return createHash('sha256').update(`${kind}\u0000${value}`, 'utf8').digest('hex');
+}
+
+function transientBindingKey(kind: 'run' | 'tool-call', value: string) {
   return createHash('sha256').update(`${kind}\u0000${value}`, 'utf8').digest('hex');
 }
 
@@ -139,6 +143,9 @@ export default definePluginEntry({
 
     const bookkeepingApi = new EzBookkeepingApi({ serverBaseUrl, tokenPath, requestTimeoutMs });
     const receiptStore = new SqliteReceiptStore(stateDbPath);
+    const preparedRuns = new Set<string>();
+    const inboundByRun = new Map<string, InboundMessage>();
+    const inboundByToolCall = new Map<string, { inbound: InboundMessage; runKey: string }>();
 
     api.registerMcpServerConnectionResolver({
       serverName: 'ezbookkeeping',
@@ -169,6 +176,8 @@ export default definePluginEntry({
         timeSource: hasMessageTimestamp ? 'message' : 'received',
       } satisfies InboundMessage;
       const lookupKeys = trustedInboundLookupKeys({ sessionKey, channel, senderId });
+      const runId = context.runId ?? event.runId;
+      if (runId) lookupKeys.push(trustedInboundLookupKey('run', runId));
       receiptStore.enqueueTrustedInbound(
         lookupKeys,
         trustedInboundMessageKey(channel, messageId),
@@ -177,7 +186,61 @@ export default definePluginEntry({
       );
     });
 
+    api.on('before_agent_run', (event, context) => {
+      const runId = context.runId;
+      const runKey = runId ? transientBindingKey('run', runId) : undefined;
+      if (runKey && preparedRuns.has(runKey)) return;
+      if (runKey) preparedRuns.add(runKey);
+
+      const channel = context.channel ?? context.channelId ?? event.channelId;
+      const senderId = context.senderId ?? event.senderId;
+      const fallbackKeys = trustedInboundLookupKeys({
+        sessionKey: context.sessionKey,
+        channel,
+        senderId,
+      });
+      const inbound = runId
+        ? receiptStore.claimTrustedInbound([trustedInboundLookupKey('run', runId)]) as InboundMessage | undefined
+        : undefined;
+
+      if (!inbound && fallbackKeys.length > 0) {
+        // Consume but never bind an inbound that cannot be correlated to this exact run.
+        receiptStore.claimTrustedInbound(fallbackKeys);
+      }
+      if (inbound && runKey && event.senderIsOwner === true) {
+        inboundByRun.set(runKey, inbound);
+      }
+    });
+
+    api.on('before_tool_call', (event, context) => {
+      if (event.toolName !== 'record_expense') return;
+      const runId = context.runId ?? event.runId;
+      const toolCallId = context.toolCallId ?? event.toolCallId;
+      if (!runId || !toolCallId || context.requester?.isOwner !== true) return;
+      const runKey = transientBindingKey('run', runId);
+      const toolCallKey = transientBindingKey('tool-call', toolCallId);
+      if (inboundByToolCall.has(toolCallKey)) return;
+      const inbound = inboundByRun.get(runKey);
+      if (!inbound) return;
+      inboundByRun.delete(runKey);
+      inboundByToolCall.set(toolCallKey, { inbound, runKey });
+    });
+
+    api.on('agent_end', (event, context) => {
+      const runId = context.runId ?? event.runId;
+      if (!runId) return;
+      const runKey = transientBindingKey('run', runId);
+      preparedRuns.delete(runKey);
+      inboundByRun.delete(runKey);
+      for (const [toolCallKey, binding] of inboundByToolCall) {
+        if (binding.runKey === runKey) inboundByToolCall.delete(toolCallKey);
+      }
+    });
+
     api.on('gateway_stop', () => {
+      preparedRuns.clear();
+      inboundByRun.clear();
+      inboundByToolCall.clear();
       receiptStore.close();
     });
 
@@ -256,19 +319,8 @@ export default definePluginEntry({
 
     api.registerTool(
       (toolContext) => {
-        const sessionKey = toolContext.sessionKey;
-        const lookupKeys = toolContext.senderIsOwner === true
-          ? trustedInboundLookupKeys({
-            sessionKey,
-            channel: toolContext.messageChannel,
-            senderId: toolContext.requesterSenderId,
-          })
-          : [];
-        const inbound = lookupKeys.length > 0
-          ? receiptStore.claimTrustedInbound(lookupKeys) as InboundMessage | undefined
-          : undefined;
         api.logger?.info?.(
-          `clawbot-bookkeeping: tool metadata owner=${toolContext.senderIsOwner === true} session=${Boolean(sessionKey)} requester=${Boolean(toolContext.requesterSenderId)} channel=${Boolean(toolContext.messageChannel)} durableMatch=${Boolean(inbound)} lookupKeys=${lookupKeys.length}`,
+          `clawbot-bookkeeping: tool metadata owner=${toolContext.senderIsOwner === true} session=${Boolean(toolContext.sessionKey)} requester=${Boolean(toolContext.requesterSenderId)} channel=${Boolean(toolContext.messageChannel)}`,
         );
         return {
           name: 'record_expense',
@@ -292,6 +344,13 @@ export default definePluginEntry({
           async execute(_id, params) {
             if (toolContext.senderIsOwner !== true) {
               throw new Error('无法确认消息发送者为账本所有者，已拒绝入账。');
+            }
+            const binding = typeof _id === 'string'
+              ? inboundByToolCall.get(transientBindingKey('tool-call', _id))
+              : undefined;
+            const inbound = binding?.inbound;
+            if (typeof _id === 'string') {
+              inboundByToolCall.delete(transientBindingKey('tool-call', _id));
             }
             if (!inbound) {
               throw new Error('缺少当前微信消息的可信元数据，已拒绝入账。');
