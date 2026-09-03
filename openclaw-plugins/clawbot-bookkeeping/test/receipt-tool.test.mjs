@@ -314,6 +314,65 @@ test('discards an uncorrelated query turn and fails closed without run metadata'
   }
 });
 
+test('does not let a non-message run consume a pending trusted inbound', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  let requestCount = 0;
+  const harness = createPluginHarness(tempDirectory, async () => {
+    requestCount += 1;
+    throw new Error('expected prewrite failure');
+  });
+
+  try {
+    const cachedTool = harness.rawRecordExpenseFactory(trustedOwnerContext());
+    const messageContext = {
+      channelId: 'openclaw-weixin',
+      accountId: 'bot-account',
+      messageId: 'expense-before-non-message-run',
+      senderId: 'owner-user',
+      sessionKey: 'agent:main:main',
+      runId: 'run-real-message',
+    };
+    await harness.inboundHooks.get('message_received')({
+      content: '午饭7.2',
+      timestamp: 1_788_425_460,
+      messageId: 'expense-before-non-message-run',
+      senderId: 'owner-user',
+      sessionKey: 'agent:main:main',
+      runId: 'run-real-message',
+    }, messageContext);
+
+    await harness.inboundHooks.get('before_agent_run')({
+      prompt: '',
+      messages: [],
+    }, {
+      runId: 'run-heartbeat',
+      sessionKey: 'agent:main:main',
+      trigger: 'heartbeat',
+    });
+    await harness.inboundHooks.get('before_agent_run')({
+      prompt: '午饭7.2',
+      messages: [],
+      senderIsOwner: true,
+    }, messageContext);
+    const result = await executeForTurn(harness.inboundHooks, cachedTool, {
+      runId: 'run-real-message',
+      toolCallId: 'call-real-message',
+      params: {
+        amount: '7.2',
+        primaryCategory: '食品酒水',
+        subcategory: '早午晚餐',
+      },
+    });
+
+    assert.equal(result.details.status, 'failed');
+    assert.equal(requestCount, 1);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
 test('returns the authoritative rich receipt after a trusted expense write', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');

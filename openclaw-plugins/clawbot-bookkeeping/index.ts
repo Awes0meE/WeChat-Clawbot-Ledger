@@ -194,11 +194,13 @@ export default definePluginEntry({
 
       const channel = context.channel ?? context.channelId ?? event.channelId;
       const senderId = context.senderId ?? event.senderId;
-      const fallbackKeys = trustedInboundLookupKeys({
-        sessionKey: context.sessionKey,
-        channel,
-        senderId,
-      });
+      const fallbackKeys = channel && senderId
+        ? trustedInboundLookupKeys({
+          sessionKey: context.sessionKey,
+          channel,
+          senderId,
+        })
+        : [];
       const inbound = runId
         ? receiptStore.claimTrustedInbound([trustedInboundLookupKey('run', runId)]) as InboundMessage | undefined
         : undefined;
