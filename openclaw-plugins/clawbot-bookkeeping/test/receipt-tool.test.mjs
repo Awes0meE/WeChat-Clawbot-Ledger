@@ -257,7 +257,7 @@ test('binds a trusted owner run when the embedded before-tool hook omits request
   }
 });
 
-test('binds the exact owner conversation when the channel and embedded run ids differ', async () => {
+test('binds the exact owner conversation when current transport metadata is absent from run history', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
   const requests = [];
@@ -292,17 +292,7 @@ test('binds the exact owner conversation when the channel and embedded run ids d
     });
     await harness.inboundHooks.get('before_agent_run')?.({
       prompt: '昨天中午在食阁吃饭，花了6块五加两块五',
-      messages: [{
-        role: 'user',
-        content: '昨天中午在食阁吃饭，花了6块五加两块五',
-        __openclaw: {
-          senderIsOwner: true,
-          transport: {
-            channel: 'openclaw-weixin',
-            messageId: 'live-host-message',
-          },
-        },
-      }],
+      messages: [],
       senderIsOwner: true,
     }, {
       ...commonContext,
@@ -327,6 +317,59 @@ test('binds the exact owner conversation when the channel and embedded run ids d
 
     assert.equal(result.details.status, 'created');
     assert.equal(requests.some(({ url }) => url.endsWith('/transactions/add.json')), true);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('does not bind an identical prompt queued by a different sender', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const harness = createPluginHarness(tempDirectory, successfulExpenseFetch(requests));
+  const sharedSession = 'agent:main:shared';
+
+  try {
+    await harness.inboundHooks.get('message_received')?.({
+      content: '午饭9',
+      messageId: 'other-sender-message',
+      senderId: 'other-user',
+      sessionKey: sharedSession,
+    }, {
+      channelId: 'openclaw-weixin',
+      accountId: 'bot-account',
+      messageId: 'other-sender-message',
+      senderId: 'other-user',
+      sessionKey: sharedSession,
+    });
+    await harness.inboundHooks.get('before_agent_run')?.({
+      prompt: '午饭9',
+      messages: [],
+      senderIsOwner: true,
+    }, {
+      channelId: 'openclaw-weixin',
+      accountId: 'bot-account',
+      senderId: 'owner-user',
+      sessionKey: sharedSession,
+      runId: 'owner-run-with-other-sender-prompt',
+      trigger: 'user',
+    });
+    const params = { amount: '9', primaryCategory: '食品酒水', subcategory: '早午晚餐' };
+    await bindToolCallForTurn(harness.inboundHooks, {
+      runId: 'owner-run-with-other-sender-prompt',
+      toolCallId: 'other-sender-collision-call',
+      params,
+    });
+
+    await assert.rejects(
+      () => harness.rawRecordExpenseFactory(trustedOwnerContext()).execute(
+        'other-sender-collision-call',
+        params,
+      ),
+      /可信元数据/u,
+    );
+    assert.equal(requests.length, 0);
   } finally {
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
@@ -372,7 +415,7 @@ test('does not claim a definite no-write outcome for an unknown tool exception',
   }
 });
 
-test('does not fall back to an older trusted user message when the current metadata is missing', async () => {
+test('ignores older history metadata and binds the current queued prompt', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
   const requests = [];
@@ -439,14 +482,12 @@ test('does not fall back to an older trusted user message when the current metad
       params,
     });
 
-    await assert.rejects(
-      () => harness.rawRecordExpenseFactory(trustedOwnerContext()).execute(
-        'missing-current-metadata-call',
-        params,
-      ),
-      /可信元数据/u,
+    const result = await harness.rawRecordExpenseFactory(trustedOwnerContext()).execute(
+      'missing-current-metadata-call',
+      params,
     );
-    assert.equal(requests.length, 0);
+    assert.equal(result.details.status, 'created');
+    assert.equal(requests.some(({ url }) => url.endsWith('/transactions/add.json')), true);
   } finally {
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
@@ -461,18 +502,19 @@ test('replaces a false success claim with an authoritative no-write result', asy
   });
 
   try {
-    await harness.inboundHooks.get('after_tool_call')?.({
-      toolName: 'record_expense',
-      params: { amount: '9' },
+    await bindToolCallForTurn(harness.inboundHooks, {
       runId: 'failed-live-run',
       toolCallId: 'failed-live-call',
-      result: { content: [{ type: 'text', text: '{"status":"error"}' }], isError: true },
-      error: '缺少当前微信消息的可信元数据，已拒绝操作账本。',
-    }, {
-      runId: 'failed-live-run',
-      sessionKey: 'agent:main:main',
       toolName: 'record_expense',
+      params: { amount: '9' },
     });
+    await assert.rejects(
+      () => harness.rawRecordExpenseFactory(trustedOwnerContext()).execute(
+        'failed-live-call',
+        { amount: '9', primaryCategory: '食品酒水', subcategory: '早午晚餐' },
+      ),
+      /可信元数据/u,
+    );
     const outgoing = await harness.inboundHooks.get('reply_payload_sending')?.({
       payload: { text: '已记账' },
       kind: 'final',
@@ -545,17 +587,6 @@ test('replaces the model final text with the authoritative bookkeeping receipt',
       'authoritative-outbound-call',
       params,
     );
-    await harness.inboundHooks.get('after_tool_call')?.({
-      toolName: 'record_expense',
-      params,
-      runId,
-      toolCallId: 'authoritative-outbound-call',
-      result,
-    }, {
-      runId,
-      sessionKey: 'agent:main:main',
-      toolName: 'record_expense',
-    });
     const intermediate = await harness.inboundHooks.get('reply_payload_sending')?.({
       payload: { text: '正在处理工具结果' },
       kind: 'tool',
@@ -842,6 +873,20 @@ test('fails both concurrent calls closed when different runs share one tool call
     assert.deepEqual(results.map(({ status }) => status), ['rejected', 'rejected']);
     for (const result of results) {
       assert.match(result.reason.message, /可信元数据/u);
+    }
+    for (const runId of [firstRunId, secondRunId]) {
+      const outgoing = await harness.inboundHooks.get('reply_payload_sending')?.({
+        payload: { text: '已记账' },
+        kind: 'final',
+        channel: 'openclaw-weixin',
+        sessionKey: 'agent:main:main',
+        runId,
+      }, {
+        channelId: 'openclaw-weixin',
+        sessionKey: 'agent:main:main',
+        runId,
+      });
+      assert.equal(outgoing.payload.text, '记账失败，没有写入账本。请重新发送一条新消息。');
     }
     assert.equal(requests.length, 0);
   } finally {

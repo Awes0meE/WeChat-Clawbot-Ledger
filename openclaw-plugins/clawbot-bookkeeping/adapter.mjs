@@ -337,6 +337,42 @@ export class SqliteReceiptStore {
     return claimed === undefined ? undefined : JSON.parse(claimed);
   }
 
+  claimUniqueTrustedInboundMatching(lookupKeys, predicate, now = Date.now()) {
+    const keys = [...new Set(lookupKeys.filter((key) => typeof key === 'string' && key.length > 0))];
+    if (keys.length === 0 || typeof predicate !== 'function') return undefined;
+    const placeholders = keys.map(() => '?').join(', ');
+    const selectCandidates = this.database.prepare(`
+      SELECT queued.message_key, queued.payload_json
+      FROM trusted_inbound_queue AS queued
+      WHERE queued.claimed_at IS NULL
+        AND queued.expires_at >= ?
+        AND EXISTS (
+          SELECT 1 FROM trusted_inbound_queue_lookups AS lookup
+          WHERE lookup.message_key = queued.message_key
+            AND lookup.lookup_key IN (${placeholders})
+        )
+      ORDER BY queued.arrival_order ASC
+    `);
+    const claimed = this.#withImmediateTransaction(() => {
+      this.#deleteExpiredTrustedInbound(now);
+      const matches = [];
+      for (const existing of selectCandidates.all(now, ...keys)) {
+        let payload;
+        try {
+          payload = JSON.parse(existing.payload_json);
+        } catch {
+          continue;
+        }
+        if (predicate(payload)) matches.push(existing);
+      }
+      if (matches.length !== 1) return undefined;
+      const [existing] = matches;
+      const result = this.claimTrustedInboundMessage.run(now, existing.message_key);
+      return Number(result.changes) === 1 ? existing.payload_json : undefined;
+    });
+    return claimed === undefined ? undefined : JSON.parse(claimed);
+  }
+
   #deleteExpiredTrustedInbound(now) {
     this.deleteExpiredTrustedInboundLookups.run(now);
     this.deleteExpiredTrustedInboundMessages.run(now);

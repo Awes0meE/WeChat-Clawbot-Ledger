@@ -250,6 +250,63 @@ test('trusted inbound queue atomically claims FIFO messages across stores and re
   }
 });
 
+test('trusted inbound queue claims one matching message without consuming unrelated entries', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-inbound-queue-'));
+  const path = join(dir, 'receipts.sqlite');
+  let store;
+  try {
+    store = new SqliteReceiptStore(path);
+    const lookupKey = 'conversation-lookup-hash';
+    const now = Date.now();
+    const unrelated = { messageId: 'unrelated', content: '这个月花了多少', observedAt: now - 1_000 };
+    const currentMatch = { messageId: 'current-match', content: '午饭9', observedAt: now };
+    store.enqueueTrustedInbound([lookupKey], 'unrelated-key', unrelated, now + 10_000);
+    store.enqueueTrustedInbound([lookupKey], 'current-match-key', currentMatch, now + 10_000);
+
+    assert.deepEqual(
+      store.claimUniqueTrustedInboundMatching(
+        [lookupKey],
+        (candidate) => candidate.content === '午饭9',
+        now,
+      ),
+      currentMatch,
+    );
+    assert.deepEqual(store.claimTrustedInbound([lookupKey], now), unrelated);
+  } finally {
+    store?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('trusted inbound queue fails closed when more than one message matches', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-inbound-queue-'));
+  const path = join(dir, 'receipts.sqlite');
+  let store;
+  try {
+    store = new SqliteReceiptStore(path);
+    const lookupKey = 'ambiguous-conversation-lookup-hash';
+    const now = Date.now();
+    const first = { messageId: 'same-1', content: '午饭9', observedAt: now - 1 };
+    const second = { messageId: 'same-2', content: '午饭9', observedAt: now };
+    store.enqueueTrustedInbound([lookupKey], 'same-1-key', first, now + 10_000);
+    store.enqueueTrustedInbound([lookupKey], 'same-2-key', second, now + 10_000);
+
+    assert.equal(
+      store.claimUniqueTrustedInboundMatching(
+        [lookupKey],
+        (candidate) => candidate.content === '午饭9',
+        now,
+      ),
+      undefined,
+    );
+    assert.deepEqual(store.claimTrustedInbound([lookupKey], now), first);
+    assert.deepEqual(store.claimTrustedInbound([lookupKey], now), second);
+  } finally {
+    store?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('trusted inbound queue lets only one concurrent store claim a message', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'clawbot-inbound-queue-'));
   const path = join(dir, 'receipts.sqlite');

@@ -83,6 +83,7 @@ type RecordExpenseResult = {
 });
 
 const TRUSTED_INBOUND_MAX_AGE_MS = 10 * 60 * 1000;
+const TRUSTED_PROMPT_CORRELATION_MAX_AGE_MS = 60 * 1000;
 const PENDING_CONFIRMATION_TTL_MS = 10 * 60 * 1000;
 const TOOL_CALL_SLOT_RETENTION_MS = TRUSTED_INBOUND_MAX_AGE_MS;
 const AUTHORITATIVE_REPLY_MAX_AGE_MS = TRUSTED_INBOUND_MAX_AGE_MS;
@@ -101,29 +102,6 @@ const NEGATIVE_REPLIES = new Set(['不是', '否', '不对', '取消', '不用',
 
 function trustedInboundLookupKey(kind: 'session' | 'sender' | 'run' | 'message', value: string) {
   return createHash('sha256').update(`${kind}\u0000${value}`, 'utf8').digest('hex');
-}
-
-function currentTrustedMessageId(messages: unknown, channel: string): string | undefined {
-  if (!Array.isArray(messages)) return undefined;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const candidate = messages[index];
-    if (!candidate || typeof candidate !== 'object') continue;
-    const message = candidate as {
-      role?: unknown;
-      __openclaw?: {
-        senderIsOwner?: unknown;
-        transport?: { channel?: unknown; messageId?: unknown };
-      };
-    };
-    if (message.role !== 'user') continue;
-    if (message.__openclaw?.senderIsOwner !== true) return undefined;
-    const transport = message.__openclaw.transport;
-    if (transport?.channel !== channel
-      || typeof transport.messageId !== 'string'
-      || transport.messageId.length === 0) return undefined;
-    return transport.messageId;
-  }
-  return undefined;
 }
 
 function transientBindingKey(kind: 'run' | 'tool-call', value: string) {
@@ -262,6 +240,7 @@ export default definePluginEntry({
     const authoritativeRepliesByRun = new Map<string, { text: string; touchedAt: number }>();
     const toolCallSlots = new Map<string, {
       runKey: string;
+      conflictingRunKeys?: Set<string>;
       inbound?: InboundMessage;
       ambiguous: boolean;
       touchedAt: number;
@@ -334,7 +313,6 @@ export default definePluginEntry({
 
       const channel = context.channel ?? context.channelId ?? event.channelId;
       const senderId = context.senderId ?? event.senderId;
-      const messageId = channel ? currentTrustedMessageId(event.messages, channel) : undefined;
       let inbound = runId
         ? receiptStore.claimTrustedInbound([trustedInboundLookupKey('run', runId)]) as InboundMessage | undefined
         : undefined;
@@ -342,18 +320,44 @@ export default definePluginEntry({
         && runId
         && channel
         && senderId
-        && messageId
         && context.trigger === 'user'
         && event.senderIsOwner === true) {
-        inbound = receiptStore.claimTrustedInbound([
-          trustedInboundLookupKey('message', `${channel}\u0000${senderId}\u0000${messageId}`),
-        ]) as InboundMessage | undefined;
+        const now = Date.now();
+        const conversationKey = trustedConversationKey({
+          sessionKey: context.sessionKey,
+          channel,
+          accountId: context.accountId ?? event.accountId,
+          senderId,
+        });
+        inbound = conversationKey ? receiptStore.claimUniqueTrustedInboundMatching(
+          trustedInboundLookupKeys({
+            sessionKey: context.sessionKey,
+            channel,
+            senderId,
+          }),
+          (candidate: unknown) => {
+            if (!candidate || typeof candidate !== 'object') return false;
+            const trusted = candidate as Partial<InboundMessage>;
+            return trusted.channel === channel
+              && trusted.conversationKey === conversationKey
+              && trusted.content === event.prompt
+              && typeof trusted.observedAt === 'number'
+              && now - trusted.observedAt >= 0
+              && now - trusted.observedAt <= TRUSTED_PROMPT_CORRELATION_MAX_AGE_MS;
+          },
+          now,
+        ) as InboundMessage | undefined : undefined;
       }
       if (inbound && runKey && event.senderIsOwner === true) {
         if (confirmationDecision(inbound.content) === undefined) {
           receiptStore.discardPendingExpenseConfirmation(inbound.conversationKey);
         }
         inboundByRun.set(runKey, inbound);
+      }
+      if (context.trigger === 'user' && event.senderIsOwner === true) {
+        api.logger?.info?.(
+          `clawbot-bookkeeping: run correlation run=${Boolean(runId)} channel=${Boolean(channel)} sender=${Boolean(senderId)} matched=${Boolean(inbound)}`,
+        );
       }
     });
 
@@ -370,9 +374,19 @@ export default definePluginEntry({
       if (existingSlot) {
         if (existingSlot.runKey !== runKey) {
           existingSlot.ambiguous = true;
+          existingSlot.conflictingRunKeys ??= new Set([existingSlot.runKey]);
+          existingSlot.conflictingRunKeys.add(runKey);
           existingSlot.touchedAt = now;
           delete existingSlot.inbound;
           inboundByRun.delete(runKey);
+          for (const conflictingRunKey of existingSlot.conflictingRunKeys) {
+            if (!authoritativeRepliesByRun.has(conflictingRunKey)) {
+              authoritativeRepliesByRun.set(conflictingRunKey, {
+                text: '记账失败，没有写入账本。请重新发送一条新消息。',
+                touchedAt: now,
+              });
+            }
+          }
         }
         return;
       }
@@ -424,6 +438,9 @@ export default definePluginEntry({
       const runId = context.runId ?? event.runId;
       const runKey = runId ? transientBindingKey('run', runId) : undefined;
       const authoritative = runKey ? authoritativeRepliesByRun.get(runKey) : undefined;
+      api.logger?.info?.(
+        `clawbot-bookkeeping: final reply authority run=${Boolean(runId)} matched=${Boolean(authoritative)}`,
+      );
       if (!runKey || !authoritative) return;
       authoritativeRepliesByRun.delete(runKey);
       return {
@@ -467,14 +484,41 @@ export default definePluginEntry({
       const inbound = slot?.ambiguous === false ? slot.inbound : undefined;
       if (slot) delete slot.inbound;
       if (!slot || !inbound || !toolCallKey) {
+        if (slot?.runKey && !authoritativeRepliesByRun.has(slot.runKey)) {
+          authoritativeRepliesByRun.set(slot.runKey, {
+            text: '记账失败，没有写入账本。请重新发送一条新消息。',
+            touchedAt: Date.now(),
+          });
+        }
         throw new Error(MISSING_TRUSTED_INBOUND_ERROR);
       }
       if (Date.now() - inbound.observedAt > TRUSTED_INBOUND_MAX_AGE_MS) {
+        if (!authoritativeRepliesByRun.has(slot.runKey)) {
+          authoritativeRepliesByRun.set(slot.runKey, {
+            text: '记账失败，没有写入账本。请重新发送一条新消息。',
+            touchedAt: Date.now(),
+          });
+        }
         throw new Error('当前微信消息的可信元数据已过期，已拒绝操作账本。');
       }
       const boundRunKey = slot.runKey;
       return {
         inbound,
+        authoritativeResponse: <Response extends { content?: unknown }>(response: Response) => {
+          const text = Array.isArray(response.content)
+            ? response.content.find((item) => item
+              && typeof item === 'object'
+              && (item as { type?: unknown }).type === 'text'
+              && typeof (item as { text?: unknown }).text === 'string') as { text: string } | undefined
+            : undefined;
+          if (text && !authoritativeRepliesByRun.has(boundRunKey)) {
+            authoritativeRepliesByRun.set(boundRunKey, {
+              text: text.text,
+              touchedAt: Date.now(),
+            });
+          }
+          return response;
+        },
         isStillAuthorized: () => toolCallSlots.get(toolCallKey) === slot
           && slot.runKey === boundRunKey
           && slot.ambiguous === false,
@@ -642,7 +686,7 @@ export default definePluginEntry({
             if (toolContext.senderIsOwner !== true) {
               throw new Error('无法确认消息发送者为账本所有者，已拒绝入账。');
             }
-            const { inbound, isStillAuthorized } = takeToolCallBinding(_id);
+            const { inbound, isStillAuthorized, authoritativeResponse } = takeToolCallBinding(_id);
             const normalizedInput = {
               ...params,
               subcategory: normalizeSubcategory(params.primaryCategory, params.subcategory),
@@ -653,7 +697,7 @@ export default definePluginEntry({
                 candidate = prepareExpenseConfirmation({ input: normalizedInput, inbound });
               } catch (error) {
                 if (!(error instanceof ExpenseRecordingError)) throw error;
-                return expenseFailureResponse(error);
+                return authoritativeResponse(expenseFailureResponse(error));
               }
               if (!isStillAuthorized()) {
                 throw new Error('当前微信消息的可信绑定已变化，本次没有准备入账。');
@@ -667,9 +711,9 @@ export default definePluginEntry({
                 },
                 Date.now() + PENDING_CONFIRMATION_TTL_MS,
               );
-              return {
+              return authoritativeResponse({
                 content: [{
-                  type: 'text',
+                  type: 'text' as const,
                   text: formatExpenseConfirmation({
                     ledgerDisplayName,
                     amountMinor: candidate.amountMinor,
@@ -685,7 +729,7 @@ export default definePluginEntry({
                   timeSource: inbound.timeSource,
                   expiresInSeconds: PENDING_CONFIRMATION_TTL_MS / 1000,
                 },
-              };
+              });
             }
             let result;
             try {
@@ -699,9 +743,9 @@ export default definePluginEntry({
               }) as RecordExpenseResult;
             } catch (error) {
               if (!(error instanceof ExpenseRecordingError)) throw error;
-              return expenseFailureResponse(error);
+              return authoritativeResponse(expenseFailureResponse(error));
             }
-            return recordedExpenseResponse(result, normalizedInput, inbound);
+            return authoritativeResponse(recordedExpenseResponse(result, normalizedInput, inbound));
           },
         };
       },
@@ -725,7 +769,7 @@ export default definePluginEntry({
           if (toolContext.senderIsOwner !== true) {
             throw new Error('无法确认消息发送者为账本所有者，已拒绝准备入账。');
           }
-          const { inbound, isStillAuthorized } = takeToolCallBinding(_id);
+          const { inbound, isStillAuthorized, authoritativeResponse } = takeToolCallBinding(_id);
           const normalizedInput = {
             ...params,
             subcategory: normalizeSubcategory(params.primaryCategory, params.subcategory),
@@ -735,7 +779,7 @@ export default definePluginEntry({
             candidate = prepareExpenseConfirmation({ input: normalizedInput, inbound });
           } catch (error) {
             if (!(error instanceof ExpenseRecordingError)) throw error;
-            return expenseFailureResponse(error);
+            return authoritativeResponse(expenseFailureResponse(error));
           }
           if (!isStillAuthorized()) {
             throw new Error('当前微信消息的可信绑定已变化，本次没有准备入账。');
@@ -749,9 +793,9 @@ export default definePluginEntry({
             },
             Date.now() + PENDING_CONFIRMATION_TTL_MS,
           );
-          return {
+          return authoritativeResponse({
             content: [{
-              type: 'text',
+              type: 'text' as const,
               text: formatExpenseConfirmation({
                 ledgerDisplayName,
                 amountMinor: candidate.amountMinor,
@@ -767,7 +811,7 @@ export default definePluginEntry({
               timeSource: inbound.timeSource,
               expiresInSeconds: PENDING_CONFIRMATION_TTL_MS / 1000,
             },
-          };
+          });
         },
       }),
       { name: 'prepare_expense' },
@@ -791,35 +835,35 @@ export default definePluginEntry({
           if (toolContext.senderIsOwner !== true) {
             throw new Error('无法确认消息发送者为账本所有者，已拒绝处理确认。');
           }
-          const { inbound, isStillAuthorized } = takeToolCallBinding(_id);
+          const { inbound, isStillAuthorized, authoritativeResponse } = takeToolCallBinding(_id);
           const trustedDecision = confirmationDecision(inbound.content);
           if (trustedDecision === undefined || trustedDecision !== params.decision) {
-            return {
-              content: [{ type: 'text', text: '当前回复不是有效的确认或取消，本次没有操作账本。' }],
+            return authoritativeResponse({
+              content: [{ type: 'text' as const, text: '当前回复不是有效的确认或取消，本次没有操作账本。' }],
               details: { status: 'rejected' },
-            };
+            });
           }
           if (!isStillAuthorized()) {
             throw new Error('当前微信消息的可信绑定已变化，本次没有操作账本。');
           }
           const pending = receiptStore.takePendingExpenseConfirmation(inbound.conversationKey);
           if (pending.status === 'missing') {
-            return {
-              content: [{ type: 'text', text: '现在没有等待确认的支出，不用担心，我没有记账。' }],
+            return authoritativeResponse({
+              content: [{ type: 'text' as const, text: '现在没有等待确认的支出，不用担心，我没有记账。' }],
               details: { status: 'missing' },
-            };
+            });
           }
           if (pending.status === 'expired') {
-            return {
-              content: [{ type: 'text', text: '刚才那笔待确认支出已经过期，我没有记账；需要的话请重新发一次。' }],
+            return authoritativeResponse({
+              content: [{ type: 'text' as const, text: '刚才那笔待确认支出已经过期，我没有记账；需要的话请重新发一次。' }],
               details: { status: 'expired' },
-            };
+            });
           }
           if (params.decision === 'cancel') {
-            return {
-              content: [{ type: 'text', text: '好哒，已经取消，这笔没有记到账本里。' }],
+            return authoritativeResponse({
+              content: [{ type: 'text' as const, text: '好哒，已经取消，这笔没有记到账本里。' }],
               details: { status: 'cancelled' },
-            };
+            });
           }
           const proposal = pending.proposal;
           if (proposal.sourceMessageKey !== trustedInboundMessageKey(
@@ -840,9 +884,9 @@ export default definePluginEntry({
             }) as RecordExpenseResult;
           } catch (error) {
             if (!(error instanceof ExpenseRecordingError)) throw error;
-            return expenseFailureResponse(error);
+            return authoritativeResponse(expenseFailureResponse(error));
           }
-          return recordedExpenseResponse(result, proposal.input, proposal.sourceInbound);
+          return authoritativeResponse(recordedExpenseResponse(result, proposal.input, proposal.sourceInbound));
         },
       }),
       { name: 'resolve_expense_confirmation' },
