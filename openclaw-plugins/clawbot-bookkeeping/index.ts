@@ -17,6 +17,7 @@ import {
   prepareExpenseConfirmation,
   recordConfirmedExpense,
   recordExpense,
+  requiresExpenseConfirmation,
 } from './bookkeeping-core.mjs';
 import {
   CATEGORY_GUIDE,
@@ -84,10 +85,15 @@ type RecordExpenseResult = {
 const TRUSTED_INBOUND_MAX_AGE_MS = 10 * 60 * 1000;
 const PENDING_CONFIRMATION_TTL_MS = 10 * 60 * 1000;
 const TOOL_CALL_SLOT_RETENTION_MS = TRUSTED_INBOUND_MAX_AGE_MS;
+const AUTHORITATIVE_REPLY_MAX_AGE_MS = TRUSTED_INBOUND_MAX_AGE_MS;
 const EXPENSE_TOOL_NAMES = new Set([
   'record_expense',
   'prepare_expense',
   'resolve_expense_confirmation',
+]);
+const AUTHORITATIVE_REPLY_TOOL_NAMES = new Set([
+  ...EXPENSE_TOOL_NAMES,
+  'summarize_expenses',
 ]);
 const AFFIRMATIVE_REPLIES = new Set(['是', '对', '对的', '确认', '嗯', '嗯嗯', '好', '好的', '可以', '记吧', '记下吧']);
 const NEGATIVE_REPLIES = new Set(['不是', '否', '不对', '取消', '不用', '别记', '不要']);
@@ -229,6 +235,7 @@ export default definePluginEntry({
     const receiptStore = new SqliteReceiptStore(stateDbPath);
     const preparedRuns = new Set<string>();
     const inboundByRun = new Map<string, InboundMessage>();
+    const authoritativeRepliesByRun = new Map<string, { text: string; touchedAt: number }>();
     const toolCallSlots = new Map<string, {
       runKey: string;
       inbound?: InboundMessage;
@@ -239,6 +246,11 @@ export default definePluginEntry({
       for (const [toolCallKey, slot] of toolCallSlots) {
         if (now - slot.touchedAt > TOOL_CALL_SLOT_RETENTION_MS) {
           toolCallSlots.delete(toolCallKey);
+        }
+      }
+      for (const [runKey, reply] of authoritativeRepliesByRun) {
+        if (now - reply.touchedAt > AUTHORITATIVE_REPLY_MAX_AGE_MS) {
+          authoritativeRepliesByRun.delete(runKey);
         }
       }
     };
@@ -323,7 +335,7 @@ export default definePluginEntry({
       pruneExpiredToolCallSlots(now);
       const runId = context.runId ?? event.runId;
       const toolCallId = context.toolCallId ?? event.toolCallId;
-      if (!runId || !toolCallId || context.requester?.senderIsOwner !== true) return;
+      if (!runId || !toolCallId) return;
       const runKey = transientBindingKey('run', runId);
       const toolCallKey = transientBindingKey('tool-call', toolCallId);
       const existingSlot = toolCallSlots.get(toolCallKey);
@@ -346,6 +358,41 @@ export default definePluginEntry({
       if (inbound) inboundByRun.delete(runKey);
     });
 
+    api.on('after_tool_call', (event, context) => {
+      if (!AUTHORITATIVE_REPLY_TOOL_NAMES.has(event.toolName) || event.error) return;
+      const runId = context.runId ?? event.runId;
+      if (!runId || !event.result || typeof event.result !== 'object') return;
+      const content = (event.result as { content?: unknown }).content;
+      if (!Array.isArray(content)) return;
+      const text = content.find((item) => item
+        && typeof item === 'object'
+        && (item as { type?: unknown }).type === 'text'
+        && typeof (item as { text?: unknown }).text === 'string') as { text: string } | undefined;
+      if (!text) return;
+      const runKey = transientBindingKey('run', runId);
+      if (authoritativeRepliesByRun.has(runKey)) return;
+      authoritativeRepliesByRun.set(runKey, {
+        text: text.text,
+        touchedAt: Date.now(),
+      });
+    });
+
+    api.on('reply_payload_sending', (event, context) => {
+      if (event.kind !== 'final') return;
+      pruneExpiredToolCallSlots();
+      const runId = context.runId ?? event.runId;
+      const runKey = runId ? transientBindingKey('run', runId) : undefined;
+      const authoritative = runKey ? authoritativeRepliesByRun.get(runKey) : undefined;
+      if (!runKey || !authoritative) return;
+      authoritativeRepliesByRun.delete(runKey);
+      return {
+        payload: {
+          ...event.payload,
+          text: authoritative.text,
+        },
+      };
+    });
+
     api.on('agent_end', (event, context) => {
       const now = Date.now();
       pruneExpiredToolCallSlots(now);
@@ -366,6 +413,7 @@ export default definePluginEntry({
       preparedRuns.clear();
       inboundByRun.clear();
       toolCallSlots.clear();
+      authoritativeRepliesByRun.clear();
       receiptStore.close();
     });
 
@@ -558,6 +606,46 @@ export default definePluginEntry({
               ...params,
               subcategory: normalizeSubcategory(params.primaryCategory, params.subcategory),
             };
+            if (requiresExpenseConfirmation(inbound.content)) {
+              let candidate;
+              try {
+                candidate = prepareExpenseConfirmation({ input: normalizedInput, inbound });
+              } catch (error) {
+                if (!(error instanceof ExpenseRecordingError)) throw error;
+                return expenseFailureResponse(error);
+              }
+              if (!isStillAuthorized()) {
+                throw new Error('当前微信消息的可信绑定已变化，本次没有准备入账。');
+              }
+              receiptStore.replacePendingExpenseConfirmation(
+                inbound.conversationKey,
+                {
+                  sourceMessageKey: trustedInboundMessageKey(inbound.channel, inbound.messageId),
+                  sourceInbound: inbound,
+                  input: normalizedInput,
+                },
+                Date.now() + PENDING_CONFIRMATION_TTL_MS,
+              );
+              return {
+                content: [{
+                  type: 'text',
+                  text: formatExpenseConfirmation({
+                    ledgerDisplayName,
+                    amountMinor: candidate.amountMinor,
+                    primaryCategory: normalizedInput.primaryCategory,
+                    subcategory: normalizedInput.subcategory,
+                    comment: candidate.comment,
+                    time: candidate.time,
+                  }),
+                }],
+                details: {
+                  status: 'pending_confirmation',
+                  currency: 'SGD',
+                  timeSource: inbound.timeSource,
+                  expiresInSeconds: PENDING_CONFIRMATION_TTL_MS / 1000,
+                },
+              };
+            }
             let result;
             try {
               result = await recordExpense({

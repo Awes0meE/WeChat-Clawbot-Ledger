@@ -216,6 +216,156 @@ test('declares the fixed ledger display name in the plugin manifest', () => {
   });
 });
 
+test('binds a trusted owner run when the embedded before-tool hook omits requester', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const harness = createPluginHarness(tempDirectory, successfulExpenseFetch(requests));
+
+  try {
+    await beginTrustedOwnerTurn(harness.inboundHooks, {
+      content: '午饭7.2',
+      messageId: 'embedded-hook-message',
+      runId: 'embedded-hook-run',
+    });
+    const params = {
+      amount: '7.2',
+      primaryCategory: '食品酒水',
+      subcategory: '早午晚餐',
+    };
+    await harness.inboundHooks.get('before_tool_call')?.({
+      toolName: 'record_expense',
+      params,
+      runId: 'embedded-hook-run',
+      toolCallId: 'embedded-hook-call',
+    }, {
+      runId: 'embedded-hook-run',
+      toolCallId: 'embedded-hook-call',
+      sessionKey: 'agent:main:main',
+    });
+
+    const result = await harness.rawRecordExpenseFactory(trustedOwnerContext()).execute(
+      'embedded-hook-call',
+      params,
+    );
+
+    assert.equal(result.details.status, 'created');
+    assert.equal(requests.some(({ url }) => url.endsWith('/transactions/add.json')), true);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('turns a questioned direct-record call into a confirmation without writing', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const harness = createPluginHarness(tempDirectory, successfulExpenseFetch(requests));
+
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭8.8么？',
+      messageId: 'questioned-direct-record',
+    });
+    const result = await harness.recordExpenseFactory(trustedOwnerContext()).execute(
+      'questioned-direct-record-call',
+      {
+        amount: '8.8',
+        primaryCategory: '食品酒水',
+        subcategory: '早午晚餐',
+      },
+    );
+
+    assert.equal(result.details.status, 'pending_confirmation');
+    assert.match(result.content[0].text, /^你是想记下这笔吗？/u);
+    assert.equal(requests.length, 0);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('replaces the model final text with the authoritative bookkeeping receipt', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const harness = createPluginHarness(tempDirectory, successfulExpenseFetch(requests));
+  const originalNow = Date.now;
+  let now = originalNow();
+  Date.now = () => now;
+
+  try {
+    const runId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭9',
+      messageId: 'authoritative-outbound-receipt',
+    });
+    const params = {
+      amount: '9',
+      primaryCategory: '食品酒水',
+      subcategory: '早午晚餐',
+      comment: '食阁吃饭',
+    };
+    const result = await harness.recordExpenseFactory(trustedOwnerContext()).execute(
+      'authoritative-outbound-call',
+      params,
+    );
+    await harness.inboundHooks.get('after_tool_call')?.({
+      toolName: 'record_expense',
+      params,
+      runId,
+      toolCallId: 'authoritative-outbound-call',
+      result,
+    }, {
+      runId,
+      sessionKey: 'agent:main:main',
+      toolName: 'record_expense',
+    });
+    const intermediate = await harness.inboundHooks.get('reply_payload_sending')?.({
+      payload: { text: '正在处理工具结果' },
+      kind: 'tool',
+      channel: 'openclaw-weixin',
+      sessionKey: 'agent:main:main',
+      runId,
+    }, {
+      channelId: 'openclaw-weixin',
+      sessionKey: 'agent:main:main',
+      runId,
+    });
+    await harness.inboundHooks.get('after_tool_call')?.({
+      toolName: 'summarize_expenses',
+      params: {},
+      runId,
+      toolCallId: 'later-summary-call',
+      result: { content: [{ type: 'text', text: '本月支出共计9元。' }] },
+    }, {
+      runId,
+      sessionKey: 'agent:main:main',
+      toolName: 'summarize_expenses',
+    });
+    now += 2 * 60 * 1000 + 1;
+    const outgoing = await harness.inboundHooks.get('reply_payload_sending')?.({
+      payload: { text: '这个月的支出记录已经更新，共计9元。' },
+      kind: 'final',
+      channel: 'openclaw-weixin',
+      sessionKey: 'agent:main:main',
+      runId,
+    }, {
+      channelId: 'openclaw-weixin',
+      sessionKey: 'agent:main:main',
+      runId,
+    });
+
+    assert.equal(intermediate, undefined);
+    assert.equal(outgoing.payload.text, result.content[0].text);
+    assert.match(outgoing.payload.text, /^记下来啦！🧾/u);
+  } finally {
+    Date.now = originalNow;
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
 test('binds cached record tool calls to each inbound run without retaining a query turn', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
