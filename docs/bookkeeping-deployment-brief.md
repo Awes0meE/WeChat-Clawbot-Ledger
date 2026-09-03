@@ -1,12 +1,13 @@
 # 本地账本助理部署方案
 
-更新时间：2026-09-03。当前发布是 Windows 本地实现；Mac 接收端已停止，Vercel 和家庭网页登录尚未进入本轮范围。
+更新时间：2026-09-04。当前发布是 Windows 本地实现；Mac 接收端已停止，Vercel 和家庭网页登录尚未进入本轮范围。
 
 ## 已定方案
 
 ```text
 WeChat -> OpenClaw owner-bound local Qwen
-  -> record_expense -> trusted write adapter -> ezBookkeeping HTTP API
+  -> record_expense | prepare_expense | resolve_expense_confirmation
+     -> trusted write/confirmation adapter -> ezBookkeeping HTTP API
   -> summarize_expenses -> deterministic read adapter -> ezBookkeeping HTTP API
   -> ezbookkeeping__query_transactions -> requester-scoped read-only MCP
 ```
@@ -17,14 +18,14 @@ WeChat -> OpenClaw owner-bound local Qwen
 
 ## 为什么采用混合接入
 
-写入继续使用定制 `record_expense`。它关联十分钟内的可信微信元数据，以 `channel + messageId` 持久去重，校验账户、金额、正式分类、备注与时间，再调用 HTTP API。原生 MCP 的 `add_transaction` 没有这层消息关联和去重；若模型在超时后重试，可能新增重复交易，因此绝不向代理开放。
+写入继续使用定制工具。`record_expense` 处理明确支出；`prepare_expense` 将需要澄清的完整候选存为十分钟待确认提案且不访问账本；`resolve_expense_confirmation` 只接受可信当前消息中的简短确认或取消，并在确认后复用原消息时间和同一套写入事务。它们关联可信微信元数据，以 `channel + messageId` 持久去重。原生 MCP 的 `add_transaction` 没有这层消息关联和去重，因此绝不向代理开放。
 
 读取分两条路径：
 
 - `summarize_expenses` 通过 HTTP API 读取固定账户的支出，由代码按整数分计算今天、本周、本月、上月、今年或自定义范围内的总额、笔数、一级分类汇总和最大三笔。它可按正式分类或备注关键词过滤，不依赖模型心算。
 - `ezbookkeeping__query_transactions` 使用 ezBookkeeping 原生 MCP 回答最近记录、商家或备注等灵活历史问题。第一版服务级与代理级都只允许 `query_transactions`，不开放余额、分类、标签、汇率和任何写工具。默认 3 条、最多 10 条只是专用代理的回复策略，不是原生 MCP 的项目侧硬限制或安全边界。
 
-查询优先识别。消息里出现日期、数量或“支出”不等于要写入；只有明确表达已发生消费且金额明确时才调用一次 `record_expense`。同一条消息同时要求写入和查询时，本轮只写一次，查询另发。
+本地 Qwen 按语义区分写入、待确认、取消和查询；插件不使用商户白名单代替语言理解。消息里出现日期、数量或“支出”不等于要写入；只有明确表达已发生消费且金额明确时才调用一次 `record_expense`。`午饭7.2吗` 先返回完整确认单，单独回复“是”才入账；新的实质消息会废弃旧提案并按新请求处理。
 
 ## 写入与回执契约
 
@@ -141,7 +142,7 @@ openclaw channels status --probe
 openclaw plugins info clawbot-bookkeeping
 ```
 
-动态 MCP 只由插件 manifest 和 requester-scoped resolver 声明，不得为诊断方便新增顶层 `mcp.servers` 静态连接。任何运行时配置或部署变更前，必须先执行 `WINDOWS-HANDOFF.md` 的只读属性名断言；若顶层 `mcp.servers` 下存在 `ezbookkeeping`，停止部署并另行审核移除，不能自动删除或显示其内容。该断言与 81 项账本插件测试共同证明没有静态后备项，且 manifest、resolver 和代理 allowlist 只允许 `query_transactions`、源码和测试明确排除 `add_transaction`；stable-ID 插件另有 3 项测试。最后由所有者在微信发起真实历史查询，闭合可信上下文中的端到端证据链，并核对写入、汇总和查询不会越权。
+动态 MCP 只由插件 manifest 和 requester-scoped resolver 声明，不得为诊断方便新增顶层 `mcp.servers` 静态连接。任何运行时配置或部署变更前，必须先执行 `WINDOWS-HANDOFF.md` 的只读属性名断言；若顶层 `mcp.servers` 下存在 `ezbookkeeping`，停止部署并另行审核移除，不能自动删除或显示其内容。该断言与账本插件自动化测试共同证明没有静态后备项，且 manifest、resolver 和代理 allowlist 只允许 `query_transactions`、源码和测试明确排除 `add_transaction`；stable-ID 插件另有独立测试。最后由所有者在微信发起真实历史查询，闭合可信上下文中的端到端证据链，并核对写入、确认、汇总和查询不会越权。
 
 仓库秘密扫描不得跳过测试或示例目录。若从包含多个 worktree 的上级仓库运行，应只排除嵌套 `.worktrees` 副本以避免重复结果；每一条匹配仍须人工核验，不能因它位于 fixture/example 中就自动视为安全。具体命令和处置标准见 `WINDOWS-HANDOFF.md`。
 

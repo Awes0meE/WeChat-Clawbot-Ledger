@@ -1,6 +1,6 @@
 # Windows 运行与交接：微信本地账本助理
 
-整理于 2026-09-03，时区 `Asia/Singapore`。这是 Windows 接手、恢复和验收的第一入口。仓库描述发布契约；任何“正在运行”结论都必须在当前主机重新探测。
+整理于 2026-09-04，时区 `Asia/Singapore`。这是 Windows 接手、恢复和验收的第一入口。仓库描述发布契约；任何“正在运行”结论都必须在当前主机重新探测。
 
 ## 不变边界
 
@@ -14,7 +14,8 @@
 
 ```text
 WeChat -> OpenClaw owner-bound local Qwen
-  -> record_expense -> trusted write adapter -> ezBookkeeping HTTP API
+  -> record_expense | prepare_expense | resolve_expense_confirmation
+     -> trusted write/confirmation adapter -> ezBookkeeping HTTP API
   -> summarize_expenses -> deterministic read adapter -> ezBookkeeping HTTP API
   -> ezbookkeeping__query_transactions -> requester-scoped read-only MCP
 ```
@@ -35,6 +36,8 @@ WeChat -> OpenClaw owner-bound local Qwen
 
 ```text
 record_expense
+prepare_expense
+resolve_expense_confirmation
 summarize_expenses
 ezbookkeeping__query_transactions
 ```
@@ -63,7 +66,7 @@ ezbookkeeping__query_transactions
 
 ## 写入路径
 
-只有明确表达已发生消费且包含明确金额时，才调用一次 `record_expense`。每条消息最多写一笔；`6.5+2.5` 是一笔合计 9，不是两笔。
+本地 Qwen 负责判断语义。明确表达已发生消费且包含明确金额时调用一次 `record_expense`；候选信息完整但仍带疑问或不确定语气时调用一次 `prepare_expense`。每条消息最多写一笔；`6.5+2.5` 是一笔合计 9，不是两笔。
 
 1. OpenClaw 将所有者微信消息路由给专用代理。
 2. 插件按 session 或 `channel + sender` 找到十分钟内的可信原始消息。
@@ -71,6 +74,14 @@ ezbookkeeping__query_transactions
 4. 模型提供金额、正式一级/二级分类和可选语义备注。
 5. 插件校验数据，并把可信微信时间规范为 Unix 秒。输入若是毫秒则先除以 1000；提交给 ezBookkeeping 的 `time` 不得保留毫秒。
 6. 插件使用 API token 调用本机 HTTP API。只有 API 明确返回交易 ID，才允许成功回执。
+
+### 对话确认
+
+`prepare_expense` 只校验并保存候选支出，不访问 ezBookkeeping。待确认提案按所有者会话哈希存入同一个本地 SQLite 状态库，十分钟过期，每个会话最多一张。确认单包含账本、金额、分类、备注和原微信消息时间。
+
+用户随后单独回复“是”“对”“确认”等简短确认词时，`resolve_expense_confirmation` 原子取出提案并走同一套账户、分类、去重、API 写入和终态处理；单独回复“不是”“取消”等则只删除提案。确认写入始终使用原候选消息的时间。重复确认、过期确认和没有待确认提案的确认都不会写入。
+
+如果等待期间收到其他实质新消息，插件会先废弃旧提案，再让 Qwen 正常处理新请求；`不是，是8.2` 因此按新消息处理，而不是误用旧提案。确认词与工具参数不一致时不会消费提案。
 
 原生 MCP 的 `add_transaction` 永不暴露给模型。它不具有本项目的可信消息关联和消息 ID 去重，超时重试可能创建重复交易。
 
@@ -241,7 +252,7 @@ $openclawConfigPath = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.
 Assert-NoStaticEzBookkeepingMcpFallback -ConfigPath $openclawConfigPath
 ```
 
-只有看到 `STATIC_EZBOOKKEEPING_MCP_FALLBACK_ABSENT` 才能继续。若检查失败或发现该属性，停止部署；不要显示其内容，也不要自动删除，必须另开一次有审核的移除操作。此断言、81 项 manifest/resolver/allowlist 测试和所有者微信历史查询共同闭合“无静态后备连接”的证据链。
+只有看到 `STATIC_EZBOOKKEEPING_MCP_FALLBACK_ABSENT` 才能继续。若检查失败或发现该属性，停止部署；不要显示其内容，也不要自动删除，必须另开一次有审核的移除操作。此断言、manifest/resolver/allowlist 自动化测试和所有者微信历史查询共同闭合“无静态后备连接”的证据链。
 
 ## Windows 安装
 

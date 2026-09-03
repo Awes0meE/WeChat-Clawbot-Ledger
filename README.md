@@ -4,7 +4,8 @@ Clawbot 是一个私有、本地优先的微信个人账本助理。当前发布
 
 ```text
 WeChat -> OpenClaw owner-bound local Qwen
-  -> record_expense -> trusted write adapter -> ezBookkeeping HTTP API
+  -> record_expense | prepare_expense | resolve_expense_confirmation
+     -> trusted write/confirmation adapter -> ezBookkeeping HTTP API
   -> summarize_expenses -> deterministic read adapter -> ezBookkeeping HTTP API
   -> ezbookkeeping__query_transactions -> requester-scoped read-only MCP
 ```
@@ -13,7 +14,7 @@ WeChat -> OpenClaw owner-bound local Qwen
 
 ## 当前基线
 
-以下基线整理于 2026-09-03；接手时仍须重新探测实时状态。
+以下基线整理于 2026-09-04；接手时仍须重新探测实时状态。
 
 | 组件 | 当前约束 |
 | --- | --- |
@@ -23,7 +24,7 @@ WeChat -> OpenClaw owner-bound local Qwen
 | 账本 | ezBookkeeping 1.6.1；只绑定 `127.0.0.1:8180` |
 | 账户与币种 | 唯一可见 SGD 账户 `日常支出`；回执显示 `日常账本` |
 | 分类 | 运行时以 `openclaw-plugins/clawbot-bookkeeping/categories.mjs` 的不可变 `CATEGORY_DEFINITIONS` 为权威契约，固定为 11 个一级、45 个二级分类 |
-| 专用代理 allowlist | `record_expense`、`summarize_expenses`、`ezbookkeeping__query_transactions` |
+| 专用代理 allowlist | `record_expense`、`prepare_expense`、`resolve_expense_confirmation`、`summarize_expenses`、`ezbookkeeping__query_transactions` |
 
 ## 助理行为
 
@@ -34,10 +35,9 @@ WeChat -> OpenClaw owner-bound local Qwen
 - 默认 SGD、`Asia/Singapore`。
 - 微信时间戳被规范为 Unix 秒后提交给 ezBookkeeping；毫秒输入会先除以 1000。
 - 显式“备注”后的原文优先；否则模型只可提炼消息中明确出现的商家、商品或用途，不得补充事实。
-- 写入授权只接受完整匹配的有限语法：明确的“记账：…”命令、明确的“我在…花了…”等本人已支出动作，以及餐次、咖啡/奶茶/餐饮、买菜、`NTUC购物`、`食阁吃饭`、`检查费` 这些固定高频简写。
-- 不维护开放式商户词表。`麦当劳7.2`、`NTUC 8.25`、`便利店3.5`、`油站60`、`修车100` 等裸简写会稳定拒绝且不会写入；请改发 `记账：麦当劳7.2` 或 `我在麦当劳花了7.2`。
-- 显式 `记账：…` 可确认原本不安全的商户简写，但不能覆盖否定、举例、转述、代付、退款/收款等非支出语义；例如 `记账：不要记午饭7.2` 仍会拒绝且不会写入。
-- 只有 `能帮我记午饭7.2吗` 这类明确祈使记账句可带疑问后缀；`午饭7.2吗` 或 `我在麦当劳花了7.2吗` 不能证明支出已经发生，会稳定拒绝。
+- 本地 Qwen 判断是否为本人已发生支出；插件不再用商户白名单或大量中文句式取代模型。插件仍硬性要求当前可信消息中只有一个相关金额、金额与工具参数一致，并拦截明显疑问的直接写入。
+- `午饭7.2吗` 这类信息先由 `prepare_expense` 保存十分钟待确认提案并返回完整表单，绝不访问账本。用户单独回复“是”才由 `resolve_expense_confirmation` 使用原消息的金额、分类、备注和时间入账；回复“不是”则取消。
+- 每个所有者会话最多一张待确认单。新的实质消息会替换旧上下文并使旧确认单失效；重复确认不会产生第二笔。状态保存在本地 SQLite，Gateway 重启或上下文压缩不会丢失。
 - 写入成功后返回固定六行回执；例如：
 
 ```text
@@ -117,7 +117,7 @@ openclaw channels status --probe
 openclaw plugins info clawbot-bookkeeping
 ```
 
-动态 MCP 由插件 manifest 和 requester-scoped resolver 声明，不应为了 CLI 诊断另加顶层 `mcp.servers` 静态连接。任何本机配置或部署变更前，必须执行 `WINDOWS-HANDOFF.md` 中只检查属性名的只读断言；若顶层 `mcp.servers` 下存在 `ezbookkeeping`，立即停止部署，另行审核后再移除，不能由部署步骤自动删除。该断言不显示配置对象、header 或值。它与 81 项账本插件测试（manifest、resolver、allowlist 允许 `query_transactions`，源码和测试明确排除 `add_transaction`）及所有者微信历史查询共同闭合“无静态后备连接”的证据链；stable-ID 插件另有 3 项测试。
+动态 MCP 由插件 manifest 和 requester-scoped resolver 声明，不应为了 CLI 诊断另加顶层 `mcp.servers` 静态连接。任何本机配置或部署变更前，必须执行 `WINDOWS-HANDOFF.md` 中只检查属性名的只读断言；若顶层 `mcp.servers` 下存在 `ezbookkeeping`，立即停止部署，另行审核后再移除，不能由部署步骤自动删除。该断言不显示配置对象、header 或值。它与账本插件自动化测试（manifest、resolver、allowlist 允许 `query_transactions`，源码和测试明确排除 `add_transaction`）及所有者微信历史查询共同闭合“无静态后备连接”的证据链；stable-ID 插件另有独立测试。
 
 秘密扫描从仓库根目录执行时应排除嵌套 `.worktrees` 副本，但不得排除测试或示例目录；每一条命中都必须人工核对，任何无法证明是固定合成数据或占位符的结果都必须按真实泄露处理。详细命令见 `WINDOWS-HANDOFF.md`。
 
