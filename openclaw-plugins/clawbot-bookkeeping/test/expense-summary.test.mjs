@@ -39,10 +39,10 @@ test('rejects impossible or reversed custom calendar ranges', () => {
 
 test('aggregates integer amounts by primary category and selects the largest three', () => {
   const summary = aggregateExpenseSummary([
-    { id: '1', time: 1_788_300_000, sourceAmount: 720, categoryId: 'meal', category: { name: '早午晚餐' }, comment: '' },
-    { id: '2', time: 1_788_200_000, sourceAmount: 825, categoryId: 'market', category: { name: '超市购物' }, comment: '两根芹菜，一个菜板' },
-    { id: '3', time: 1_788_100_000, sourceAmount: 2400, categoryId: 'digital', category: { name: '数码装备' }, comment: '网线' },
-    { id: '4', time: 1_788_000_000, sourceAmount: 250, categoryId: 'drink', category: { name: '饮料甜品' }, comment: '' },
+    { time: 1_788_300_000, sourceAmount: 720, categoryId: 'meal', categoryName: '早午晚餐' },
+    { time: 1_788_200_000, sourceAmount: 825, categoryId: 'market', categoryName: '超市购物' },
+    { time: 1_788_100_000, sourceAmount: 2400, categoryId: 'digital', categoryName: '数码装备' },
+    { time: 1_788_000_000, sourceAmount: 250, categoryId: 'drink', categoryName: '饮料甜品' },
   ], new Map([
     ['meal', '食品酒水'], ['market', '食品酒水'],
     ['digital', '学习进修'], ['drink', '食品酒水'],
@@ -54,7 +54,11 @@ test('aggregates integer amounts by primary category and selects the largest thr
     { name: '学习进修', amountMinor: 2400 },
     { name: '食品酒水', amountMinor: 1795 },
   ]);
-  assert.deepEqual(summary.largest.map((item) => item.id), ['3', '2', '1']);
+  assert.deepEqual(summary.largest, [
+    { time: 1_788_100_000, amountMinor: 2400, categoryName: '数码装备' },
+    { time: 1_788_200_000, amountMinor: 825, categoryName: '超市购物' },
+    { time: 1_788_300_000, amountMinor: 720, categoryName: '早午晚餐' },
+  ]);
 });
 
 test('rejects zero, negative, or fractional transaction amounts', () => {
@@ -75,15 +79,44 @@ test('rejects zero, negative, or fractional transaction amounts', () => {
 
 test('keeps transactions unchanged and breaks equal largest amounts by later time', () => {
   const transactions = [
-    { id: 'older', time: 1_788_100_000, sourceAmount: 500, categoryId: 'meal' },
-    { id: 'newer', time: 1_788_200_000, sourceAmount: 500, categoryId: 'meal' },
+    { time: 1_788_100_000, sourceAmount: 500, categoryId: 'meal', categoryName: '早午晚餐' },
+    { time: 1_788_200_000, sourceAmount: 500, categoryId: 'meal', categoryName: '早午晚餐' },
   ];
   const originalTransactions = structuredClone(transactions);
 
   const summary = aggregateExpenseSummary(transactions, new Map([['meal', '食品酒水']]));
 
-  assert.deepEqual(summary.largest.map((item) => item.id), ['newer', 'older']);
+  assert.deepEqual(summary.largest.map((item) => item.time), [1_788_200_000, 1_788_100_000]);
   assert.deepEqual(transactions, originalTransactions);
+});
+
+test('keeps hidden and real other categories distinct from unknown deleted category ids', () => {
+  const summary = aggregateExpenseSummary([
+    { time: 1_788_100_000, sourceAmount: 100, categoryId: 'hidden-primary' },
+    { time: 1_788_200_000, sourceAmount: 200, categoryId: 'hidden-child' },
+    { time: 1_788_300_000, sourceAmount: 300, categoryId: 'real-other' },
+    { time: 1_788_400_000, sourceAmount: 400, categoryId: 'deleted' },
+  ], new Map([
+    ['hidden-primary', '居家物业'],
+    ['hidden-child', '食品酒水'],
+    ['real-other', '其他杂项'],
+  ]), new Map([
+    ['hidden-primary', '房租'],
+    ['hidden-child', '饮料甜品'],
+    ['real-other', '其他支出'],
+  ]));
+
+  assert.deepEqual(summary.categories, [
+    { name: '未识别分类', amountMinor: 400 },
+    { name: '其他杂项', amountMinor: 300 },
+    { name: '食品酒水', amountMinor: 200 },
+    { name: '居家物业', amountMinor: 100 },
+  ]);
+  assert.deepEqual(summary.largest[0], {
+    time: 1_788_400_000,
+    amountMinor: 400,
+    categoryName: '未识别分类',
+  });
 });
 
 test('rejects transactions whose accumulated summary total is unsafe', () => {
@@ -103,9 +136,9 @@ test('formats a category breakdown and the three largest expenses', () => {
     count: 4,
     categories: [{ name: '学习进修', amountMinor: 2400 }, { name: '食品酒水', amountMinor: 1795 }],
     largest: [
-      { id: '3', time: 1_788_100_000, sourceAmount: 2400, category: { name: '数码装备' } },
-      { id: '2', time: 1_788_200_000, sourceAmount: 825, category: { name: '超市购物' } },
-      { id: '1', time: 1_788_300_000, sourceAmount: 720, category: { name: '早午晚餐' } },
+      { time: 1_788_100_000, amountMinor: 2400, categoryName: '数码装备' },
+      { time: 1_788_200_000, amountMinor: 825, categoryName: '超市购物' },
+      { time: 1_788_300_000, amountMinor: 720, categoryName: '早午晚餐' },
     ],
   };
   const formatted = formatExpenseSummary('这个月', summary);

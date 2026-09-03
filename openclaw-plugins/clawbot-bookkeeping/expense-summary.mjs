@@ -93,8 +93,9 @@ function formatMonthDay(unixSeconds) {
   return `${String(date.getUTCMonth() + 1).padStart(2, '0')}/${String(date.getUTCDate()).padStart(2, '0')}`;
 }
 
-export function aggregateExpenseSummary(transactions, primaryByCategoryId) {
+export function aggregateExpenseSummary(transactions, primaryByCategoryId, categoryNameById = new Map()) {
   const categoryTotals = new Map();
+  const largest = [];
   let totalAmountMinor = 0;
 
   for (const transaction of transactions) {
@@ -102,7 +103,8 @@ export function aggregateExpenseSummary(transactions, primaryByCategoryId) {
     if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) {
       throw new Error('transaction amount is invalid');
     }
-    const primary = primaryByCategoryId.get(String(transaction.categoryId)) ?? '其他杂项';
+    const categoryId = String(transaction.categoryId);
+    const primary = primaryByCategoryId.get(categoryId) ?? '未识别分类';
     const nextTotalAmountMinor = totalAmountMinor + amountMinor;
     const nextCategoryAmountMinor = (categoryTotals.get(primary) ?? 0) + amountMinor;
     if (!Number.isSafeInteger(nextTotalAmountMinor) || !Number.isSafeInteger(nextCategoryAmountMinor)) {
@@ -110,16 +112,21 @@ export function aggregateExpenseSummary(transactions, primaryByCategoryId) {
     }
     totalAmountMinor = nextTotalAmountMinor;
     categoryTotals.set(primary, nextCategoryAmountMinor);
+    largest.push({
+      time: transaction.time,
+      amountMinor,
+      categoryName: transaction.categoryName ?? categoryNameById.get(categoryId) ?? '未识别分类',
+    });
   }
 
   const categories = [...categoryTotals.entries()]
     .map(([name, amountMinor]) => ({ name, amountMinor }))
     .sort((a, b) => b.amountMinor - a.amountMinor || a.name.localeCompare(b.name, 'zh-CN'));
-  const largest = [...transactions]
-    .sort((a, b) => b.sourceAmount - a.sourceAmount || b.time - a.time)
+  const topLargest = largest
+    .sort((a, b) => b.amountMinor - a.amountMinor || b.time - a.time)
     .slice(0, 3);
 
-  return { totalAmountMinor, count: transactions.length, categories, largest };
+  return { totalAmountMinor, count: transactions.length, categories, largest: topLargest };
 }
 
 export function formatExpenseSummary(label, summary) {
@@ -131,6 +138,6 @@ export function formatExpenseSummary(label, summary) {
     ...summary.categories.map((item) => `${item.name}：${formatMinor(item.amountMinor)}`),
     '',
     '最大三笔：',
-    ...summary.largest.map((item) => `${formatMonthDay(item.time)} ${item.category?.name ?? '未分类'}：${formatMinor(item.sourceAmount)}`),
+    ...summary.largest.map((item) => `${formatMonthDay(item.time)} ${item.categoryName}：${formatMinor(item.amountMinor)}`),
   ].join('\n');
 }

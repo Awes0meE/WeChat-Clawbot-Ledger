@@ -117,7 +117,12 @@ test('API client lists filtered expense transactions through the documented read
       endTime: 1_790_783_999,
       categoryId: 'primary-1',
       keyword: 'NTUC',
-    }), [transaction]);
+    }), [{
+      time: 1_788_425_460,
+      sourceAmount: 825,
+      categoryId: 'primary-1',
+      categoryName: '食品酒水',
+    }]);
     assert.equal(typeof requests[0].url, 'string');
     const url = new URL(requests[0].url);
     assert.equal(url.pathname, '/api/v1/transactions/list/all.json');
@@ -131,6 +136,73 @@ test('API client lists filtered expense transactions through the documented read
       trim_account: 'true',
       trim_tag: 'true',
     });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('API client encodes keywords and omits undefined expense filters', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-api-'));
+  const tokenPath = join(dir, 'token.txt');
+  writeFileSync(tokenPath, 'secret-test-token', 'utf8');
+  let requestUrl;
+  const api = new EzBookkeepingApi({
+    serverBaseUrl: 'http://127.0.0.1:8180',
+    tokenPath,
+    fetchImpl: async (url) => {
+      requestUrl = new URL(url);
+      return new Response(JSON.stringify({ success: true, result: [{
+        type: 3,
+        categoryId: 'primary-1',
+        time: 1_788_425_460,
+        sourceAmount: 825,
+      }] }), { status: 200 });
+    },
+  });
+
+  try {
+    await api.listExpenseTransactions({ accountId: 'account-1', keyword: '菜+板 & NTUC' });
+    assert.equal(requestUrl.searchParams.get('keyword'), '菜+板 & NTUC');
+    assert.equal(requestUrl.searchParams.has('category_ids'), false);
+    assert.equal(requestUrl.searchParams.has('start_time'), false);
+    assert.equal(requestUrl.searchParams.has('end_time'), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('API client rejects malformed expense transaction elements', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-api-'));
+  const tokenPath = join(dir, 'token.txt');
+  writeFileSync(tokenPath, 'secret-test-token', 'utf8');
+  const invalidTransactions = [
+    null,
+    [],
+    { type: 2, categoryId: 'category-1', time: 1_788_425_460, sourceAmount: 825 },
+    { type: 3, categoryId: 'category-1', time: 1_788_425_460, sourceAmount: 0 },
+    { type: 3, categoryId: 'category-1', time: 1_788_425_460, sourceAmount: 1.5 },
+    { type: 3, categoryId: 'category-1', time: 1_788_425_460, sourceAmount: Number.MAX_SAFE_INTEGER + 1 },
+    { type: 3, categoryId: 'category-1', time: 0, sourceAmount: 825 },
+    { type: 3, categoryId: 'category-1', time: 1.5, sourceAmount: 825 },
+    { type: 3, categoryId: '', time: 1_788_425_460, sourceAmount: 825 },
+    { type: 3, categoryId: {}, time: 1_788_425_460, sourceAmount: 825 },
+    { type: 3, categoryId: 'category-1', time: 1_788_425_460, sourceAmount: 825, category: { name: 123 } },
+  ];
+  let current;
+  const api = new EzBookkeepingApi({
+    serverBaseUrl: 'http://127.0.0.1:8180',
+    tokenPath,
+    fetchImpl: async () => new Response(JSON.stringify({ success: true, result: [current] }), { status: 200 }),
+  });
+
+  try {
+    for (const transaction of invalidTransactions) {
+      current = transaction;
+      await assert.rejects(
+        () => api.listExpenseTransactions({ accountId: 'account-1' }),
+        /expense transaction/i,
+      );
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -162,7 +234,7 @@ test('API client resolves visible expense category filters from a preloaded hier
   }
 });
 
-test('API client omits hidden categories from the expense hierarchy', async () => {
+test('API client preserves hidden categories for historical summary mapping', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'clawbot-api-'));
   const tokenPath = join(dir, 'token.txt');
   writeFileSync(tokenPath, 'secret-test-token', 'utf8');
@@ -181,11 +253,18 @@ test('API client omits hidden categories from the expense hierarchy', async () =
   });
 
   try {
-    assert.deepEqual(await api.listExpenseCategories(), [
+    const categories = await api.listExpenseCategories();
+    assert.deepEqual(categories, [
       { id: 'primary-visible', name: '食品酒水', parentId: '0', subCategories: [
         { id: 'child-visible', name: '超市购物', parentId: 'primary-visible' },
+        { id: 'child-hidden', name: '饮料甜品', parentId: 'primary-visible', hidden: true },
       ] },
+      { id: 'primary-hidden', name: '其他杂项', parentId: '0', hidden: true, subCategories: [] },
     ]);
+    await assert.rejects(
+      () => api.resolveExpenseCategoryFilterId('其他杂项', undefined, categories),
+      /expected exactly one expense category/u,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

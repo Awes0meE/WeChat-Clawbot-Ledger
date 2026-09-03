@@ -62,22 +62,60 @@ function additiveAmountFromMessage(content: string): string | undefined {
   return (totalCents / 100).toFixed(2).replace(/\.00$/u, '').replace(/(\.\d)0$/u, '$1');
 }
 
-function primaryCategoryById(categories: unknown[]): Map<string, string> {
-  const result = new Map<string, string>();
+function documentedCategoryId(value: unknown): string | undefined {
+  if ((typeof value !== 'string' && typeof value !== 'number')
+    || (typeof value === 'number' && !Number.isFinite(value))
+    || String(value).trim() === '') return undefined;
+  return String(value);
+}
+
+function categoryMaps(categories: unknown[]) {
+  const primaryByCategoryId = new Map<string, string>();
+  const categoryNameById = new Map<string, string>();
   for (const category of categories) {
     if (!category || typeof category !== 'object') continue;
     const primary = category as { id?: unknown; name?: unknown; subCategories?: unknown };
-    if (typeof primary.id !== 'string' || typeof primary.name !== 'string') continue;
-    result.set(primary.id, primary.name);
+    const primaryId = documentedCategoryId(primary.id);
+    if (!primaryId || typeof primary.name !== 'string') continue;
+    primaryByCategoryId.set(primaryId, primary.name);
+    categoryNameById.set(primaryId, primary.name);
     if (!Array.isArray(primary.subCategories)) continue;
     for (const subcategory of primary.subCategories) {
       if (!subcategory || typeof subcategory !== 'object') continue;
-      const child = subcategory as { id?: unknown };
-      if (typeof child.id === 'string') result.set(child.id, primary.name);
+      const child = subcategory as { id?: unknown; name?: unknown };
+      const childId = documentedCategoryId(child.id);
+      if (!childId || typeof child.name !== 'string') continue;
+      primaryByCategoryId.set(childId, primary.name);
+      categoryNameById.set(childId, child.name);
     }
   }
-  return result;
+  return { primaryByCategoryId, categoryNameById };
 }
+
+const SUMMARY_FILTER_PROPERTIES = {
+  primaryCategory: Type.Optional(Type.Union(PRIMARY_CATEGORIES.map((value) => Type.Literal(value)))),
+  subcategory: Type.Optional(Type.Union(SUBCATEGORIES.map((value) => Type.Literal(value)))),
+  keyword: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })),
+};
+
+const SUMMARY_PARAMETERS = Type.Union([
+  Type.Object({
+    period: Type.Union([
+      Type.Literal('today'),
+      Type.Literal('this_week'),
+      Type.Literal('this_month'),
+      Type.Literal('last_month'),
+      Type.Literal('this_year'),
+    ]),
+    ...SUMMARY_FILTER_PROPERTIES,
+  }, { additionalProperties: false }),
+  Type.Object({
+    period: Type.Literal('custom'),
+    startDate: Type.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' }),
+    endDate: Type.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' }),
+    ...SUMMARY_FILTER_PROPERTIES,
+  }, { additionalProperties: false }),
+]);
 
 export default definePluginEntry({
   id: 'clawbot-bookkeeping',
@@ -153,21 +191,7 @@ export default definePluginEntry({
         name: 'summarize_expenses',
         catalogMode: 'direct-only',
         description: '权威的确定性本地账本查询：按时间、分类或关键词汇总 SGD 支出总额、笔数、分类和最大三笔；不会写入账本。',
-        parameters: Type.Object({
-          period: Type.Union([
-            Type.Literal('today'),
-            Type.Literal('this_week'),
-            Type.Literal('this_month'),
-            Type.Literal('last_month'),
-            Type.Literal('this_year'),
-            Type.Literal('custom'),
-          ]),
-          startDate: Type.Optional(Type.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' })),
-          endDate: Type.Optional(Type.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' })),
-          primaryCategory: Type.Optional(Type.Union(PRIMARY_CATEGORIES.map((value) => Type.Literal(value)))),
-          subcategory: Type.Optional(Type.Union(SUBCATEGORIES.map((value) => Type.Literal(value)))),
-          keyword: Type.Optional(Type.String({ minLength: 1, maxLength: 255 })),
-        }, { additionalProperties: false }),
+        parameters: SUMMARY_PARAMETERS,
         async execute(_id, params) {
           if (toolContext.senderIsOwner !== true) {
             throw new Error('无法确认消息发送者为账本 owner，已拒绝查询。');
@@ -178,10 +202,7 @@ export default definePluginEntry({
           const subcategory = params.subcategory === undefined
             ? undefined
             : normalizeSubcategory(params.primaryCategory, params.subcategory);
-          const keyword = params.keyword?.trim();
-          if (params.keyword !== undefined && !keyword) {
-            throw new Error('查询关键词不能为空白。');
-          }
+          const keyword = params.keyword?.trim() || undefined;
           const range = resolveExpenseRange(params);
 
           try {
@@ -199,7 +220,8 @@ export default definePluginEntry({
               categoryId,
               keyword,
             });
-            const summary = aggregateExpenseSummary(transactions, primaryCategoryById(categories));
+            const { primaryByCategoryId, categoryNameById } = categoryMaps(categories);
+            const summary = aggregateExpenseSummary(transactions, primaryByCategoryId, categoryNameById);
             return {
               content: [{ type: 'text', text: formatExpenseSummary(range.label, summary) }],
               details: { status: 'ok', ...range, ...summary },

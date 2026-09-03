@@ -2,6 +2,47 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
+function expenseCategoryId(value) {
+  if ((typeof value !== 'string' && typeof value !== 'number')
+    || (typeof value === 'number' && !Number.isFinite(value))
+    || String(value).trim() === '') {
+    throw new Error('expense transaction category id is invalid');
+  }
+  return String(value);
+}
+
+function sanitizeExpenseTransaction(transaction) {
+  if (!transaction || typeof transaction !== 'object' || Array.isArray(transaction)) {
+    throw new Error('expense transaction record is invalid');
+  }
+  if (transaction.type !== 3) {
+    throw new Error('expense transaction type is invalid');
+  }
+  if (!Number.isSafeInteger(transaction.sourceAmount) || transaction.sourceAmount <= 0) {
+    throw new Error('expense transaction amount is invalid');
+  }
+  if (!Number.isSafeInteger(transaction.time) || transaction.time <= 0
+    || !Number.isFinite(new Date(transaction.time * 1000).getTime())) {
+    throw new Error('expense transaction time is invalid');
+  }
+  let categoryName;
+  if (transaction.category !== undefined) {
+    if (!transaction.category || typeof transaction.category !== 'object' || Array.isArray(transaction.category)) {
+      throw new Error('expense transaction category is invalid');
+    }
+    if (transaction.category.name !== undefined && typeof transaction.category.name !== 'string') {
+      throw new Error('expense transaction category name is invalid');
+    }
+    categoryName = transaction.category.name;
+  }
+  return {
+    time: transaction.time,
+    sourceAmount: transaction.sourceAmount,
+    categoryId: expenseCategoryId(transaction.categoryId),
+    categoryName,
+  };
+}
+
 export class SqliteReceiptStore {
   constructor(path) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
@@ -188,14 +229,7 @@ export class EzBookkeepingApi {
     if (!Array.isArray(categories?.['2'])) {
       throw new Error('expense category list response is invalid');
     }
-    return categories['2']
-      .filter((category) => category?.hidden !== true)
-      .map((category) => ({
-        ...category,
-        ...(Array.isArray(category?.subCategories)
-          ? { subCategories: category.subCategories.filter((subcategory) => subcategory?.hidden !== true) }
-          : {}),
-      }));
+    return categories['2'];
   }
 
   async resolveExpenseCategoryFilterId(primaryName, subcategoryName, preloadedCategories) {
@@ -237,7 +271,7 @@ export class EzBookkeepingApi {
     if (!Array.isArray(transactions)) {
       throw new Error('expense transaction list response is invalid');
     }
-    return transactions;
+    return transactions.map(sanitizeExpenseTransaction);
   }
 
   async addTransaction(body) {

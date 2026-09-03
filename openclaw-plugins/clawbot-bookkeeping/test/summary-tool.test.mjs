@@ -74,6 +74,25 @@ test('declares the owner-only expense summary tool in the plugin manifest', () =
   assert.deepEqual(manifest.toolMetadata.summarize_expenses, { profiles: ['minimal'] });
 });
 
+test('uses separate strict schemas for natural and custom summary periods', () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-summary-'));
+  const harness = createPluginHarness(tempDirectory, async () => { throw new Error('fetch must not run'); });
+
+  try {
+    const schema = harness.summarizeExpensesDefinition({}).parameters;
+    assert.equal(schema.anyOf.length, 2);
+    const natural = schema.anyOf.find((branch) => branch.properties.startDate === undefined);
+    const custom = schema.anyOf.find((branch) => branch.properties.startDate !== undefined);
+    assert.equal(natural.additionalProperties, false);
+    assert.equal(natural.properties.keyword.maxLength, 100);
+    assert.deepEqual(custom.required.sort(), ['endDate', 'period', 'startDate']);
+    assert.equal(custom.properties.startDate.pattern, '^\\d{4}-\\d{2}-\\d{2}$');
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
 test('rejects non-owners before reading a token or contacting the ledger', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-summary-'));
   let fetchCount = 0;
@@ -121,6 +140,7 @@ test('returns an authoritative owner expense summary for this month', async () =
         sourceAmount: 825,
         category: { id: 'secondary-1', name: '超市购物', parentId: 'primary-1' },
         comment: 'NTUC',
+        arbitraryPayload: 'arbitrary-payload-marker',
       }] }), { status: 200 });
     }
     throw new Error(`unexpected URL: ${url}`);
@@ -129,15 +149,106 @@ test('returns an authoritative owner expense summary for this month', async () =
   try {
     const tool = harness.summarizeExpensesFactory(ownerContext());
     const result = await withFixedNow(Date.parse('2026-09-03T16:30:00+08:00'), () => tool.execute(
-      'tool-call-summary', { period: 'this_month' },
+      'tool-call-summary', {
+        period: 'this_month',
+        primaryCategory: '食品酒水',
+        subcategory: '超市购物',
+        keyword: '菜+板 & NTUC',
+      },
     ));
 
     assert.match(result.content[0].text, /^这个月一共花了 8\.25 SGD，共 1 笔 📊/u);
     assert.equal(result.details.status, 'ok');
     assert.equal(result.details.totalAmountMinor, 825);
     assert.equal(requests.filter(({ url }) => new URL(url).pathname.endsWith('/transaction/categories/list.json')).length, 1);
-    assert.equal(new URL(requests.at(-1).url).pathname, '/api/v1/transactions/list/all.json');
-    assert.equal(harness.summarizeExpensesDefinition({}).parameters.additionalProperties, false);
+    const transactionRequest = new URL(requests.at(-1).url);
+    assert.equal(transactionRequest.pathname, '/api/v1/transactions/list/all.json');
+    assert.equal(transactionRequest.searchParams.get('category_ids'), 'secondary-1');
+    assert.equal(transactionRequest.searchParams.get('keyword'), '菜+板 & NTUC');
+    const serializedDetails = JSON.stringify(result.details);
+    assert.equal(/comment|sourceAccountId|transaction-1|account-1|NTUC|arbitrary-payload-marker/u.test(serializedDetails), false);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('uses hidden categories for truthful historical mapping and keeps unknown ids separate', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-summary-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async (url) => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith('/accounts/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: [
+        { id: 'account-1', name: '日常支出', currency: 'SGD' },
+      ] }), { status: 200 });
+    }
+    if (pathname.endsWith('/transaction/categories/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: {
+        2: [
+          { id: 'hidden-primary', name: '居家物业', parentId: '0', hidden: true, subCategories: [] },
+          { id: 'visible-primary', name: '食品酒水', parentId: '0', subCategories: [
+            { id: 'hidden-child', name: '饮料甜品', parentId: 'visible-primary', hidden: true },
+          ] },
+          { id: 'real-other', name: '其他杂项', parentId: '0', subCategories: [] },
+        ],
+      } }), { status: 200 });
+    }
+    if (pathname.endsWith('/transactions/list/all.json')) {
+      return new Response(JSON.stringify({ success: true, result: [
+        { type: 3, categoryId: 'hidden-primary', time: 1_788_100_000, sourceAmount: 100 },
+        { type: 3, categoryId: 'hidden-child', time: 1_788_200_000, sourceAmount: 200 },
+        { type: 3, categoryId: 'real-other', time: 1_788_300_000, sourceAmount: 300 },
+        { type: 3, categoryId: 'deleted', time: 1_788_400_000, sourceAmount: 400 },
+      ] }), { status: 200 });
+    }
+    throw new Error(`unexpected URL: ${url}`);
+  });
+
+  try {
+    const result = await harness.summarizeExpensesFactory(ownerContext()).execute('tool-call-history', { period: 'this_month' });
+    assert.deepEqual(result.details.categories, [
+      { name: '未识别分类', amountMinor: 400 },
+      { name: '其他杂项', amountMinor: 300 },
+      { name: '食品酒水', amountMinor: 200 },
+      { name: '居家物业', amountMinor: 100 },
+    ]);
+    assert.deepEqual(result.details.largest[0], {
+      time: 1_788_400_000,
+      amountMinor: 400,
+      categoryName: '未识别分类',
+    });
+    assert.deepEqual(result.details.largest.map((item) => item.categoryName), [
+      '未识别分类', '其他杂项', '饮料甜品',
+    ]);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('omits a blank summary keyword instead of treating it as a ledger failure', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-summary-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  let transactionRequest;
+  const harness = createPluginHarness(tempDirectory, async (url) => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith('/accounts/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: [{ id: 'account-1', name: '日常支出', currency: 'SGD' }] }), { status: 200 });
+    }
+    if (pathname.endsWith('/transaction/categories/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: { 2: [] } }), { status: 200 });
+    }
+    transactionRequest = new URL(url);
+    return new Response(JSON.stringify({ success: true, result: [] }), { status: 200 });
+  });
+
+  try {
+    const result = await harness.summarizeExpensesFactory(ownerContext()).execute('tool-call-blank-keyword', {
+      period: 'this_month', keyword: '   ',
+    });
+    assert.equal(result.details.status, 'ok');
+    assert.equal(transactionRequest.searchParams.has('keyword'), false);
   } finally {
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
@@ -158,6 +269,33 @@ test('returns a stable failure without sensitive ledger details when a read fail
     assert.deepEqual(result.details, { status: 'failed' });
     assert.equal(harness.logs.some((entry) => /test-token|transaction secret/u.test(entry)), false);
     assert.match(harness.logs[0], /Error/u);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('turns a malformed transaction response into the same stable read failure', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-summary-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async (url) => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith('/accounts/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: [{ id: 'account-1', name: '日常支出', currency: 'SGD' }] }), { status: 200 });
+    }
+    if (pathname.endsWith('/transaction/categories/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: { 2: [] } }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ success: true, result: [{
+      type: 2, categoryId: 'bad', time: 1_788_425_460, sourceAmount: 825, comment: 'sensitive comment',
+    }] }), { status: 200 });
+  });
+
+  try {
+    const result = await harness.summarizeExpensesFactory(ownerContext()).execute('tool-call-malformed', { period: 'this_month' });
+    assert.equal(result.content[0].text, '账本暂时连不上，本次没有读取任何数据，请稍后再试。');
+    assert.deepEqual(result.details, { status: 'failed' });
+    assert.equal(harness.logs.some((entry) => /sensitive comment/u.test(entry)), false);
   } finally {
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
