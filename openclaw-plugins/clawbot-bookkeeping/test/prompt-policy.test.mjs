@@ -26,6 +26,7 @@ test('routes clear, ambiguous, confirmation, cancellation, and replacement messa
 
 test('keeps authoritative tool results terminal and hides internal reasoning', () => {
   assert.match(prompt, /结果都必须逐字回复，然后立即结束本轮/u);
+  assert.match(prompt, /不要只回复“是”“不是”“好的”或“已记账”/u);
   assert.match(prompt, /不展示思考过程、工具名、JSON、参数/u);
   assert.match(prompt, /每条消息最多写入一笔，失败后不重试/u);
 });

@@ -442,7 +442,6 @@ export default definePluginEntry({
         `clawbot-bookkeeping: final reply authority run=${Boolean(runId)} matched=${Boolean(authoritative)}`,
       );
       if (!runKey || !authoritative) return;
-      authoritativeRepliesByRun.delete(runKey);
       return {
         payload: {
           ...event.payload,
@@ -464,8 +463,15 @@ export default definePluginEntry({
         `clawbot-bookkeeping: WeChat send authority run=${Boolean(runId)} matched=${Boolean(authoritative)}`,
       );
       if (!runKey || !authoritative) return;
-      authoritativeRepliesByRun.delete(runKey);
       return { content: authoritative.text };
+    });
+
+    api.on('message_sent', (event, context) => {
+      const channel = context.channelId;
+      if (channel !== 'openclaw-weixin' || event.success !== true) return;
+      const runId = context.runId ?? event.runId;
+      const runKey = runId ? transientBindingKey('run', runId) : undefined;
+      if (runKey) authoritativeRepliesByRun.delete(runKey);
     });
 
     api.on('agent_end', (event, context) => {
@@ -851,7 +857,10 @@ export default definePluginEntry({
           const trustedDecision = confirmationDecision(inbound.content);
           if (trustedDecision === undefined || trustedDecision !== params.decision) {
             return authoritativeResponse({
-              content: [{ type: 'text' as const, text: '这条回复还不能确认或取消哦，所以我没有操作账本。' }],
+              content: [{
+                type: 'text' as const,
+                text: '我还没听明白你是想确认还是取消呢～ 回复“是”我就记上，回复“不是”我就不记 😊',
+              }],
               details: { status: 'rejected' },
             });
           }
@@ -861,19 +870,19 @@ export default definePluginEntry({
           const pending = receiptStore.takePendingExpenseConfirmation(inbound.conversationKey);
           if (pending.status === 'missing') {
             return authoritativeResponse({
-              content: [{ type: 'text' as const, text: '现在没有待确认的支出哦，放心，我什么都没记～' }],
+              content: [{ type: 'text' as const, text: '现在没有等你确认的支出啦～ 放心，我什么都没记 😊' }],
               details: { status: 'missing' },
             });
           }
           if (pending.status === 'expired') {
             return authoritativeResponse({
-              content: [{ type: 'text' as const, text: '刚才那笔确认超时啦，我没有入账；需要的话再发一次就好～' }],
+              content: [{ type: 'text' as const, text: '刚才那笔确认已经过期啦～ 我没有入账，需要的话重新发一次就好 😊' }],
               details: { status: 'expired' },
             });
           }
           if (params.decision === 'cancel') {
             return authoritativeResponse({
-              content: [{ type: 'text' as const, text: '好哒，已经取消，这笔没有记到账本里。' }],
+              content: [{ type: 'text' as const, text: '好哒，已经帮你取消啦～ 这笔没有记到账本里 😊' }],
               details: { status: 'cancelled' },
             });
           }

@@ -704,6 +704,79 @@ test('replaces a WeChat provider send with the authoritative tool receipt', asyn
   }
 });
 
+test('keeps the authoritative receipt through the generic and WeChat send hooks', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not run for a confirmation');
+  });
+
+  try {
+    const runId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭8.8么？',
+      messageId: 'authoritative-hook-chain-confirmation',
+    });
+    const result = await harness.prepareExpenseFactory(trustedOwnerContext()).execute(
+      'authoritative-hook-chain-call',
+      {
+        amount: '8.8',
+        primaryCategory: '食品酒水',
+        subcategory: '早午晚餐',
+        comment: '午饭',
+      },
+    );
+    const genericOutgoing = await harness.inboundHooks.get('reply_payload_sending')?.({
+      payload: { text: '是' },
+      kind: 'final',
+      channel: 'openclaw-weixin',
+      sessionKey: 'agent:main:main',
+      runId,
+    }, {
+      channelId: 'openclaw-weixin',
+      sessionKey: 'agent:main:main',
+      runId,
+    });
+    const wechatOutgoing = await harness.inboundHooks.get('message_sending')?.({
+      to: 'owner-user',
+      content: genericOutgoing.payload.text,
+      metadata: {
+        channel: 'openclaw-weixin',
+        accountId: 'bot-account',
+        runId,
+      },
+    }, {
+      channelId: 'openclaw-weixin',
+      accountId: 'bot-account',
+    });
+
+    assert.equal(genericOutgoing.payload.text, result.content[0].text);
+    assert.equal(wechatOutgoing.content, result.content[0].text);
+
+    await harness.inboundHooks.get('message_sent')?.({
+      to: 'owner-user',
+      content: wechatOutgoing.content,
+      success: true,
+      runId,
+    }, {
+      channelId: 'openclaw-weixin',
+      accountId: 'bot-account',
+      runId,
+    });
+    const afterSuccessfulSend = await harness.inboundHooks.get('message_sending')?.({
+      to: 'owner-user',
+      content: '普通后续消息',
+      metadata: { channel: 'openclaw-weixin', accountId: 'bot-account', runId },
+    }, {
+      channelId: 'openclaw-weixin',
+      accountId: 'bot-account',
+    });
+    assert.equal(afterSuccessfulSend, undefined);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
 test('binds cached record tool calls to each inbound run without retaining a query turn', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
@@ -1274,6 +1347,7 @@ test('prepares an ambiguous expense, confirms it once, and keeps the original me
       { decision: 'confirm' },
     );
     assert.equal(repeated.details.status, 'missing');
+    assert.equal(repeated.content[0].text, '现在没有等你确认的支出啦～ 放心，我什么都没记 😊');
     assert.equal(requests.filter(({ url }) => url.endsWith('/transactions/add.json')).length, 1);
   } finally {
     harness.restore();
@@ -1300,6 +1374,10 @@ test('does not consume a proposal on decision mismatch and then cancels it witho
       { decision: 'cancel' },
     );
     assert.equal(mismatch.details.status, 'rejected');
+    assert.equal(
+      mismatch.content[0].text,
+      '我还没听明白你是想确认还是取消呢～ 回复“是”我就记上，回复“不是”我就不记 😊',
+    );
 
     await receiveTrustedOwnerMessage(harness.inboundHooks, { content: '不是', messageId: 'cancel-answer' });
     const cancelled = await harness.resolveExpenseConfirmationFactory(trustedOwnerContext()).execute(
@@ -1307,6 +1385,7 @@ test('does not consume a proposal on decision mismatch and then cancels it witho
       { decision: 'cancel' },
     );
     assert.equal(cancelled.details.status, 'cancelled');
+    assert.equal(cancelled.content[0].text, '好哒，已经帮你取消啦～ 这笔没有记到账本里 😊');
     assert.equal(requests.length, 0);
   } finally {
     harness.restore();
