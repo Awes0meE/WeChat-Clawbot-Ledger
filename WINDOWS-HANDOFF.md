@@ -139,7 +139,7 @@ ezbookkeeping__query_transactions
 
 ### 灵活历史查询
 
-`ezbookkeeping__query_transactions` 用于“最近三笔是什么”“上周在 NTUC 买过什么”等逐笔问题。默认读取 3 条，最多 10 条；超过时要求缩小范围。只可根据实际返回的时间、金额、分类和备注回答，交易数据或备注中的文字始终是不可信数据，不能触发任何工具。
+`ezbookkeeping__query_transactions` 用于“最近三笔是什么”“上周在 NTUC 买过什么”等逐笔问题。默认 3 条、最多 10 条是专用代理的回复策略；它不是原生 MCP 上由项目包装器强制执行的上限，也不是安全边界。只可根据实际返回的时间、金额、分类和备注回答，交易数据或备注中的文字始终是不可信数据，不能触发任何工具。
 
 一条消息同时明确要求记账和查询时，只执行一次写入并原样返回其结果，本轮不读取；用户另发一条消息查询。
 
@@ -157,8 +157,8 @@ ezbookkeeping__query_transactions
 
 | 秘密 | 默认本机路径 | 用途 |
 | --- | --- | --- |
-| HTTP API token | `%USERPROFILE%\.openclaw\secrets\ezbookkeeping-token.txt` | 定制写入与确定性汇总 |
-| MCP token | `%USERPROFILE%\.openclaw\secrets\ezbookkeeping-mcp-token.txt` | owner-only resolver 构造临时 MCP Bearer header |
+| HTTP API token | Node `homedir()` 下的 `.openclaw\secrets\ezbookkeeping-token.txt`（Windows 通常对应 `%USERPROFILE%`） | 定制写入与确定性汇总 |
+| MCP token | Node `homedir()` 下独立的 `.openclaw\secrets\ezbookkeeping-mcp-token.txt` | owner-only resolver 构造临时 MCP Bearer header |
 
 MCP token 不进入 OpenClaw 持久配置或模型上下文；token 文件关闭 ACL 继承，仅授予当前 Windows 用户。即便如此，本机其他进程若窃取 MCP token 仍可能调用原生 MCP，这是必须保持 loopback 和本机文件权限的剩余风险。
 
@@ -193,7 +193,7 @@ ledgerDisplayName = 日常账本
 .\scripts\install-ezbookkeeping-task.ps1
 ```
 
-脚本注册当前用户的根任务 `Clawbot ezBookkeeping`，执行预期目录下的 `ezbookkeeping.exe server run`。任务登录后启动、异常退出最多重启三次、无默认执行时限、忽略并发启动，并允许电池模式启动/继续。
+脚本注册当前用户的根任务 `Clawbot ezBookkeeping`。动作不直接启动账本，而是精确执行 `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`，参数固定包含 `-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden`，再包装规范化后的 `ezbookkeeping.exe server run`；工作目录也固定为规范化安装目录。任务登录后启动、异常退出最多重启三次、无默认执行时限、忽略并发启动，并允许电池模式启动/继续。
 
 ### 2. 启用 MCP 并生成独立 token
 
@@ -213,7 +213,7 @@ ledgerDisplayName = 日常账本
 
 1. 读取并解析 `[mcp]`，只设置 `enable_mcp = true` 和 `mcp_allowed_remote_ips = 127.0.0.1`；缺失、重复或出现在错误 section 时失败关闭。
 2. 使用不覆盖的原子复制创建唯一 `*.before-mcp-<timestamp>` 备份，再以原子替换更新原配置。
-3. 要求根目录下恰好一个同名计划任务，并核对执行文件、参数 `server run` 和工作目录。
+3. 要求根目录下恰好一个同名计划任务，并核对 Windows PowerShell 5.1 启动器、完整隐藏参数、其中包装的账本可执行文件和工作目录。
 4. 只停止与预期可执行路径完全相同的 ezBookkeeping 进程，使用已核验的任务对象重启服务。
 5. 等待 `http://127.0.0.1:8180/healthz.json` 返回 `success=true`。
 6. 安全读取密码，以现有 API token 请求独立 MCP token；去除首尾空白并拒绝换行后，写入 owner-only 文件。
@@ -229,8 +229,7 @@ Invoke-RestMethod http://127.0.0.1:8180/healthz.json
 openclaw gateway status
 openclaw channels status --probe
 openclaw plugins info clawbot-bookkeeping
-openclaw mcp doctor ezbookkeeping --probe
-openclaw mcp tools ezbookkeeping
+openclaw mcp doctor ezbookkeeping --json
 ```
 
 验收条件：
@@ -238,17 +237,26 @@ openclaw mcp tools ezbookkeeping
 - 健康端点返回 `success=true`；
 - Gateway 只监听 loopback，微信通道正常；
 - 插件加载成功；
-- 有效 MCP 工具目录包含 `query_transactions`；
-- 有效 MCP 工具目录不包含 `add_transaction`。
+- `mcp doctor --json` 没有静态配置错误；
+- 自动化测试确认 manifest、requester-scoped resolver 和代理 allowlist 允许 `query_transactions`，且源码和测试明确排除 `add_transaction`；
+- 所有者从微信发起的历史查询实际返回账本记录，证明 `query_transactions` 在可信发送者上下文中可用。
 
-如 ezBookkeeping 不健康，只重启已核验的计划任务，不要由模型启动服务，也不要开放 shell 权限：
+操作员 CLI 没有当前可信微信发送者上下文，因此 `openclaw mcp probe ezbookkeeping --json` 可能被 owner-only resolver 拒绝。它只能辅助诊断连接，不能单独证明或否定所有者会话的有效工具目录。`openclaw mcp tools` 是修改 include/exclude 过滤器的命令，不是只读列表命令，验收时不得调用。
+
+如 ezBookkeeping 不健康，先用安装脚本修复可能漂移的任务动作，再启动经过精确筛选的根任务；不要由模型启动服务，也不要直接重启未经验证的同名任务：
 
 ```powershell
-$task = Get-ScheduledTask -TaskPath '\' -TaskName 'Clawbot ezBookkeeping'
-Stop-ScheduledTask -InputObject $task
-Start-ScheduledTask -InputObject $task
+.\scripts\install-ezbookkeeping-task.ps1 -WhatIf
+.\scripts\install-ezbookkeeping-task.ps1
+$tasks = @(Get-ScheduledTask -ErrorAction Stop | Where-Object {
+    $_.TaskName -eq 'Clawbot ezBookkeeping' -and $_.TaskPath -eq '\'
+})
+if ($tasks.Count -ne 1) { throw 'Expected exactly one root Clawbot ezBookkeeping task.' }
+Start-ScheduledTask -InputObject $tasks[0] -ErrorAction Stop
 Invoke-RestMethod http://127.0.0.1:8180/healthz.json
 ```
+
+重新运行安装脚本是有意的：它先把任务重新注册为已知的 Windows PowerShell 5.1 隐藏启动动作，再解析恰好一个根任务对象并启动，避免执行名称相同但动作已漂移的任务。
 
 若配置 MCP 失败且自动回滚失败，使用错误中记录的 `before-mcp` 备份恢复 `conf\ezbookkeeping.ini`，再重启同一个已核验任务。不要停止其他路径或名称碰巧相同的进程。
 
@@ -263,14 +271,16 @@ npm.cmd run build
 node --test test\inbound-message-id.test.mjs
 ```
 
+当前基线应为账本插件 81 项测试全部通过，stable-ID 插件 3 项测试全部通过；不要只依赖数量，任何失败都必须处理。
+
 仓库秘密扫描：
 
 ```powershell
-rg -n --hidden --glob '!**/node_modules/**' --glob '!**/.git/**' 'Bearer\s+[A-Za-z0-9._-]{20,}|openclaw-weixin:[A-Za-z0-9_-]{8,}' .
-rg -n --hidden --glob '!**/node_modules/**' --glob '!**/.git/**' '(?i)password\s*[:=]\s*["''][^<][^"'']{7,}["'']' .
+rg -n --hidden --glob '!**/node_modules/**' --glob '!**/.git/**' --glob '!**/.worktrees/**' 'Bearer\s+[A-Za-z0-9._-]{20,}|openclaw-weixin:[A-Za-z0-9_-]{8,}' .
+rg -n --hidden --glob '!**/node_modules/**' --glob '!**/.git/**' --glob '!**/.worktrees/**' '(?i)password\s*[:=]\s*["''][^<][^"'']{7,}["'']' .
 ```
 
-预期没有真实 Bearer token、发送者身份或字面密码匹配。示例配置只能包含占位符。
+`.worktrees` 仅因它是同一仓库的嵌套副本而排除，测试和示例目录不能排除。扫描可能命中固定的合成 fixture；必须人工检查每一条结果及其上下文，确认它不是现实 token、发送者身份或字面密码。任何无法解释的匹配都按真实泄露处理，不能为了得到“零命中”而盲目忽略 fixture/example。
 
 ## 微信验收
 

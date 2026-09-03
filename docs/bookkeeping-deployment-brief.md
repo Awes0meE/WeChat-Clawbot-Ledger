@@ -22,7 +22,7 @@ WeChat -> OpenClaw owner-bound local Qwen
 读取分两条路径：
 
 - `summarize_expenses` 通过 HTTP API 读取固定账户的支出，由代码按整数分计算今天、本周、本月、上月、今年或自定义范围内的总额、笔数、一级分类汇总和最大三笔。它可按正式分类或备注关键词过滤，不依赖模型心算。
-- `ezbookkeeping__query_transactions` 使用 ezBookkeeping 原生 MCP 回答最近记录、商家或备注等灵活历史问题。第一版服务级与代理级都只允许 `query_transactions`，不开放余额、分类、标签、汇率和任何写工具。
+- `ezbookkeeping__query_transactions` 使用 ezBookkeeping 原生 MCP 回答最近记录、商家或备注等灵活历史问题。第一版服务级与代理级都只允许 `query_transactions`，不开放余额、分类、标签、汇率和任何写工具。默认 3 条、最多 10 条只是专用代理的回复策略，不是原生 MCP 的项目侧硬限制或安全边界。
 
 查询优先识别。消息里出现日期、数量或“支出”不等于要写入；只有明确表达已发生消费且金额明确时才调用一次 `record_expense`。同一条消息同时要求写入和查询时，本轮只写一次，查询另发。
 
@@ -91,8 +91,8 @@ WeChat -> OpenClaw owner-bound local Qwen
 
 API token 与 MCP token 必须分开：
 
-- API token 文件默认位于当前用户的 `.openclaw\secrets\ezbookkeeping-token.txt`，供定制 HTTP 适配器读取；
-- MCP token 文件默认位于 `.openclaw\secrets\ezbookkeeping-mcp-token.txt`，只供 owner-only resolver 读取；
+- API token 未显式配置路径时，代码从 Node `homedir()`（Windows 通常为 `%USERPROFILE%`）下的 `.openclaw\secrets\ezbookkeeping-token.txt` 读取，供定制 HTTP 适配器使用；
+- MCP token 使用独立的 `homedir()` 回退路径 `.openclaw\secrets\ezbookkeeping-mcp-token.txt`，只供 owner-only resolver 读取；
 - MCP token 文件关闭继承并只授予当前 Windows 用户访问；
 - token 不得进入 Git、OpenClaw 持久配置、提示词、日志或微信回复。
 
@@ -100,7 +100,7 @@ API token 与 MCP token 必须分开：
 
 ## Windows 服务与配置
 
-ezBookkeeping 默认目录为 `D:\Clawbot\ezbookkeeping`，配置文件使用真实嵌套路径 `D:\Clawbot\ezbookkeeping\conf\ezbookkeeping.ini`。后台任务必须登录后自动启动、隐藏运行、异常重启、没有默认执行时限，并允许在电池状态下继续。
+ezBookkeeping 默认目录为 `D:\Clawbot\ezbookkeeping`，配置文件使用真实嵌套路径 `D:\Clawbot\ezbookkeeping\conf\ezbookkeeping.ini`。后台任务必须登录后自动启动、隐藏运行、异常重启、没有默认执行时限，并允许在电池状态下继续。隐藏运行由精确的 Windows PowerShell 5.1 启动器实现：系统 `powershell.exe` 使用 `-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden` 包装规范化后的 `ezbookkeeping.exe server run`。
 
 先用 `-WhatIf` 预演；预演不得修改配置、计划任务、服务或 token，也不会询问密码：
 
@@ -116,11 +116,11 @@ ezBookkeeping 默认目录为 `D:\Clawbot\ezbookkeeping`，配置文件使用真
 .\scripts\configure-ezbookkeeping-mcp.ps1
 ```
 
-安装脚本创建 `Clawbot ezBookkeeping` 登录任务。MCP 配置脚本会：
+安装脚本创建 `Clawbot ezBookkeeping` 登录任务及上述精确隐藏动作；配置脚本在任何任务控制前验证同一启动器、参数和工作目录。MCP 配置脚本会：
 
 1. 解析 `[mcp]` 并只把 `enable_mcp` 与 `mcp_allowed_remote_ips` 改为 `true` 和 `127.0.0.1`；
 2. 原子创建不覆盖的时间戳备份，并原子替换配置；
-3. 校验根目录中恰好一个同名任务，且可执行文件、参数 `server run` 和工作目录完全匹配；
+3. 校验根目录中恰好一个同名任务，且 Windows PowerShell 5.1 启动器、完整隐藏参数、其中包装的账本可执行文件和工作目录完全匹配；
 4. 只停止预期安装路径的 ezBookkeeping 进程，重启任务并等待 `/healthz.json` 返回 `success=true`；
 5. 在控制台安全读取密码，通过现有 API token 生成独立 MCP token，并写入仅当前用户可读的文件。
 
@@ -136,14 +136,15 @@ Set-Location ..\openclaw-weixin-stable-id
 npm.cmd run build
 node --test test\inbound-message-id.test.mjs
 
-openclaw mcp doctor ezbookkeeping --probe
-openclaw mcp tools ezbookkeeping
+openclaw mcp doctor ezbookkeeping --json
 openclaw gateway status
 openclaw channels status --probe
 openclaw plugins info clawbot-bookkeeping
 ```
 
-成功的 MCP 验证必须在有效 OpenClaw 工具目录中看到 `query_transactions`，且看不到 `add_transaction`。完整验收还包括：所有者发送一条新的消费得到六行回执并在 ezBookkeeping 中只出现一笔；随后分别询问本月汇总、分类汇总、最近三笔和备注关键词历史，并确认查询没有写入。
+`mcp doctor --json` 只验证静态设置。操作员 CLI 没有当前可信微信发送者上下文，因此 `openclaw mcp probe ezbookkeeping --json` 可能被 requester-scoped resolver 拒绝，也不能证明所有者会话的有效目录。第一版的确定性证据由 81 项账本插件测试提供：manifest、resolver 和代理 allowlist 允许 `query_transactions`，源码和测试明确排除 `add_transaction`；stable-ID 插件另有 3 项测试。最终必须由所有者在微信发起真实历史查询，证明 `query_transactions` 在可信上下文中可用；再核对写入、汇总和查询不会越权。
+
+仓库秘密扫描不得跳过测试或示例目录。若从包含多个 worktree 的上级仓库运行，应只排除嵌套 `.worktrees` 副本以避免重复结果；每一条匹配仍须人工核验，不能因它位于 fixture/example 中就自动视为安全。具体命令和处置标准见 `WINDOWS-HANDOFF.md`。
 
 ## 延后事项
 

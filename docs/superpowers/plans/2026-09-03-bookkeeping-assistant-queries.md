@@ -1247,13 +1247,12 @@ WeChat -> OpenClaw owner-bound local Qwen
 Replace the old two-tool claim with the exact final allowlist. Add verification commands:
 
 ```powershell
-openclaw mcp doctor ezbookkeeping --probe
-openclaw mcp tools ezbookkeeping
+openclaw mcp doctor ezbookkeeping --json
 openclaw gateway status
 openclaw channels status --probe
 ```
 
-State that successful probe output must include `query_transactions` and exclude `add_transaction` from the effective OpenClaw catalog.
+State that `doctor --json` is only a static check. The operator CLI lacks trusted WeChat requester context, so `mcp probe ezbookkeeping --json` may be denied and cannot establish the owner-scoped effective catalog. Use automated manifest/resolver/allowlist tests to prove that source includes `query_transactions` and excludes `add_transaction`, then use an owner WeChat history query as the end-to-end acceptance.
 
 - [ ] **Step 3: Update the detailed handoff and deployment brief**
 
@@ -1273,12 +1272,12 @@ Record:
 Run:
 
 ```powershell
-rg -n --hidden --glob '!**/node_modules/**' --glob '!**/.git/**' 'Bearer\s+[A-Za-z0-9._-]{20,}|openclaw-weixin:[A-Za-z0-9_-]{8,}' .
-rg -n --hidden --glob '!**/node_modules/**' --glob '!**/.git/**' '(?i)password\s*[:=]\s*["''][^<][^"'']{7,}["'']' .
+rg -n --hidden --glob '!**/node_modules/**' --glob '!**/.git/**' --glob '!**/.worktrees/**' 'Bearer\s+[A-Za-z0-9._-]{20,}|openclaw-weixin:[A-Za-z0-9_-]{8,}' .
+rg -n --hidden --glob '!**/node_modules/**' --glob '!**/.git/**' --glob '!**/.worktrees/**' '(?i)password\s*[:=]\s*["''][^<][^"'']{7,}["'']' .
 git diff --cached --check
 ```
 
-Expected: zero live credential, literal-password, or sender-identity matches, and no staged whitespace errors. Documentation may contain only generic field names and paths. Separately compare the staged diff against the known live credentials in memory without writing those values into this plan, a command, or Git history.
+Expected: no unexplained live credential, literal-password, or sender-identity matches, and no staged whitespace errors. Review every match, including tests and examples; a synthetic fixture is not exempt merely because of its path. Documentation may contain only generic field names and paths. Separately compare the staged diff against the known live credentials in memory without writing those values into this plan, a command, or Git history.
 
 - [ ] **Step 5: Run full tests and commit documentation**
 
@@ -1397,11 +1396,10 @@ openclaw gateway restart --safe
 openclaw gateway status
 openclaw channels status --probe
 openclaw plugins info clawbot-bookkeeping
-openclaw mcp doctor ezbookkeeping --probe
-openclaw mcp tools ezbookkeeping
+openclaw mcp doctor ezbookkeeping --json
 ```
 
-Expected: Gateway and WeChat are healthy; plugin is active; MCP connects; effective tool output includes `query_transactions` and does not expose `add_transaction` to the bookkeeper.
+Expected: Gateway and WeChat are healthy; plugin is active; static MCP configuration has no doctor error. The automated manifest/resolver/allowlist tests establish that source includes `query_transactions` and excludes `add_transaction`; the owner WeChat history query in the next step proves requester-scoped connectivity. Do not call `openclaw mcp tools` for verification because it mutates include/exclude filters.
 
 - [ ] **Step 7: Perform real WeChat acceptance in order**
 
