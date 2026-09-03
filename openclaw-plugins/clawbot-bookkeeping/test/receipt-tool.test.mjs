@@ -257,6 +257,36 @@ test('binds a trusted owner run when the embedded before-tool hook omits request
   }
 });
 
+test('uses the trusted owner message when compacted tool context loses the owner flag', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const harness = createPluginHarness(tempDirectory, successfulExpenseFetch(requests));
+
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭8.8么？',
+      messageId: 'compacted-owner-context',
+    });
+    const result = await harness.prepareExpenseFactory({
+      ...trustedOwnerContext(),
+      senderIsOwner: false,
+    }).execute('compacted-owner-context-call', {
+      amount: '8.8',
+      primaryCategory: '食品酒水',
+      subcategory: '早午晚餐',
+      comment: '午饭',
+    });
+
+    assert.equal(result.details.status, 'pending_confirmation');
+    assert.match(result.content[0].text, /^帮你核对一下这笔～🤔/u);
+    assert.equal(requests.length, 0);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
 test('binds the exact owner conversation when current transport metadata is absent from run history', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');

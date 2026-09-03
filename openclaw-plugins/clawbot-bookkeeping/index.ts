@@ -362,7 +362,7 @@ export default definePluginEntry({
     });
 
     api.on('before_tool_call', (event, context) => {
-      if (!EXPENSE_TOOL_NAMES.has(event.toolName)) return;
+      if (!AUTHORITATIVE_REPLY_TOOL_NAMES.has(event.toolName)) return;
       const now = Date.now();
       pruneExpiredToolCallSlots(now);
       const runId = context.runId ?? event.runId;
@@ -612,7 +612,11 @@ export default definePluginEntry({
         parameters: SUMMARY_PARAMETERS,
         async execute(_id, params: SummaryParams) {
           if (toolContext.senderIsOwner !== true) {
-            throw new Error('无法确认消息发送者为账本 owner，已拒绝查询。');
+            try {
+              takeToolCallBinding(_id);
+            } catch {
+              throw new Error('无法确认消息发送者为账本 owner，已拒绝查询。');
+            }
           }
           if (params.subcategory !== undefined && params.primaryCategory === undefined) {
             throw new Error('二级分类查询必须同时指定一级分类。');
@@ -683,9 +687,6 @@ export default definePluginEntry({
           ].join('\n'),
           parameters: EXPENSE_PARAMETERS,
           async execute(_id, params: RecordExpenseParams) {
-            if (toolContext.senderIsOwner !== true) {
-              throw new Error('无法确认消息发送者为账本所有者，已拒绝入账。');
-            }
             const { inbound, isStillAuthorized, authoritativeResponse } = takeToolCallBinding(_id);
             const normalizedInput = {
               ...params,
@@ -766,9 +767,6 @@ export default definePluginEntry({
         ].join('\n'),
         parameters: EXPENSE_PARAMETERS,
         async execute(_id, params: RecordExpenseParams) {
-          if (toolContext.senderIsOwner !== true) {
-            throw new Error('无法确认消息发送者为账本所有者，已拒绝准备入账。');
-          }
           const { inbound, isStillAuthorized, authoritativeResponse } = takeToolCallBinding(_id);
           const normalizedInput = {
             ...params,
@@ -832,9 +830,6 @@ export default definePluginEntry({
           decision: Type.Union([Type.Literal('confirm'), Type.Literal('cancel')]),
         }, { additionalProperties: false }),
         async execute(_id, params: ResolveExpenseConfirmationParams) {
-          if (toolContext.senderIsOwner !== true) {
-            throw new Error('无法确认消息发送者为账本所有者，已拒绝处理确认。');
-          }
           const { inbound, isStillAuthorized, authoritativeResponse } = takeToolCallBinding(_id);
           const trustedDecision = confirmationDecision(inbound.content);
           if (trustedDecision === undefined || trustedDecision !== params.decision) {
