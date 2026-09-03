@@ -1205,6 +1205,74 @@ git commit -m "docs: document local bookkeeping assistant operations"
 - Runtime only: `%USERPROFILE%\.openclaw\secrets\ezbookkeeping-mcp-token.txt`
 - Runtime only: installed `clawbot-bookkeeping` plugin and bookkeeper workspace
 
+- [ ] **Preflight: Assert that no static ezBookkeeping MCP fallback exists**
+
+Before backing up, installing, or changing any runtime configuration, run this read-only PowerShell 5.1 check. It inspects property names only and never prints or serializes the configuration object, headers, or values. Missing `mcp` or `servers` properties pass safely.
+
+```powershell
+function Assert-NoStaticEzBookkeepingMcpFallback {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$ConfigPath)
+
+    $rawConfig = $null
+    $configObject = $null
+    try {
+        $rawConfig = [IO.File]::ReadAllText($ConfigPath, [Text.Encoding]::UTF8)
+        $configObject = ConvertFrom-Json -InputObject $rawConfig -ErrorAction Stop
+    } catch {
+        throw 'Could not safely inspect OpenClaw configuration; stop deployment.'
+    } finally {
+        $rawConfig = $null
+    }
+
+    try {
+        if ($null -eq $configObject -or $configObject -isnot [PSCustomObject]) {
+            throw 'Could not safely inspect OpenClaw configuration; stop deployment.'
+        }
+
+        $mcpProperties = @($configObject.PSObject.Properties | Where-Object { $_.Name -ieq 'mcp' })
+        if ($mcpProperties.Count -gt 1) {
+            throw 'Could not safely inspect OpenClaw configuration; stop deployment.'
+        }
+
+        if ($mcpProperties.Count -eq 1) {
+            $mcpObject = $mcpProperties[0].Value
+            if ($null -eq $mcpObject -or $mcpObject -isnot [PSCustomObject]) {
+                throw 'Could not safely inspect OpenClaw configuration; stop deployment.'
+            }
+
+            $serverProperties = @($mcpObject.PSObject.Properties | Where-Object { $_.Name -ieq 'servers' })
+            if ($serverProperties.Count -gt 1) {
+                throw 'Could not safely inspect OpenClaw configuration; stop deployment.'
+            }
+
+            if ($serverProperties.Count -eq 1) {
+                $serversObject = $serverProperties[0].Value
+                if ($null -eq $serversObject -or $serversObject -isnot [PSCustomObject]) {
+                    throw 'Could not safely inspect OpenClaw configuration; stop deployment.'
+                }
+
+                $bookkeepingProperties = @($serversObject.PSObject.Properties | Where-Object {
+                    $_.Name -ieq 'ezbookkeeping'
+                })
+                if ($bookkeepingProperties.Count -gt 0) {
+                    throw 'Static ezbookkeeping MCP fallback detected; stop deployment and review removal separately.'
+                }
+            }
+        }
+    } finally {
+        $configObject = $null
+    }
+
+    Write-Output 'STATIC_EZBOOKKEEPING_MCP_FALLBACK_ABSENT'
+}
+
+$openclawConfigPath = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.openclaw\openclaw.json'
+Assert-NoStaticEzBookkeepingMcpFallback -ConfigPath $openclawConfigPath
+```
+
+Expected: only `STATIC_EZBOOKKEEPING_MCP_FALLBACK_ABSENT` is emitted. If inspection fails or the property exists, stop deployment and require a separate reviewed removal; do not display or automatically delete the entry. This assertion, the 81 manifest/resolver/allowlist tests, and an owner-context WeChat history query close the no-static-fallback evidence chain.
+
 - [ ] **Step 1: Back up runtime configuration without copying secrets into Git**
 
 Use timestamped copies beside the live files, outside the repository:
@@ -1300,7 +1368,7 @@ openclaw channels status --probe
 openclaw plugins info clawbot-bookkeeping
 ```
 
-Expected: Gateway and WeChat are healthy and the plugin is active. No top-level `mcp.servers` connection is added. The automated manifest/resolver/allowlist tests establish that source includes `query_transactions` and excludes `add_transaction`; the owner WeChat history query in the next step proves requester-scoped connectivity.
+Expected: Gateway and WeChat are healthy and the plugin is active. The preflight assertion proved that no top-level `mcp.servers.ezbookkeeping` entry existed before deployment, and these steps added none. The automated manifest/resolver/allowlist tests establish that source includes `query_transactions` and excludes `add_transaction`; the owner WeChat history query in the next step proves requester-scoped connectivity and completes the evidence chain.
 
 - [ ] **Step 7: Perform real WeChat acceptance in order**
 

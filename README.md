@@ -113,7 +113,7 @@ openclaw channels status --probe
 openclaw plugins info clawbot-bookkeeping
 ```
 
-动态 MCP 由插件 manifest 和 requester-scoped resolver 声明，不应为了 CLI 诊断另加顶层 `mcp.servers` 静态连接。第一版的确定性证据是 81 项账本插件测试对 manifest、resolver 和代理 allowlist 的检查：允许 `query_transactions`，源码和测试明确排除 `add_transaction`；最终再由所有者从微信发起一条历史查询，证明 `query_transactions` 在真实可信上下文中可用。stable-ID 插件另有 3 项测试。
+动态 MCP 由插件 manifest 和 requester-scoped resolver 声明，不应为了 CLI 诊断另加顶层 `mcp.servers` 静态连接。任何本机配置或部署变更前，必须执行 `WINDOWS-HANDOFF.md` 中只检查属性名的只读断言；若顶层 `mcp.servers` 下存在 `ezbookkeeping`，立即停止部署，另行审核后再移除，不能由部署步骤自动删除。该断言不显示配置对象、header 或值。它与 81 项账本插件测试（manifest、resolver、allowlist 允许 `query_transactions`，源码和测试明确排除 `add_transaction`）及所有者微信历史查询共同闭合“无静态后备连接”的证据链；stable-ID 插件另有 3 项测试。
 
 秘密扫描从仓库根目录执行时应排除嵌套 `.worktrees` 副本，但不得排除测试或示例目录；每一条命中都必须人工核对，任何无法证明是固定合成数据或占位符的结果都必须按真实泄露处理。详细命令见 `WINDOWS-HANDOFF.md`。
 

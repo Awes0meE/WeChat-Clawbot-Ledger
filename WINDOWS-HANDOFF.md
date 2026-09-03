@@ -175,6 +175,74 @@ ledgerDisplayName = 日常账本
 
 微信账户绑定和 `commands.ownerAllowFrom` 只写入本机配置，不进入仓库示例的真实值。
 
+### 部署前断言：没有静态 MCP 后备连接
+
+在备份、安装或修改任何本机配置之前，从仓库根目录执行下列只读检查。它只遍历属性名，不输出或序列化配置对象、header 或任何值；`mcp` 或 `servers` 不存在时会安全通过。
+
+```powershell
+function Assert-NoStaticEzBookkeepingMcpFallback {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$ConfigPath)
+
+    $rawConfig = $null
+    $configObject = $null
+    try {
+        $rawConfig = [IO.File]::ReadAllText($ConfigPath, [Text.Encoding]::UTF8)
+        $configObject = ConvertFrom-Json -InputObject $rawConfig -ErrorAction Stop
+    } catch {
+        throw 'Could not safely inspect OpenClaw configuration; stop deployment.'
+    } finally {
+        $rawConfig = $null
+    }
+
+    try {
+        if ($null -eq $configObject -or $configObject -isnot [PSCustomObject]) {
+            throw 'Could not safely inspect OpenClaw configuration; stop deployment.'
+        }
+
+        $mcpProperties = @($configObject.PSObject.Properties | Where-Object { $_.Name -ieq 'mcp' })
+        if ($mcpProperties.Count -gt 1) {
+            throw 'Could not safely inspect OpenClaw configuration; stop deployment.'
+        }
+
+        if ($mcpProperties.Count -eq 1) {
+            $mcpObject = $mcpProperties[0].Value
+            if ($null -eq $mcpObject -or $mcpObject -isnot [PSCustomObject]) {
+                throw 'Could not safely inspect OpenClaw configuration; stop deployment.'
+            }
+
+            $serverProperties = @($mcpObject.PSObject.Properties | Where-Object { $_.Name -ieq 'servers' })
+            if ($serverProperties.Count -gt 1) {
+                throw 'Could not safely inspect OpenClaw configuration; stop deployment.'
+            }
+
+            if ($serverProperties.Count -eq 1) {
+                $serversObject = $serverProperties[0].Value
+                if ($null -eq $serversObject -or $serversObject -isnot [PSCustomObject]) {
+                    throw 'Could not safely inspect OpenClaw configuration; stop deployment.'
+                }
+
+                $bookkeepingProperties = @($serversObject.PSObject.Properties | Where-Object {
+                    $_.Name -ieq 'ezbookkeeping'
+                })
+                if ($bookkeepingProperties.Count -gt 0) {
+                    throw 'Static ezbookkeeping MCP fallback detected; stop deployment and review removal separately.'
+                }
+            }
+        }
+    } finally {
+        $configObject = $null
+    }
+
+    Write-Output 'STATIC_EZBOOKKEEPING_MCP_FALLBACK_ABSENT'
+}
+
+$openclawConfigPath = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.openclaw\openclaw.json'
+Assert-NoStaticEzBookkeepingMcpFallback -ConfigPath $openclawConfigPath
+```
+
+只有看到 `STATIC_EZBOOKKEEPING_MCP_FALLBACK_ABSENT` 才能继续。若检查失败或发现该属性，停止部署；不要显示其内容，也不要自动删除，必须另开一次有审核的移除操作。此断言、81 项 manifest/resolver/allowlist 测试和所有者微信历史查询共同闭合“无静态后备连接”的证据链。
+
 ## Windows 安装
 
 默认安装目录是 `D:\Clawbot\ezbookkeeping`，实际配置文件位于嵌套目录 `D:\Clawbot\ezbookkeeping\conf\ezbookkeeping.ini`。
@@ -239,7 +307,7 @@ openclaw plugins info clawbot-bookkeeping
 - 自动化测试确认 manifest、requester-scoped resolver 和代理 allowlist 允许 `query_transactions`，且源码和测试明确排除 `add_transaction`；
 - 所有者从微信发起的历史查询实际返回账本记录，证明 `query_transactions` 在可信发送者上下文中可用。
 
-动态 MCP 由插件 manifest 和 requester-scoped resolver 声明，故意不配置顶层 `mcp.servers` 静态连接。第一版不使用 operator CLI 证明该动态连接；以插件加载结果、自动化策略测试和所有者微信历史查询组成完整证据链。
+动态 MCP 由插件 manifest 和 requester-scoped resolver 声明，故意不配置顶层 `mcp.servers` 静态连接。第一版不使用 operator CLI 证明该动态连接；部署前属性名断言证明没有静态 `ezbookkeeping` 后备项，插件加载结果和自动化策略测试证明动态声明与最小工具目录，所有者微信历史查询证明可信上下文中的实际连接。
 
 如 ezBookkeeping 不健康，先用安装脚本修复可能漂移的任务动作，再启动经过精确筛选的根任务；不要由模型启动服务，也不要直接重启未经验证的同名任务：
 
