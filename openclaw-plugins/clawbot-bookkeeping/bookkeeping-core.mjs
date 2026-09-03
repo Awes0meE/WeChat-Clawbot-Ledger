@@ -13,7 +13,6 @@ const INSTRUCTION_INJECTION = /(?:record_expense|summarize_expenses|query_transa
 const QUANTITY_OR_TIME_UNIT = /^(?:个|位|人|根|件|张|瓶|杯|盒|包|份|次|天|小时|分钟|秒|公里|千米|米|厘米|毫米|km|kg|公斤|斤|克|年|月|日|号|点)/iu;
 const ADMIN_AMOUNT_CUE = /(?:订单(?:号)?|余额|原价|标价|用券|券|优惠(?:后)?|折扣|编号|单号)\s*$/u;
 const ADMIN_AMOUNT_CLAUSE = /^\s*(?:订单(?:号)?|余额|原价|标价|用券|优惠|折扣|编号|单号)/u;
-const ACTUAL_PAID_CUE = /(?:实付|实际支付|实际付款|已付|支付|付款|花了)\s*$/u;
 const EXPENSE_OBJECT_CUE = /(?:早饭|早餐|午饭|午餐|晚饭|晚餐|夜宵|咖啡|奶茶|饮料|甜品|零食|水果|超市|购物|买菜|食阁|餐饮|吃饭|打车|出租车|公交|地铁|停车|加油|房租|水电|话费|网费|药品?|医院|健身|电影|旅行|旅游|日用品|[\p{L}\d]{1,16}(?:费|票|租|税))\s*$/iu;
 const EXPENSE_ACTION_CUE = /(?:花了?|消费了?|支出|买了?|购入|吃了?)\s*$/u;
 
@@ -84,7 +83,6 @@ function eligibleAmountCandidates(clause, clauseIndex) {
       clause,
       clauseIndex,
       matchIndex,
-      explicitPaid: ACTUAL_PAID_CUE.test(prefix),
     });
   }
   return candidates;
@@ -115,11 +113,9 @@ function isAuthorizedExpenseMessage(content, requestedAmountMinor) {
 
   const clauses = text.split(/[，,。；;！!\r\n]+/u).filter(Boolean);
   const candidates = clauses.flatMap((clause, clauseIndex) => eligibleAmountCandidates(clause, clauseIndex));
-  const explicitPaid = candidates.filter((candidate) => candidate.explicitPaid);
-  const eligible = explicitPaid.length > 0 ? explicitPaid : candidates;
-  if (eligible.length !== 1) return false;
+  if (candidates.length !== 1) return false;
 
-  const candidate = eligible[0];
+  const candidate = candidates[0];
   if (candidate.amountMinor !== requestedAmountMinor
     || !hasExpenseContextText(candidate.clause)
     || !hasProvableExpenseSyntax(candidate)) return false;

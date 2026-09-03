@@ -378,6 +378,8 @@ for (const [label, content, amount, comment = ''] of [
   ['cashback', '午饭返现7.2', '7.2'],
   ['boss quote', '老板说午饭7.2', '7.2'],
   ['saved text', '请保存这段文字：午饭7.2', '7.2'],
+  ['ambiguous amount after explicit paid wording', '午饭花了7.2，咖啡3', '7.2'],
+  ['ambiguous later explicit paid wording', '午饭7.2，咖啡花了3', '3'],
 ]) {
   test(`rejects ${label} before claiming or contacting the ledger`, async () => {
     let claimCount = 0;
