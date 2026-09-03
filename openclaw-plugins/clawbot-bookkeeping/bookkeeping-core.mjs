@@ -7,23 +7,7 @@ const INSTRUCTION_INJECTION = /(?:record_expense|summarize_expenses|query_transa
 const QUANTITY_OR_TIME_UNIT = /^(?:个|位|人|根|件|张|瓶|杯|盒|包|份|次|天|小时|分钟|秒|公里|千米|米|厘米|毫米|km|kg|公斤|斤|克|年|月|日|号|点)/iu;
 const ADMIN_AMOUNT_CUE = /(?:订单(?:号)?|余额|原价|标价|用券|券|优惠(?:后)?|折扣|编号|单号)\s*$/u;
 const ADMIN_AMOUNT_CLAUSE = /^\s*(?:订单(?:号)?|余额|原价|标价|用券|优惠|折扣|编号|单号)/u;
-const EXPLICIT_COMMAND_PREFIX = /^(?:(?:(?:请|麻烦)?(?:帮我|给我)?(?:记账|记一笔|记|记录一下|记录|入账))|(?:能帮我(?:记账|记一笔|记|记录一下|记录|入账)))\s*[：:]?\s*/u;
-const NON_EXPENSE_SEMANTIC_OPERATOR = /(?:不|没|未|无需|无须|取消|撤销|停止|比如|例如|示例|举例|假如|假设|听说|据说|显示|提醒|记住|保存|引用|转述|请我|替我|代付|请客|报销|退款|退回|返现|收款|收入|到账|转我|免费|预计|计划|准备|将要)/u;
-const SAFE_SHORTHAND = /^(?:早饭|早餐|午饭|午餐|晚饭|晚餐|夜宵|咖啡|奶茶|餐饮|买菜|NTUC购物|食阁吃饭|检查费)$/iu;
-const SAFE_DESCRIPTION = /^[\p{L}\p{N}][\p{L}\p{N}\s·&（）()\-]{0,59}$/u;
-const DECLARATIVE_AMOUNT_SUFFIX = /^\s*(?:(?:SGD|新币|新元|人民币|块钱|块|元)\s*)?$/iu;
-const POLITE_COMMAND_QUESTION_SUFFIX = /^\s*(?:(?:SGD|新币|新元|人民币|块钱|块|元)\s*)?(?:吗[?？]?|[?？])\s*$/iu;
-const SELF_AT_TRAILING_ACTION = /^我(?:刚刚?|刚才|今天|昨晚|中午|晚上)?在(.+?)(?:花了?|消费了?|支付了?|付了?|付款)$/u;
-const SELF_SHORTHAND_TRAILING_ACTION = /^我(?:刚刚?|刚才|今天|昨晚|中午|晚上)?(.+?)(?:花了?|消费了?|支付了?|付了?|付款)$/u;
-const SELF_AMOUNT_ONLY_ACTION = /^我(?:刚刚?|刚才|今天|昨晚|中午|晚上)?(?:花了?|消费了?|支付了?|付了?|付款|买了?)$/u;
-const SELF_LEADING_ACTION = /^我(?:刚刚?|刚才|今天|昨晚|中午|晚上)?(?:买了?|购入|吃了?)(.+)$/u;
-const SHORTHAND_TRAILING_ACTION = /^(.*?)(?:花了?|消费了?)$/u;
-const ORDER_REFERENCE_CLAUSE = /^订单(?:号)?\s*\d+$/u;
-const ADMIN_SUFFIX_CLAUSE = /^(?:余额|用券)\s*\d+(?:\.\d{1,2})?(?:\s*[+＋]\s*\d+(?:\.\d{1,2})?)*$/u;
-const READ_AFTER_WRITE_CLAUSE = /^顺便(?:查|查询)(?:本月|这个月|本周|今天|上月|上个月|今年)?(?:支出|消费|账单|记录)$/u;
-const PURCHASE_DETAIL_START = /^买了(?:[一二两三四五六七八九十百千万]+(?:个|根|件|张|瓶|杯|盒|包|份))?[\p{L}]{1,30}$/u;
-const PURCHASE_DETAIL_ITEM = /^(?:[一二两三四五六七八九十百千万]+(?:个|根|件|张|瓶|杯|盒|包|份))?[\p{L}]{1,30}$/u;
-const ORIGINAL_PRICE_CLAUSE = /^(早饭|早餐|午饭|午餐|晚饭|晚餐|夜宵|咖啡|奶茶|餐饮|买菜|NTUC购物|食阁吃饭|检查费)原价\d+(?:\.\d{1,2})?$/iu;
+const EXPLICIT_QUESTION = /(?:吗|么|是不是|是否|难道|该不该|要不要)[？?]?\s*$|[？?]\s*$/u;
 
 export class ExpenseRecordingError extends Error {
   constructor(outcome, { dedupeStatus } = {}) {
@@ -85,91 +69,23 @@ function eligibleAmountCandidates(clause, clauseIndex) {
   return candidates;
 }
 
-function classifyProvableExpenseClause(candidate) {
-  const prefix = candidate.clause.slice(0, candidate.matchIndex).trim();
-  const suffix = candidate.clause.slice(candidate.matchIndex + candidate.expressionLength);
-  const hasDeclarativeSuffix = DECLARATIVE_AMOUNT_SUFFIX.test(suffix);
-
-  const command = prefix.match(EXPLICIT_COMMAND_PREFIX);
-  if (command) {
-    const description = prefix.slice(command[0].length).trim();
-    const allowsQuestion = command[0].trimStart().startsWith('能帮我');
-    const hasAllowedSuffix = hasDeclarativeSuffix
-      || (allowsQuestion && POLITE_COMMAND_QUESTION_SUFFIX.test(suffix));
-    return hasAllowedSuffix && SAFE_DESCRIPTION.test(description)
-      ? { kind: 'command', description }
-      : undefined;
-  }
-  if (!hasDeclarativeSuffix) return undefined;
-
-  const selfAtTrailing = prefix.match(SELF_AT_TRAILING_ACTION);
-  if (selfAtTrailing && SAFE_DESCRIPTION.test(selfAtTrailing[1].trim())) {
-    return { kind: 'self-action', description: selfAtTrailing[1].trim() };
-  }
-  if (SELF_AMOUNT_ONLY_ACTION.test(prefix)) {
-    return { kind: 'self-action', description: '' };
-  }
-  const selfShorthandTrailing = prefix.match(SELF_SHORTHAND_TRAILING_ACTION);
-  if (selfShorthandTrailing && SAFE_SHORTHAND.test(selfShorthandTrailing[1].trim())) {
-    return { kind: 'self-action', description: selfShorthandTrailing[1].trim() };
-  }
-  const selfLeading = prefix.match(SELF_LEADING_ACTION);
-  if (selfLeading && SAFE_DESCRIPTION.test(selfLeading[1].trim())) {
-    return { kind: 'self-action', description: selfLeading[1].trim() };
-  }
-
-  if (SAFE_SHORTHAND.test(prefix)) return { kind: 'shorthand', description: prefix };
-  const shorthandAction = prefix.match(SHORTHAND_TRAILING_ACTION);
-  if (shorthandAction && SAFE_SHORTHAND.test(shorthandAction[1].trim())) {
-    return { kind: 'shorthand-action', description: shorthandAction[1].trim() };
-  }
-  if (/^(?:实付|实际支付|已付)$/u.test(prefix)) {
-    return { kind: 'actual-paid', description: '' };
-  }
-  return undefined;
-}
-
-function hasFullyMatchedAuthorization(clauses, candidate, syntax) {
-  let purchaseDetailsStarted = false;
-  for (let index = 0; index < clauses.length; index += 1) {
-    if (index === candidate.clauseIndex) continue;
-    const clause = clauses[index].trim();
-    if (index < candidate.clauseIndex) {
-      if (ORDER_REFERENCE_CLAUSE.test(clause)) continue;
-      if (syntax.kind === 'actual-paid'
-        && index === candidate.clauseIndex - 1
-        && ORIGINAL_PRICE_CLAUSE.test(clause)) continue;
-      return false;
-    }
-
-    if (ADMIN_SUFFIX_CLAUSE.test(clause) || READ_AFTER_WRITE_CLAUSE.test(clause)) continue;
-    if (syntax.description.toUpperCase() === 'NTUC购物'.toUpperCase()) {
-      if (!purchaseDetailsStarted && PURCHASE_DETAIL_START.test(clause)) {
-        purchaseDetailsStarted = true;
-        continue;
-      }
-      if (purchaseDetailsStarted && PURCHASE_DETAIL_ITEM.test(clause)) continue;
-    }
-    return false;
-  }
-  return syntax.kind !== 'actual-paid'
-    || (candidate.clauseIndex > 0 && ORIGINAL_PRICE_CLAUSE.test(clauses[candidate.clauseIndex - 1].trim()));
-}
-
-function isAuthorizedExpenseMessage(content, requestedAmountMinor) {
+export function messageSupportsExpenseAmount(content, requestedAmountMinor) {
   const originalText = String(content ?? '');
   const commentIndex = originalText.indexOf('备注');
   const text = (commentIndex < 0 ? originalText : originalText.slice(0, commentIndex)).trim();
-  if (!text || INSTRUCTION_INJECTION.test(text) || NON_EXPENSE_SEMANTIC_OPERATOR.test(text)) return false;
+  if (!text || INSTRUCTION_INJECTION.test(text)) return false;
 
   const clauses = text.split(/[，,。；;！!\r\n]+/u).filter(Boolean);
   const candidates = clauses.flatMap((clause, clauseIndex) => eligibleAmountCandidates(clause, clauseIndex));
   if (candidates.length !== 1) return false;
+  return candidates[0].amountMinor === requestedAmountMinor;
+}
 
-  const candidate = candidates[0];
-  if (candidate.amountMinor !== requestedAmountMinor) return false;
-  const syntax = classifyProvableExpenseClause(candidate);
-  return syntax !== undefined && hasFullyMatchedAuthorization(clauses, candidate, syntax);
+export function requiresExpenseConfirmation(content) {
+  const originalText = String(content ?? '');
+  const commentIndex = originalText.indexOf('备注');
+  const text = (commentIndex < 0 ? originalText : originalText.slice(0, commentIndex)).trim();
+  return EXPLICIT_QUESTION.test(text);
 }
 
 function normalizeTransactionId(value) {
@@ -241,6 +157,29 @@ export function formatExpenseReceipt({
   ].join('\n');
 }
 
+export function formatExpenseConfirmation({
+  ledgerDisplayName,
+  amountMinor,
+  primaryCategory,
+  subcategory,
+  comment,
+  time,
+}) {
+  const receiptLines = formatExpenseReceipt({
+    ledgerDisplayName,
+    amountMinor,
+    primaryCategory,
+    subcategory,
+    comment,
+    time,
+  }).split('\n').slice(1);
+  return [
+    '你是想记下这笔吗？🤔',
+    ...receiptLines,
+    '回复“是”确认，回复“不是”取消。',
+  ].join('\n');
+}
+
 export function normalizeMessageTimestamp(timestamp) {
   const numeric = Number(timestamp);
   if (!Number.isFinite(numeric) || numeric <= 0) {
@@ -271,7 +210,27 @@ export function duplicateResponseText(result) {
   return '同一条微信消息已处理，未重复入账。';
 }
 
-export async function recordExpense({
+function validateExpenseInput(input, inbound) {
+  const receiptKey = messageReceiptKey(inbound);
+  const sourceAmount = parseAmountToMinorUnits(input.amount);
+  const comment = resolveExpenseComment(inbound.content, input.comment);
+  const time = normalizeMessageTimestamp(inbound.timestamp);
+  return { receiptKey, sourceAmount, comment, time };
+}
+
+export function prepareExpenseConfirmation({ input, inbound }) {
+  const candidate = validateExpenseInput(input, inbound);
+  if (!messageSupportsExpenseAmount(inbound.content, candidate.sourceAmount)) {
+    throw new ExpenseRecordingError('rejected');
+  }
+  return {
+    amountMinor: candidate.sourceAmount,
+    comment: candidate.comment,
+    time: candidate.time,
+  };
+}
+
+async function writeExpense({
   api,
   store,
   input,
@@ -279,13 +238,7 @@ export async function recordExpense({
   accountName = '日常支出',
   validateBeforeWrite,
 }) {
-  const receiptKey = messageReceiptKey(inbound);
-  const sourceAmount = parseAmountToMinorUnits(input.amount);
-  if (!isAuthorizedExpenseMessage(inbound.content, sourceAmount)) {
-    throw new ExpenseRecordingError('rejected');
-  }
-  const comment = resolveExpenseComment(inbound.content, input.comment);
-  const time = normalizeMessageTimestamp(inbound.timestamp);
+  const { receiptKey, sourceAmount, comment, time } = validateExpenseInput(input, inbound);
   const clientSessionId = clientSessionIdFor(receiptKey);
   const existing = store.claim(receiptKey);
   if (existing) {
@@ -374,4 +327,17 @@ export async function recordExpense({
     return { ...receipt, dedupeStatus: 'unconfirmed' };
   }
   return receipt;
+}
+
+export async function recordExpense(options) {
+  const sourceAmount = parseAmountToMinorUnits(options.input.amount);
+  if (!messageSupportsExpenseAmount(options.inbound.content, sourceAmount)
+    || requiresExpenseConfirmation(options.inbound.content)) {
+    throw new ExpenseRecordingError('rejected');
+  }
+  return writeExpense(options);
+}
+
+export async function recordConfirmedExpense(options) {
+  return writeExpense(options);
 }

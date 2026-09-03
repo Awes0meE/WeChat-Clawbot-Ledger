@@ -79,6 +79,8 @@ test('declares the owner-only expense summary tool in the plugin manifest', () =
   assert.deepEqual(manifest.contracts.tools, [
     'bookkeeping_health',
     'record_expense',
+    'prepare_expense',
+    'resolve_expense_confirmation',
     'summarize_expenses',
   ]);
   assert.deepEqual(manifest.toolMetadata.summarize_expenses, { profiles: ['minimal'] });

@@ -7,6 +7,8 @@
     "tools": [
       "bookkeeping_health",
       "record_expense",
+      "prepare_expense",
+      "resolve_expense_confirmation",
       "summarize_expenses"
     ]
   },
@@ -27,6 +29,12 @@
       "profiles": ["minimal"]
     },
     "record_expense": {
+      "profiles": ["minimal"]
+    },
+    "prepare_expense": {
+      "profiles": ["minimal"]
+    },
+    "resolve_expense_confirmation": {
       "profiles": ["minimal"]
     },
     "summarize_expenses": {

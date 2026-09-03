@@ -18,6 +18,8 @@
         "profile": "minimal",
         "allow": [
           "record_expense",
+          "prepare_expense",
+          "resolve_expense_confirmation",
           "summarize_expenses",
           "ezbookkeeping__query_transactions"
         ],

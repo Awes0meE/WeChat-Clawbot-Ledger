@@ -12,7 +12,10 @@ import {
 import {
   duplicateResponseText,
   ExpenseRecordingError,
+  formatExpenseConfirmation,
   formatExpenseReceipt,
+  prepareExpenseConfirmation,
+  recordConfirmedExpense,
   recordExpense,
 } from './bookkeeping-core.mjs';
 import {
@@ -35,6 +38,7 @@ type InboundMessage = {
   timestamp: number;
   observedAt: number;
   timeSource: 'message' | 'received';
+  conversationKey: string;
 };
 
 type SummaryParams = {
@@ -58,6 +62,10 @@ type RecordExpenseParams = {
   comment?: string;
 };
 
+type ResolveExpenseConfirmationParams = {
+  decision: 'confirm' | 'cancel';
+};
+
 type RecordExpenseResult = {
   status: 'created' | 'duplicate';
   dedupeStatus?: 'unconfirmed';
@@ -74,7 +82,15 @@ type RecordExpenseResult = {
 });
 
 const TRUSTED_INBOUND_MAX_AGE_MS = 10 * 60 * 1000;
+const PENDING_CONFIRMATION_TTL_MS = 10 * 60 * 1000;
 const TOOL_CALL_SLOT_RETENTION_MS = TRUSTED_INBOUND_MAX_AGE_MS;
+const EXPENSE_TOOL_NAMES = new Set([
+  'record_expense',
+  'prepare_expense',
+  'resolve_expense_confirmation',
+]);
+const AFFIRMATIVE_REPLIES = new Set(['是', '对', '对的', '确认', '嗯', '嗯嗯', '好', '好的', '可以', '记吧', '记下吧']);
+const NEGATIVE_REPLIES = new Set(['不是', '否', '不对', '取消', '不用', '别记', '不要']);
 
 function trustedInboundLookupKey(kind: 'session' | 'sender' | 'run', value: string) {
   return createHash('sha256').update(`${kind}\u0000${value}`, 'utf8').digest('hex');
@@ -82,6 +98,30 @@ function trustedInboundLookupKey(kind: 'session' | 'sender' | 'run', value: stri
 
 function transientBindingKey(kind: 'run' | 'tool-call', value: string) {
   return createHash('sha256').update(`${kind}\u0000${value}`, 'utf8').digest('hex');
+}
+
+function trustedConversationKey({
+  sessionKey,
+  channel,
+  accountId,
+  senderId,
+}: {
+  sessionKey?: string;
+  channel?: string;
+  accountId?: string;
+  senderId?: string;
+}) {
+  if (!channel || !senderId) return undefined;
+  return createHash('sha256')
+    .update(`conversation\u0000${channel}\u0000${accountId ?? ''}\u0000${senderId}\u0000${sessionKey ?? ''}`, 'utf8')
+    .digest('hex');
+}
+
+function confirmationDecision(content: string): 'confirm' | 'cancel' | undefined {
+  const normalized = content.trim();
+  if (AFFIRMATIVE_REPLIES.has(normalized)) return 'confirm';
+  if (NEGATIVE_REPLIES.has(normalized)) return 'cancel';
+  return undefined;
 }
 
 function trustedInboundLookupKeys({
@@ -156,6 +196,13 @@ const SUMMARY_PARAMETERS = Type.Union([
   }, { additionalProperties: false }),
 ]);
 
+const EXPENSE_PARAMETERS = Type.Object({
+  amount: Type.String({ pattern: '^(?:0|[1-9]\\d*)(?:\\.\\d{1,2})?$' }),
+  primaryCategory: Type.Union(PRIMARY_CATEGORIES.map((value) => Type.Literal(value))),
+  subcategory: Type.String({ minLength: 1, maxLength: 20 }),
+  comment: Type.Optional(Type.String({ maxLength: 255 })),
+}, { additionalProperties: false });
+
 export default definePluginEntry({
   id: 'clawbot-bookkeeping',
   name: 'Clawbot Bookkeeping',
@@ -211,6 +258,9 @@ export default definePluginEntry({
       if (!messageId) return;
       const channel = context.channelId ?? 'unknown';
       const senderId = context.senderId ?? event.senderId ?? event.from;
+      const accountId = context.accountId ?? event.accountId;
+      const conversationKey = trustedConversationKey({ sessionKey, channel, accountId, senderId });
+      if (!conversationKey) return;
       api.logger?.info?.(
         `clawbot-bookkeeping: inbound metadata session=${Boolean(sessionKey)} message=${Boolean(messageId)} sender=${Boolean(senderId)} channel=${Boolean(channel)}`,
       );
@@ -223,6 +273,7 @@ export default definePluginEntry({
         timestamp: hasMessageTimestamp ? Number(event.timestamp) : observedAt,
         observedAt,
         timeSource: hasMessageTimestamp ? 'message' : 'received',
+        conversationKey,
       } satisfies InboundMessage;
       const lookupKeys = trustedInboundLookupKeys({ sessionKey, channel, senderId });
       const runId = context.runId ?? event.runId;
@@ -259,12 +310,15 @@ export default definePluginEntry({
         receiptStore.claimTrustedInbound(fallbackKeys);
       }
       if (inbound && runKey && event.senderIsOwner === true) {
+        if (confirmationDecision(inbound.content) === undefined) {
+          receiptStore.discardPendingExpenseConfirmation(inbound.conversationKey);
+        }
         inboundByRun.set(runKey, inbound);
       }
     });
 
     api.on('before_tool_call', (event, context) => {
-      if (event.toolName !== 'record_expense') return;
+      if (!EXPENSE_TOOL_NAMES.has(event.toolName)) return;
       const now = Date.now();
       pruneExpiredToolCallSlots(now);
       const runId = context.runId ?? event.runId;
@@ -314,6 +368,89 @@ export default definePluginEntry({
       toolCallSlots.clear();
       receiptStore.close();
     });
+
+    const takeToolCallBinding = (_id: unknown) => {
+      pruneExpiredToolCallSlots();
+      const toolCallKey = typeof _id === 'string'
+        ? transientBindingKey('tool-call', _id)
+        : undefined;
+      const slot = toolCallKey ? toolCallSlots.get(toolCallKey) : undefined;
+      const inbound = slot?.ambiguous === false ? slot.inbound : undefined;
+      if (slot) delete slot.inbound;
+      if (!slot || !inbound || !toolCallKey) {
+        throw new Error('缺少当前微信消息的可信元数据，已拒绝操作账本。');
+      }
+      if (Date.now() - inbound.observedAt > TRUSTED_INBOUND_MAX_AGE_MS) {
+        throw new Error('当前微信消息的可信元数据已过期，已拒绝操作账本。');
+      }
+      const boundRunKey = slot.runKey;
+      return {
+        inbound,
+        isStillAuthorized: () => toolCallSlots.get(toolCallKey) === slot
+          && slot.runKey === boundRunKey
+          && slot.ambiguous === false,
+      };
+    };
+
+    const expenseFailureResponse = (error: ExpenseRecordingError) => {
+      api.logger?.error?.(
+        `clawbot-bookkeeping: ExpenseRecordingError outcome=${error.outcome} message=${error.message}`,
+      );
+      if (error.dedupeStatus === 'unconfirmed') {
+        api.logger?.warn?.(
+          `clawbot-bookkeeping: ExpenseRecordingError outcome=${error.outcome} deduplication persistence is unconfirmed`,
+        );
+      }
+      const unknown = error.outcome === 'unknown';
+      const rejected = error.outcome === 'rejected';
+      return {
+        content: [{
+          type: 'text' as const,
+          text: rejected
+            ? '这条消息的金额与当前请求不一致，或仍带有疑问，本次没有入账。'
+            : unknown
+              ? '记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。'
+              : '账本暂时连不上，本次没有写入任何数据，请稍后再试。',
+        }],
+        details: {
+          status: rejected ? 'rejected' : unknown ? 'unknown' : 'failed',
+          ...(error.dedupeStatus === undefined ? {} : { dedupeStatus: error.dedupeStatus }),
+        },
+      };
+    };
+
+    const recordedExpenseResponse = (
+      result: RecordExpenseResult,
+      input: RecordExpenseParams,
+      inbound: InboundMessage,
+    ) => {
+      if (result.dedupeStatus === 'unconfirmed') {
+        api.logger?.warn?.(
+          'clawbot-bookkeeping: ExpenseRecordingError outcome=written_unconfirmed message=expense write confirmed; deduplication persistence is unconfirmed',
+        );
+      }
+      const details = { ...result, currency: 'SGD', timeSource: inbound.timeSource };
+      if (result.status === 'duplicate') {
+        return {
+          content: [{ type: 'text' as const, text: duplicateResponseText(result) }],
+          details,
+        };
+      }
+      return {
+        content: [{
+          type: 'text' as const,
+          text: formatExpenseReceipt({
+            ledgerDisplayName,
+            amountMinor: result.amountMinor,
+            primaryCategory: input.primaryCategory,
+            subcategory: input.subcategory,
+            comment: result.comment,
+            time: result.time,
+          }),
+        }],
+        details,
+      };
+    };
 
     api.registerTool({
       name: 'bookkeeping_health',
@@ -400,42 +537,23 @@ export default definePluginEntry({
           label: 'Record expense',
           catalogMode: 'direct-only',
           description: [
-            '将当前一条消费消息记为一笔 SGD 支出。必须由你理解用户消息并选择金额、一级和二级分类。',
+            '将当前明确、已发生的一条消费消息记为一笔 SGD 支出。由你理解语义并选择金额、一级和二级分类。',
             '不要把“备注”后的文字放进参数；工具会从可信原始消息中原样提取。',
             '若原始消息未明确标注“备注”，可提供简短且有依据的商户、商品或用途说明；不得编造信息。',
             '超市消费整笔归食品酒水/超市购物；网线归学习进修/数码装备。',
             '早餐、午餐、晚餐、早饭、午饭、晚饭或一般餐饮，二级分类一律使用“早午晚餐”，不要使用“餐饮”“午餐”等非正式名称。',
             '同一消息中的加法金额表示一笔消费总额，例如“6.5+2.5”必须只调用一次并传入“9”。',
-            '裸商户加金额不一定能证明本人已支出；遇到“麦当劳7.2”等未授权简写时不得调用或重试本工具，应请用户重发“记账：麦当劳7.2”或“我在麦当劳花了7.2”。',
-            '显式“记账：…”可以确认商户简写，但不能覆盖否定、举例、转述、代付、退款/收款等非支出语义；“记账：不要记午饭7.2”仍不得调用本工具。',
-            '只有“能帮我记午饭7.2吗”这类明确祈使记账句可带疑问后缀；“午饭7.2吗”或“我在麦当劳花了7.2吗”不得调用本工具。',
+            '如果消息像“午饭7.2吗”一样含有不确定或疑问语气，不要调用本工具，改用 prepare_expense。',
+            '否定、举例、转述、代付、退款、收款、未来计划或查询不是已发生的本人支出；正常对话或查询即可，不要调用写入工具。',
             '工具成功后，最终回复只能原样采用工具返回的“已记账”结果；不得展示思考、参数校验、候选分类或重试过程。',
             CATEGORY_GUIDE,
           ].join('\n'),
-          parameters: Type.Object({
-            amount: Type.String({ pattern: '^(?:0|[1-9]\\d*)(?:\\.\\d{1,2})?$' }),
-            primaryCategory: Type.Union(PRIMARY_CATEGORIES.map((value) => Type.Literal(value))),
-            subcategory: Type.String({ minLength: 1, maxLength: 20 }),
-            comment: Type.Optional(Type.String({ maxLength: 255 })),
-          }, { additionalProperties: false }),
+          parameters: EXPENSE_PARAMETERS,
           async execute(_id, params: RecordExpenseParams) {
-            pruneExpiredToolCallSlots();
             if (toolContext.senderIsOwner !== true) {
               throw new Error('无法确认消息发送者为账本所有者，已拒绝入账。');
             }
-            const toolCallKey = typeof _id === 'string'
-              ? transientBindingKey('tool-call', _id)
-              : undefined;
-            const slot = toolCallKey ? toolCallSlots.get(toolCallKey) : undefined;
-            const inbound = slot?.ambiguous === false ? slot.inbound : undefined;
-            if (slot) delete slot.inbound;
-            if (!slot || !inbound || !toolCallKey) {
-              throw new Error('缺少当前微信消息的可信元数据，已拒绝入账。');
-            }
-            const boundRunKey = slot.runKey;
-            if (Date.now() - inbound.observedAt > TRUSTED_INBOUND_MAX_AGE_MS) {
-              throw new Error('当前微信消息的可信元数据已过期，已拒绝入账。');
-            }
+            const { inbound, isStillAuthorized } = takeToolCallBinding(_id);
             const normalizedInput = {
               ...params,
               subcategory: normalizeSubcategory(params.primaryCategory, params.subcategory),
@@ -448,67 +566,157 @@ export default definePluginEntry({
                 input: normalizedInput,
                 inbound,
                 accountName,
-                validateBeforeWrite: () => toolCallSlots.get(toolCallKey) === slot
-                  && slot.runKey === boundRunKey
-                  && slot.ambiguous === false,
+                validateBeforeWrite: isStillAuthorized,
               }) as RecordExpenseResult;
             } catch (error) {
               if (!(error instanceof ExpenseRecordingError)) throw error;
-              api.logger?.error?.(
-                `clawbot-bookkeeping: ExpenseRecordingError outcome=${error.outcome} message=${error.message}`,
-              );
-              if (error.dedupeStatus === 'unconfirmed') {
-                api.logger?.warn?.(
-                  `clawbot-bookkeeping: ExpenseRecordingError outcome=${error.outcome} deduplication persistence is unconfirmed`,
-                );
-              }
-              const unknown = error.outcome === 'unknown';
-              const rejected = error.outcome === 'rejected';
-              return {
-                content: [{
-                  type: 'text',
-                  text: rejected
-                    ? '这条消息无法确认是一笔金额一致的已发生消费，本次没有入账。请用“记账：麦当劳7.2”或“我在麦当劳花了7.2”的明确句式重新发送。'
-                    : unknown
-                      ? '记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。'
-                      : '账本暂时连不上，本次没有写入任何数据，请稍后再试。',
-                }],
-                details: {
-                  status: rejected ? 'rejected' : unknown ? 'unknown' : 'failed',
-                  ...(error.dedupeStatus === undefined ? {} : { dedupeStatus: error.dedupeStatus }),
-                },
-              };
+              return expenseFailureResponse(error);
             }
-            if (result.dedupeStatus === 'unconfirmed') {
-              api.logger?.warn?.(
-                'clawbot-bookkeeping: ExpenseRecordingError outcome=written_unconfirmed message=expense write confirmed; deduplication persistence is unconfirmed',
-              );
-            }
-            const details = { ...result, currency: 'SGD', timeSource: inbound.timeSource };
-            if (result.status === 'duplicate') {
-              return {
-                content: [{ type: 'text', text: duplicateResponseText(result) }],
-                details,
-              };
-            }
-            return {
-              content: [{
-                type: 'text',
-                text: formatExpenseReceipt({
-                  ledgerDisplayName,
-                  amountMinor: result.amountMinor,
-                  primaryCategory: normalizedInput.primaryCategory,
-                  subcategory: normalizedInput.subcategory,
-                  comment: result.comment,
-                  time: result.time,
-                }),
-              }],
-              details,
-            };
+            return recordedExpenseResponse(result, normalizedInput, inbound);
           },
         };
       },
       { name: 'record_expense' },
+    );
+
+    api.registerTool(
+      (toolContext) => ({
+        name: 'prepare_expense',
+        label: 'Prepare expense confirmation',
+        catalogMode: 'direct-only',
+        description: [
+          '为包含明确金额、但语义仍需用户确认的一笔候选支出生成确认单；本工具绝不会写入账本。',
+          '例如“午饭7.2吗”应使用本工具，让用户确认你的金额、分类、备注和原消息时间理解。',
+          '金额、分类和备注由你根据当前消息理解；不得猜测消息中没有的信息。',
+          '工具返回后只逐字回复确认单，不展示思考、参数或工具名。',
+          CATEGORY_GUIDE,
+        ].join('\n'),
+        parameters: EXPENSE_PARAMETERS,
+        async execute(_id, params: RecordExpenseParams) {
+          if (toolContext.senderIsOwner !== true) {
+            throw new Error('无法确认消息发送者为账本所有者，已拒绝准备入账。');
+          }
+          const { inbound, isStillAuthorized } = takeToolCallBinding(_id);
+          const normalizedInput = {
+            ...params,
+            subcategory: normalizeSubcategory(params.primaryCategory, params.subcategory),
+          };
+          let candidate;
+          try {
+            candidate = prepareExpenseConfirmation({ input: normalizedInput, inbound });
+          } catch (error) {
+            if (!(error instanceof ExpenseRecordingError)) throw error;
+            return expenseFailureResponse(error);
+          }
+          if (!isStillAuthorized()) {
+            throw new Error('当前微信消息的可信绑定已变化，本次没有准备入账。');
+          }
+          receiptStore.replacePendingExpenseConfirmation(
+            inbound.conversationKey,
+            {
+              sourceMessageKey: trustedInboundMessageKey(inbound.channel, inbound.messageId),
+              sourceInbound: inbound,
+              input: normalizedInput,
+            },
+            Date.now() + PENDING_CONFIRMATION_TTL_MS,
+          );
+          return {
+            content: [{
+              type: 'text',
+              text: formatExpenseConfirmation({
+                ledgerDisplayName,
+                amountMinor: candidate.amountMinor,
+                primaryCategory: normalizedInput.primaryCategory,
+                subcategory: normalizedInput.subcategory,
+                comment: candidate.comment,
+                time: candidate.time,
+              }),
+            }],
+            details: {
+              status: 'pending_confirmation',
+              currency: 'SGD',
+              timeSource: inbound.timeSource,
+              expiresInSeconds: PENDING_CONFIRMATION_TTL_MS / 1000,
+            },
+          };
+        },
+      }),
+      { name: 'prepare_expense' },
+    );
+
+    api.registerTool(
+      (toolContext) => ({
+        name: 'resolve_expense_confirmation',
+        label: 'Resolve expense confirmation',
+        catalogMode: 'direct-only',
+        description: [
+          '处理用户对上一张待确认支出单独回复的确认或取消。',
+          '只有当前消息本身是简短确认词或取消词时才调用；不要传金额、分类或备注。',
+          '用户发送其他新内容时，按新请求正常处理，不要调用本工具。',
+          '工具返回后只逐字回复结果，不展示思考、参数或工具名。',
+        ].join('\n'),
+        parameters: Type.Object({
+          decision: Type.Union([Type.Literal('confirm'), Type.Literal('cancel')]),
+        }, { additionalProperties: false }),
+        async execute(_id, params: ResolveExpenseConfirmationParams) {
+          if (toolContext.senderIsOwner !== true) {
+            throw new Error('无法确认消息发送者为账本所有者，已拒绝处理确认。');
+          }
+          const { inbound, isStillAuthorized } = takeToolCallBinding(_id);
+          const trustedDecision = confirmationDecision(inbound.content);
+          if (trustedDecision === undefined || trustedDecision !== params.decision) {
+            return {
+              content: [{ type: 'text', text: '当前回复不是有效的确认或取消，本次没有操作账本。' }],
+              details: { status: 'rejected' },
+            };
+          }
+          if (!isStillAuthorized()) {
+            throw new Error('当前微信消息的可信绑定已变化，本次没有操作账本。');
+          }
+          const pending = receiptStore.takePendingExpenseConfirmation(inbound.conversationKey);
+          if (pending.status === 'missing') {
+            return {
+              content: [{ type: 'text', text: '现在没有等待确认的支出，不用担心，我没有记账。' }],
+              details: { status: 'missing' },
+            };
+          }
+          if (pending.status === 'expired') {
+            return {
+              content: [{ type: 'text', text: '刚才那笔待确认支出已经过期，我没有记账；需要的话请重新发一次。' }],
+              details: { status: 'expired' },
+            };
+          }
+          if (params.decision === 'cancel') {
+            return {
+              content: [{ type: 'text', text: '好哒，已经取消，这笔没有记到账本里。' }],
+              details: { status: 'cancelled' },
+            };
+          }
+          const proposal = pending.proposal;
+          if (proposal.sourceMessageKey !== trustedInboundMessageKey(
+            proposal.sourceInbound.channel,
+            proposal.sourceInbound.messageId,
+          )) {
+            throw new Error('待确认支出的可信消息标识不一致，已拒绝入账。');
+          }
+          let result;
+          try {
+            result = await recordConfirmedExpense({
+              api: bookkeepingApi,
+              store: receiptStore,
+              input: proposal.input,
+              inbound: proposal.sourceInbound,
+              accountName,
+              validateBeforeWrite: isStillAuthorized,
+            }) as RecordExpenseResult;
+          } catch (error) {
+            if (!(error instanceof ExpenseRecordingError)) throw error;
+            return expenseFailureResponse(error);
+          }
+          return recordedExpenseResponse(result, proposal.input, proposal.sourceInbound);
+        },
+      }),
+      { name: 'resolve_expense_confirmation' },
     );
   },
 });
