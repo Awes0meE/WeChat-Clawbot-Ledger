@@ -99,6 +99,8 @@ const AUTHORITATIVE_REPLY_TOOL_NAMES = new Set([
 ]);
 const AFFIRMATIVE_REPLIES = new Set(['是', '对', '对的', '确认', '嗯', '嗯嗯', '好', '好的', '可以', '记吧', '记下吧']);
 const NEGATIVE_REPLIES = new Set(['不是', '否', '不对', '取消', '不用', '别记', '不要']);
+const SUMMARY_QUERY = /(?:今天|本周|这个月|本月|上个月|今年).{0,24}(?:花了多少|花多少|多少钱|支出|消费|总共|合计|汇总)/u;
+const EXPENSE_AMOUNT_CUE = /(?:\d+(?:\.\d{1,2})?|[一二两三四五六七八九十]+块(?:[零一二两三四五六七八九\d]{1,2})?)/u;
 
 function trustedInboundLookupKey(kind: 'session' | 'sender' | 'run' | 'message', value: string) {
   return createHash('sha256').update(`${kind}\u0000${value}`, 'utf8').digest('hex');
@@ -129,6 +131,29 @@ function confirmationDecision(content: string): 'confirm' | 'cancel' | undefined
   const normalized = content.trim();
   if (AFFIRMATIVE_REPLIES.has(normalized)) return 'confirm';
   if (NEGATIVE_REPLIES.has(normalized)) return 'cancel';
+  return undefined;
+}
+
+function obviousTurnRoute(content: string) {
+  const decision = confirmationDecision(content);
+  if (decision) {
+    return {
+      toolsAllow: ['resolve_expense_confirmation'],
+      prependSystemContext: `当前可信用户消息是单独的确认答复。你必须调用 \`resolve_expense_confirmation\`，decision 使用 \`${decision}\`；逐字返回工具结果后立即结束。`,
+    };
+  }
+  if (SUMMARY_QUERY.test(content)) {
+    return {
+      toolsAllow: ['summarize_expenses'],
+      prependSystemContext: '当前可信用户消息明确是在查询账本汇总。你必须调用 `summarize_expenses`；按消息选择 period 和筛选条件，逐字返回工具结果后立即结束。',
+    };
+  }
+  if (requiresExpenseConfirmation(content) && EXPENSE_AMOUNT_CUE.test(content)) {
+    return {
+      toolsAllow: ['prepare_expense'],
+      prependSystemContext: '当前可信用户消息是一笔带金额但语气不确定的候选支出。你必须调用 `prepare_expense`，不得直接入账；逐字返回工具确认单后立即结束。',
+    };
+  }
   return undefined;
 }
 
@@ -359,6 +384,14 @@ export default definePluginEntry({
           `clawbot-bookkeeping: run correlation run=${Boolean(runId)} channel=${Boolean(channel)} sender=${Boolean(senderId)} matched=${Boolean(inbound)}`,
         );
       }
+    });
+
+    api.on('before_prompt_build', (_event, context) => {
+      const runId = context.runId;
+      const runKey = runId ? transientBindingKey('run', runId) : undefined;
+      const inbound = runKey ? inboundByRun.get(runKey) : undefined;
+      if (!inbound || inbound.channel !== 'openclaw-weixin') return;
+      return obviousTurnRoute(inbound.content);
     });
 
     api.on('before_tool_call', (event, context) => {

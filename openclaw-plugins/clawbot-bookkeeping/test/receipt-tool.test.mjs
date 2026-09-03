@@ -860,6 +860,49 @@ test('binds cached record tool calls to each inbound run without retaining a que
   }
 });
 
+test('narrows obvious confirmation, questioned expense, and summary turns to one tool', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not run while routing a turn');
+  });
+
+  try {
+    const questionedRunId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭8.8么？',
+      messageId: 'route-questioned-expense',
+    });
+    const questioned = await harness.inboundHooks.get('before_prompt_build')?.({
+      prompt: '午饭8.8么？', messages: [],
+    }, { runId: questionedRunId, channelId: 'openclaw-weixin' });
+    assert.deepEqual(questioned.toolsAllow, ['prepare_expense']);
+    assert.match(questioned.prependSystemContext, /必须调用 `prepare_expense`/u);
+
+    const decisionRunId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '不是',
+      messageId: 'route-cancel-decision',
+    });
+    const decision = await harness.inboundHooks.get('before_prompt_build')?.({
+      prompt: '不是', messages: [],
+    }, { runId: decisionRunId, channelId: 'openclaw-weixin' });
+    assert.deepEqual(decision.toolsAllow, ['resolve_expense_confirmation']);
+    assert.match(decision.prependSystemContext, /必须调用 `resolve_expense_confirmation`/u);
+
+    const summaryRunId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '这个月我花了多少钱',
+      messageId: 'route-month-summary',
+    });
+    const summary = await harness.inboundHooks.get('before_prompt_build')?.({
+      prompt: '这个月我花了多少钱', messages: [],
+    }, { runId: summaryRunId, channelId: 'openclaw-weixin' });
+    assert.deepEqual(summary.toolsAllow, ['summarize_expenses']);
+    assert.match(summary.prependSystemContext, /必须调用 `summarize_expenses`/u);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
 test('discards an uncorrelated query turn and fails closed without run metadata', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
