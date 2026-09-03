@@ -99,9 +99,14 @@ export function aggregateExpenseSummary(transactions, primaryByCategoryId) {
     if (!Number.isSafeInteger(amountMinor) || amountMinor < 0) {
       throw new Error('transaction amount is invalid');
     }
-    totalAmountMinor += amountMinor;
     const primary = primaryByCategoryId.get(String(transaction.categoryId)) ?? '其他杂项';
-    categoryTotals.set(primary, (categoryTotals.get(primary) ?? 0) + amountMinor);
+    const nextTotalAmountMinor = totalAmountMinor + amountMinor;
+    const nextCategoryAmountMinor = (categoryTotals.get(primary) ?? 0) + amountMinor;
+    if (!Number.isSafeInteger(nextTotalAmountMinor) || !Number.isSafeInteger(nextCategoryAmountMinor)) {
+      throw new Error('transaction summary total is unsafe');
+    }
+    totalAmountMinor = nextTotalAmountMinor;
+    categoryTotals.set(primary, nextCategoryAmountMinor);
   }
 
   const categories = [...categoryTotals.entries()]

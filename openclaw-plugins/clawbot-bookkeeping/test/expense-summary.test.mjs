@@ -69,6 +69,17 @@ test('rejects negative or fractional transaction amounts', () => {
   );
 });
 
+test('rejects transactions whose accumulated summary total is unsafe', () => {
+  const categories = new Map([['large', '食品酒水'], ['one', '食品酒水']]);
+  assert.throws(
+    () => aggregateExpenseSummary([
+      { sourceAmount: Number.MAX_SAFE_INTEGER, categoryId: 'large' },
+      { sourceAmount: 1, categoryId: 'one' },
+    ], categories),
+    /transaction summary total is unsafe/u,
+  );
+});
+
 test('formats a category breakdown and the three largest expenses', () => {
   const summary = {
     totalAmountMinor: 4195,

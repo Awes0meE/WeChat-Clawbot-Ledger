@@ -2,9 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  PRIMARY_CATEGORIES,
+  SUBCATEGORIES,
   normalizeSubcategory,
   primaryCategoryForSubcategory,
 } from '../categories.mjs';
+
+test('exports the authoritative 11-primary, 45-secondary catalog', () => {
+  assert.equal(PRIMARY_CATEGORIES.length, 11);
+  assert.equal(SUBCATEGORIES.length, 45);
+});
 
 test('normalizes meal aliases to the formal subcategory', () => {
   assert.equal(normalizeSubcategory('食品酒水', '午饭'), '早午晚餐');
