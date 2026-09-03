@@ -8,10 +8,13 @@ const QUANTITY_OR_TIME_UNIT = /^(?:个|位|人|根|件|张|瓶|杯|盒|包|份|�
 const ADMIN_AMOUNT_CUE = /(?:订单(?:号)?|余额|原价|标价|用券|券|优惠(?:后)?|折扣|编号|单号)\s*$/u;
 const ADMIN_AMOUNT_CLAUSE = /^\s*(?:订单(?:号)?|余额|原价|标价|用券|优惠|折扣|编号|单号)/u;
 const EXPLICIT_COMMAND_PREFIX = /^(?:(?:(?:请|麻烦)?(?:帮我|给我)?(?:记账|记一笔|记|记录一下|记录|入账))|(?:能帮我(?:记账|记一笔|记|记录一下|记录|入账)))\s*[：:]?\s*/u;
+const NEGATED_COMMAND_DESCRIPTION = /^(?:不要|别|无需|不用|取消|停止|撤销)/u;
 const SAFE_SHORTHAND = /^(?:早饭|早餐|午饭|午餐|晚饭|晚餐|夜宵|咖啡|奶茶|餐饮|买菜|NTUC购物|食阁吃饭|检查费)$/iu;
 const SAFE_DESCRIPTION = /^[\p{L}\p{N}][\p{L}\p{N}\s·&（）()\-]{0,59}$/u;
 const CURRENCY_OR_MODAL_SUFFIX = /^\s*(?:(?:SGD|新币|新元|人民币|块钱|块|元)\s*)?(?:吗|嘛|呢)?[?？]?\s*$/iu;
-const SELF_TRAILING_ACTION = /^我(?:刚刚?|刚才|今天|昨晚|中午|晚上)?(?:在)?(.+?)(?:花了?|消费了?|支付了?|付了?|付款)$/u;
+const SELF_AT_TRAILING_ACTION = /^我(?:刚刚?|刚才|今天|昨晚|中午|晚上)?在(.+?)(?:花了?|消费了?|支付了?|付了?|付款)$/u;
+const SELF_SHORTHAND_TRAILING_ACTION = /^我(?:刚刚?|刚才|今天|昨晚|中午|晚上)?(.+?)(?:花了?|消费了?|支付了?|付了?|付款)$/u;
+const SELF_AMOUNT_ONLY_ACTION = /^我(?:刚刚?|刚才|今天|昨晚|中午|晚上)?(?:花了?|消费了?|支付了?|付了?|付款|买了?)$/u;
 const SELF_LEADING_ACTION = /^我(?:刚刚?|刚才|今天|昨晚|中午|晚上)?(?:买了?|购入|吃了?)(.+)$/u;
 const SHORTHAND_TRAILING_ACTION = /^(.*?)(?:花了?|消费了?)$/u;
 const ORDER_REFERENCE_CLAUSE = /^订单(?:号)?\s*\d+$/u;
@@ -89,12 +92,21 @@ function classifyProvableExpenseClause(candidate) {
   const command = prefix.match(EXPLICIT_COMMAND_PREFIX);
   if (command) {
     const description = prefix.slice(command[0].length).trim();
-    return SAFE_DESCRIPTION.test(description) ? { kind: 'command', description } : undefined;
+    return SAFE_DESCRIPTION.test(description) && !NEGATED_COMMAND_DESCRIPTION.test(description)
+      ? { kind: 'command', description }
+      : undefined;
   }
 
-  const selfTrailing = prefix.match(SELF_TRAILING_ACTION);
-  if (selfTrailing && SAFE_DESCRIPTION.test(selfTrailing[1].trim())) {
-    return { kind: 'self-action', description: selfTrailing[1].trim() };
+  const selfAtTrailing = prefix.match(SELF_AT_TRAILING_ACTION);
+  if (selfAtTrailing && SAFE_DESCRIPTION.test(selfAtTrailing[1].trim())) {
+    return { kind: 'self-action', description: selfAtTrailing[1].trim() };
+  }
+  if (SELF_AMOUNT_ONLY_ACTION.test(prefix)) {
+    return { kind: 'self-action', description: '' };
+  }
+  const selfShorthandTrailing = prefix.match(SELF_SHORTHAND_TRAILING_ACTION);
+  if (selfShorthandTrailing && SAFE_SHORTHAND.test(selfShorthandTrailing[1].trim())) {
+    return { kind: 'self-action', description: selfShorthandTrailing[1].trim() };
   }
   const selfLeading = prefix.match(SELF_LEADING_ACTION);
   if (selfLeading && SAFE_DESCRIPTION.test(selfLeading[1].trim())) {

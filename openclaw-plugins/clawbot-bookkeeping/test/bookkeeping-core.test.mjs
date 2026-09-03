@@ -311,6 +311,8 @@ for (const [label, content, amount] of [
   ['expense amount beside an order number', '订单123，午饭7.2', '7.2'],
   ['expense amount beside an account balance', '午饭7.2，余额100', '7.2'],
   ['explicit self-paid expense', '我午饭花了7.2', '7.2'],
+  ['explicit self-paid amount', '我花了7.2', '7.2'],
+  ['explicit self-purchase amount', '我买了7.2', '7.2'],
   ['explicit bookkeeping command', '帮我记账：打印纸4.5', '4.5'],
   ['bookkeeping command using give me wording', '给我记一笔午饭7.2', '7.2'],
   ['simple drink shorthand', '咖啡3', '3'],
@@ -398,6 +400,11 @@ for (const [label, content, amount, comment = ''] of [
   ['unknown convenience-store shorthand', '便利店3.5', '3.5'],
   ['unknown petrol-station shorthand', '油站60', '60'],
   ['unknown car-repair shorthand', '修车100', '100'],
+  ['friend disguised as self payment', '我朋友在麦当劳花了7.2', '7.2'],
+  ['mother disguised as self payment', '我妈午饭花了7.2', '7.2'],
+  ['hearsay disguised as self payment', '我听说麦当劳花了7.2', '7.2'],
+  ['boss reimbursement disguised as self payment', '我老板报销午饭花了7.2', '7.2'],
+  ['negated explicit bookkeeping command', '记账：不要记午饭7.2', '7.2'],
 ]) {
   test(`rejects ${label} before claiming or contacting the ledger`, async () => {
     let claimCount = 0;
