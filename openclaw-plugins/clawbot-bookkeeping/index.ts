@@ -258,7 +258,7 @@ export default definePluginEntry({
       if (!messageId) return;
       const channel = context.channelId ?? 'unknown';
       const senderId = context.senderId ?? event.senderId ?? event.from;
-      const accountId = context.accountId ?? event.accountId;
+      const accountId = context.accountId;
       const conversationKey = trustedConversationKey({ sessionKey, channel, accountId, senderId });
       if (!conversationKey) return;
       api.logger?.info?.(
