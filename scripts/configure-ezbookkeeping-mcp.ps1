@@ -128,6 +128,22 @@ function Get-NormalizedArguments {
     return [regex]::Replace(([string]$Arguments).Trim(), '\s+', ' ')
 }
 
+function Get-HiddenPowerShellExecutable {
+    $systemRoot = [Environment]::GetEnvironmentVariable('SystemRoot')
+    if ([string]::IsNullOrWhiteSpace($systemRoot)) {
+        throw 'Could not locate the Windows PowerShell executable.'
+    }
+    return Get-NormalizedPath -Path (Join-Path $systemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')
+}
+
+function Get-HiddenPowerShellServiceArguments {
+    param([Parameter(Mandatory = $true)][string]$Executable)
+
+    $escapedExecutable = $Executable.Replace("'", "''")
+    $serviceCommand = '& ' + [char]39 + $escapedExecutable + [char]39 + ' server run'
+    return '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Command "' + $serviceCommand + '"'
+}
+
 function Set-OwnerOnlyTokenFile {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -195,6 +211,8 @@ $body = $null
 $backupPath = $null
 $task = $null
 $expectedExecutable = $null
+$expectedLauncher = $null
+$expectedLauncherArguments = $null
 $taskWasRunning = $false
 $taskStopped = $false
 $taskStarted = $false
@@ -206,6 +224,11 @@ try {
     if (-not (Test-Path -LiteralPath $expectedExecutable -PathType Leaf)) {
         throw 'The expected ezBookkeeping executable was not found.'
     }
+    $expectedLauncher = Get-HiddenPowerShellExecutable
+    if (-not (Test-Path -LiteralPath $expectedLauncher -PathType Leaf)) {
+        throw 'Could not locate the Windows PowerShell executable.'
+    }
+    $expectedLauncherArguments = Get-HiddenPowerShellServiceArguments -Executable $expectedExecutable
     $tasks = @(Get-ScheduledTask -ErrorAction Stop | Where-Object {
         $_.TaskName -eq $TaskName -and $_.TaskPath -eq '\'
     })
@@ -215,8 +238,8 @@ try {
     $task = $tasks[0]
     $taskActions = @($task.Actions)
     $matchingActions = @($taskActions | Where-Object {
-        ([string]::Equals((Get-NormalizedPath -Path ([string]$_.Execute)), $expectedExecutable, [StringComparison]::OrdinalIgnoreCase)) -and
-        ((Get-NormalizedArguments -Arguments ([string]$_.Arguments)) -ceq 'server run') -and
+        ([string]::Equals((Get-NormalizedPath -Path ([string]$_.Execute)), $expectedLauncher, [StringComparison]::OrdinalIgnoreCase)) -and
+        ([string]::Equals(([string]$_.Arguments), $expectedLauncherArguments, [StringComparison]::Ordinal)) -and
         ([string]::Equals((Get-NormalizedPath -Path ([string]$_.WorkingDirectory)), $installDirectory, [StringComparison]::OrdinalIgnoreCase))
     })
     if ($taskActions.Count -ne 1 -or $matchingActions.Count -ne 1) {

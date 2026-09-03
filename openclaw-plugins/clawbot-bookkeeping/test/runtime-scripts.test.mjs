@@ -26,6 +26,15 @@ function runPowerShell(arguments_) {
   return runPowerShellResult(arguments_).stdout;
 }
 
+function hiddenPowerShellLauncher() {
+  return join(process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+}
+
+function hiddenServiceArguments(executablePath) {
+  const escapedExecutable = executablePath.replace(/'/g, "''");
+  return `-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Command "& '${escapedExecutable}' server run"`;
+}
+
 test('runtime setup scripts parse and WhatIf leaves a UTF-8 INI untouched', () => {
   const temporaryDirectory = mkdtempSync(join(tmpdir(), 'clawbot-runtime-scripts-'));
   try {
@@ -115,6 +124,8 @@ test('configure script rejects a root task with a non-matching action before tas
 $global:unexpectedTaskControl = $false
 $global:expectedExecutable = $args[4]
 $global:installDirectory = $args[5]
+$global:expectedLauncher = $args[6]
+$global:expectedLauncherArguments = $args[7]
 $global:expectedTaskName = 'Clawbot test task'
 function Get-ScheduledTask {
   [CmdletBinding()]
@@ -122,7 +133,7 @@ function Get-ScheduledTask {
   [pscustomobject]@{
     TaskName = $global:expectedTaskName
     TaskPath = '\\'
-    Actions = @([pscustomobject]@{ Execute = $global:expectedExecutable; Arguments = 'server wrong'; WorkingDirectory = $global:installDirectory })
+    Actions = @([pscustomobject]@{ Execute = $global:expectedLauncher; Arguments = '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Command "& ''wrong.exe'' server run"'; WorkingDirectory = $global:installDirectory })
   }
 }
 function Stop-ScheduledTask { [CmdletBinding()] param([object]$InputObject, [string]$TaskName) $global:unexpectedTaskControl = $true; throw 'Unexpected task stop.' }
@@ -130,7 +141,7 @@ function Start-ScheduledTask { [CmdletBinding()] param([object]$InputObject, [st
 function Get-CimInstance { [CmdletBinding()] param() $global:unexpectedTaskControl = $true }
 function Stop-Process { [CmdletBinding()] param() $global:unexpectedTaskControl = $true }
 try {
-  & $args[0] -ConfigPath $args[1] -ApiTokenPath $args[2] -McpTokenPath $args[3] -TaskName 'Clawbot test task' -Confirm:$false
+  & $args[0] -ConfigPath $args[1] -InstallDirectory $args[5] -ApiTokenPath $args[2] -McpTokenPath $args[3] -TaskName 'Clawbot test task' -Confirm:$false
   throw 'Expected the mismatched task action to be rejected.'
 } catch {
   if ($_.Exception.Message -ne 'Could not complete local ezBookkeeping MCP setup. Check the configuration, task, and service health, then retry.') { throw }
@@ -139,7 +150,7 @@ if ($global:unexpectedTaskControl) { throw 'Task controls were reached for a mis
 `, 'utf8');
 
     runPowerShell([
-      '-File', wrapperPath, configureScript, configPath, join(temporaryDirectory, 'api.txt'), join(temporaryDirectory, 'mcp.txt'), executablePath, temporaryDirectory,
+      '-File', wrapperPath, configureScript, configPath, join(temporaryDirectory, 'api.txt'), join(temporaryDirectory, 'mcp.txt'), executablePath, temporaryDirectory, hiddenPowerShellLauncher(), hiddenServiceArguments(executablePath),
     ]);
     assert.equal(readFileSync(configPath, 'utf8'), originalIni);
     assert.deepEqual(readdirSync(temporaryDirectory).sort(), ['ezbookkeeping.exe', 'ezbookkeeping.ini', 'run-configure-shim.ps1']);
@@ -171,8 +182,42 @@ if ($script:registered) { throw 'WhatIf registered a task.' }
   }
 });
 
+test('installer registers only the exact hidden Windows PowerShell launcher action', () => {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'clawbot-runtime-hidden-install-'));
+  try {
+    const executablePath = join(temporaryDirectory, 'ezbookkeeping.exe');
+    const wrapperPath = join(temporaryDirectory, 'run-hidden-install-shim.ps1');
+    const launcherPath = hiddenPowerShellLauncher();
+    const launcherArguments = hiddenServiceArguments(executablePath);
+    writeFileSync(executablePath, '', 'utf8');
+    writeFileSync(wrapperPath, `
+$global:registered = $false
+$global:expectedDirectory = $args[1]
+$global:expectedLauncher = $args[2]
+$global:expectedArguments = $args[3]
+function New-ScheduledTaskAction { [CmdletBinding()] param([string]$Execute, [string]$Argument, [string]$WorkingDirectory) [pscustomobject]@{ Execute = $Execute; Arguments = $Argument; WorkingDirectory = $WorkingDirectory } }
+function New-ScheduledTaskTrigger { [CmdletBinding()] param([switch]$AtLogOn, [string]$User) [pscustomobject]@{} }
+function New-ScheduledTaskSettingsSet { [CmdletBinding()] param([int]$RestartCount, [TimeSpan]$RestartInterval, [TimeSpan]$ExecutionTimeLimit, [string]$MultipleInstances, [switch]$StartWhenAvailable, [switch]$AllowStartIfOnBatteries, [switch]$DontStopIfGoingOnBatteries) [pscustomobject]@{} }
+function New-ScheduledTaskPrincipal { [CmdletBinding()] param([string]$UserId, [string]$LogonType, [string]$RunLevel) [pscustomobject]@{} }
+function Register-ScheduledTask {
+  [CmdletBinding()]
+  param([string]$TaskName, [object]$Action, [object]$Trigger, [object]$Settings, [object]$Principal, [switch]$Force)
+  if ($Action.Execute -cne $global:expectedLauncher -or $Action.Arguments -cne $global:expectedArguments -or $Action.WorkingDirectory -cne $global:expectedDirectory) { throw 'Scheduled action was not the exact hidden launcher.' }
+  $global:registered = $true
+}
+& $args[0] -InstallDirectory $args[1] -TaskName 'Clawbot hidden task' -Confirm:$false
+if (-not $global:registered) { throw 'Expected shimmed task registration.' }
+`, 'utf8');
+
+    runPowerShell(['-File', wrapperPath, installScript, temporaryDirectory, launcherPath, launcherArguments]);
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
 test('configure source uses atomic backups, strict task actions, and normalized tokens', () => {
   const configureSource = readFileSync(configureScript, 'utf8');
+  const installSource = readFileSync(installScript, 'utf8');
   assert.doesNotMatch(configureSource, /Copy-Item\s+-LiteralPath\s+\$ConfigPath/);
   assert.match(configureSource, /\[IO\.File\]::Copy\(\$ConfigPath, \$backupPath, \$false\)/);
   assert.match(configureSource, /catch \[System\.IO\.IOException\]/);
@@ -189,6 +234,9 @@ test('configure source uses atomic backups, strict task actions, and normalized 
   assert.doesNotMatch(configureSource, /\[IO\.File\]::WriteAllText\(\$ConfigPath/);
   assert.match(configureSource, /\[IO\.File\]::Replace\(\$temporaryConfigPath, \$ConfigPath, \$replacementBackupPath\)/);
   assert.match(configureSource, /Restore the configuration backup at '\{0\}'/);
+  assert.match(configureSource, /-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Command/);
+  assert.match(installSource, /-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Command/);
+  assert.match(installSource, /WindowsPowerShell\\v1\.0\\powershell\.exe/);
 });
 
 test('configure script accepts the nested conf layout and performs the secured happy path in order', () => {
@@ -208,13 +256,15 @@ test('configure script accepts the nested conf layout and performs the secured h
 $global:expectedTaskName = 'Clawbot test task'
 $global:expectedExecutable = $args[5]
 $global:installDirectory = $args[6]
+$global:expectedLauncher = $args[7]
+$global:expectedLauncherArguments = $args[8]
 $global:trace = @()
 if (-not (Test-Path -LiteralPath $args[3])) { throw 'Happy-path API token fixture is missing.' }
 $global:task = [pscustomobject]@{
   TaskName = $global:expectedTaskName
   TaskPath = '\\'
   State = 'Running'
-  Actions = @([pscustomobject]@{ Execute = $global:expectedExecutable; Arguments = 'server run'; WorkingDirectory = $global:installDirectory })
+  Actions = @([pscustomobject]@{ Execute = $global:expectedLauncher; Arguments = $global:expectedLauncherArguments; WorkingDirectory = $global:installDirectory })
 }
 function Get-ScheduledTask { [CmdletBinding()] param() $global:task }
 function Stop-ScheduledTask { [CmdletBinding()] param([object]$InputObject) if ($InputObject -ne $global:task) { throw 'Wrong stop task object.' }; [void]($global:trace += 'stop') }
@@ -241,7 +291,7 @@ try { & $args[0] -ConfigPath $args[1] -InstallDirectory $args[2] -ApiTokenPath $
 if (($global:trace -join ',') -ne 'stop,start,health,password,token,acl') { throw ('Unexpected call order: ' + ($global:trace -join ',')) }
 `, 'utf8');
 
-    runPowerShell(['-File', wrapperPath, configureScript, configPath, temporaryDirectory, apiTokenPath, mcpTokenPath, executablePath, temporaryDirectory]);
+    runPowerShell(['-File', wrapperPath, configureScript, configPath, temporaryDirectory, apiTokenPath, mcpTokenPath, executablePath, temporaryDirectory, hiddenPowerShellLauncher(), hiddenServiceArguments(executablePath)]);
     assert.equal(readFileSync(configPath, 'utf8'), '[mcp]\nenable_mcp = true\nmcp_allowed_remote_ips = 127.0.0.1\n');
     assert.deepEqual(readFileSync(mcpTokenPath), Buffer.from('normalized-test-token', 'utf8'));
   } finally {
@@ -264,7 +314,7 @@ test('configure script rolls back the INI and running task state when token gene
     writeFileSync(apiTokenPath, 'temporary-api-token', 'utf8');
     writeFileSync(wrapperPath, `
 $global:trace = @()
-$global:task = [pscustomobject]@{ TaskName = 'Clawbot rollback task'; TaskPath = '\\'; State = 'Running'; Actions = @([pscustomobject]@{ Execute = $args[5]; Arguments = 'server run'; WorkingDirectory = $args[2] }) }
+$global:task = [pscustomobject]@{ TaskName = 'Clawbot rollback task'; TaskPath = '\\'; State = 'Running'; Actions = @([pscustomobject]@{ Execute = $args[6]; Arguments = $args[7]; WorkingDirectory = $args[2] }) }
 function Get-ScheduledTask { [CmdletBinding()] param() $global:task }
 function Stop-ScheduledTask { [CmdletBinding()] param([object]$InputObject) if ($InputObject -ne $global:task) { throw 'Wrong rollback stop object.' }; [void]($global:trace += 'stop') }
 function Start-ScheduledTask { [CmdletBinding()] param([object]$InputObject) if ($InputObject -ne $global:task) { throw 'Wrong rollback start object.' }; [void]($global:trace += 'start') }
@@ -275,7 +325,7 @@ function Read-Host { [CmdletBinding()] param([string]$Prompt, [switch]$AsSecureS
 try { & $args[0] -ConfigPath $args[1] -InstallDirectory $args[2] -ApiTokenPath $args[3] -McpTokenPath $args[4] -TaskName 'Clawbot rollback task' -Confirm:$false; throw 'Expected token failure.' } catch { if ($_.Exception.Message -notmatch 'Could not complete local ezBookkeeping MCP setup') { throw } }
 if (($global:trace -join ',') -ne 'stop,start,health,password,token,stop,start') { throw ('Unexpected rollback order: ' + ($global:trace -join ',')) }
 `, 'utf8');
-    runPowerShell(['-File', wrapperPath, configureScript, configPath, temporaryDirectory, apiTokenPath, join(temporaryDirectory, 'mcp.txt'), executablePath]);
+    runPowerShell(['-File', wrapperPath, configureScript, configPath, temporaryDirectory, apiTokenPath, join(temporaryDirectory, 'mcp.txt'), executablePath, hiddenPowerShellLauncher(), hiddenServiceArguments(executablePath)]);
     assert.equal(readFileSync(configPath, 'utf8'), originalIni);
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true });
@@ -296,11 +346,11 @@ test('a locked replace leaves the original INI and atomic backup intact without 
     writeFileSync(wrapperPath, `
 $global:configLock = $null
 $global:configPath = $args[1]
-$global:task = [pscustomobject]@{ TaskName = 'Clawbot replace fault'; TaskPath = '\\'; State = 'Ready'; Actions = @([pscustomobject]@{ Execute = $args[4]; Arguments = 'server run'; WorkingDirectory = $args[2] }) }
+$global:task = [pscustomobject]@{ TaskName = 'Clawbot replace fault'; TaskPath = '\\'; State = 'Ready'; Actions = @([pscustomobject]@{ Execute = $args[5]; Arguments = $args[6]; WorkingDirectory = $args[2] }) }
 function Get-ScheduledTask { [CmdletBinding()] param() $global:configLock = [IO.File]::Open($global:configPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read); $global:task }
 try { & $args[0] -ConfigPath $args[1] -InstallDirectory $args[2] -ApiTokenPath $args[3] -McpTokenPath (Join-Path $args[2] 'mcp.txt') -TaskName 'Clawbot replace fault' -Confirm:$false; throw 'Expected locked replace failure.' } catch { if ($_.Exception.Message -notmatch 'Could not complete local ezBookkeeping MCP setup') { throw } } finally { if ($global:configLock) { $global:configLock.Dispose() } }
 `, 'utf8');
-    runPowerShell(['-File', wrapperPath, configureScript, configPath, temporaryDirectory, join(temporaryDirectory, 'api.txt'), executablePath]);
+    runPowerShell(['-File', wrapperPath, configureScript, configPath, temporaryDirectory, join(temporaryDirectory, 'api.txt'), executablePath, hiddenPowerShellLauncher(), hiddenServiceArguments(executablePath)]);
     assert.equal(readFileSync(configPath, 'utf8'), originalIni);
     const names = readdirSync(configDirectory);
     const backups = names.filter((name) => name.includes('.before-mcp-'));
