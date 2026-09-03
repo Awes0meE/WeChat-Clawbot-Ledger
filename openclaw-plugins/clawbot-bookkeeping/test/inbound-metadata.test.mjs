@@ -103,7 +103,7 @@ test('correlates trusted metadata across isolated plugin instances', async () =>
       toolName: 'record_expense',
       runId: 'run-cross-instance',
       toolCallId: 'tool-call-1',
-      requester: { senderId: 'owner-user', isOwner: true },
+      requester: { senderId: 'owner-user', senderIsOwner: true },
     });
     const result = await tool.execute('tool-call-1', {
       amount: '12.5',

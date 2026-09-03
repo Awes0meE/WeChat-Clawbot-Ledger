@@ -37,6 +37,42 @@ type InboundMessage = {
   timeSource: 'message' | 'received';
 };
 
+type SummaryParams = {
+  period: 'today' | 'this_week' | 'this_month' | 'last_month' | 'this_year';
+  primaryCategory?: string;
+  subcategory?: string;
+  keyword?: string;
+} | {
+  period: 'custom';
+  startDate: string;
+  endDate: string;
+  primaryCategory?: string;
+  subcategory?: string;
+  keyword?: string;
+};
+
+type RecordExpenseParams = {
+  amount: string;
+  primaryCategory: string;
+  subcategory: string;
+  comment?: string;
+};
+
+type RecordExpenseResult = {
+  status: 'created' | 'duplicate';
+  dedupeStatus?: 'unconfirmed';
+  [key: string]: unknown;
+} & ({
+  status: 'created';
+  amountMinor: number;
+  comment: string;
+  time: number;
+} | {
+  status: 'duplicate';
+  previousStatus: string;
+  transactionId?: string;
+});
+
 const TRUSTED_INBOUND_MAX_AGE_MS = 10 * 60 * 1000;
 
 function trustedInboundLookupKey(kind: 'session' | 'sender' | 'run', value: string) {
@@ -139,7 +175,7 @@ export default definePluginEntry({
       : 'D:\\Clawbot\\state\\message-receipts.sqlite';
     const accountName = typeof config.accountName === 'string' ? config.accountName : '日常支出';
     const ledgerDisplayName = typeof config.ledgerDisplayName === 'string' ? config.ledgerDisplayName : '日常账本';
-    const requestTimeoutMs = config.requestTimeoutMs === undefined ? 10_000 : config.requestTimeoutMs;
+    const requestTimeoutMs = (config.requestTimeoutMs === undefined ? 10_000 : config.requestTimeoutMs) as number;
 
     const bookkeepingApi = new EzBookkeepingApi({ serverBaseUrl, tokenPath, requestTimeoutMs });
     const receiptStore = new SqliteReceiptStore(stateDbPath);
@@ -218,7 +254,7 @@ export default definePluginEntry({
       if (event.toolName !== 'record_expense') return;
       const runId = context.runId ?? event.runId;
       const toolCallId = context.toolCallId ?? event.toolCallId;
-      if (!runId || !toolCallId || context.requester?.isOwner !== true) return;
+      if (!runId || !toolCallId || context.requester?.senderIsOwner !== true) return;
       const runKey = transientBindingKey('run', runId);
       const toolCallKey = transientBindingKey('tool-call', toolCallId);
       if (inboundByToolCall.has(toolCallKey)) return;
@@ -248,6 +284,7 @@ export default definePluginEntry({
 
     api.registerTool({
       name: 'bookkeeping_health',
+      label: 'Bookkeeping health',
       catalogMode: 'direct-only',
       description: '只读检查本地 ezBookkeeping 版本、账户和支出分类数量。',
       parameters: Type.Object({}, { additionalProperties: false }),
@@ -266,10 +303,11 @@ export default definePluginEntry({
     api.registerTool(
       (toolContext) => ({
         name: 'summarize_expenses',
+        label: 'Summarize expenses',
         catalogMode: 'direct-only',
         description: '权威的确定性本地账本查询：按时间、分类或关键词汇总 SGD 支出总额、笔数、分类和最大三笔；不会写入账本。',
         parameters: SUMMARY_PARAMETERS,
-        async execute(_id, params) {
+        async execute(_id, params: SummaryParams) {
           if (toolContext.senderIsOwner !== true) {
             throw new Error('无法确认消息发送者为账本 owner，已拒绝查询。');
           }
@@ -326,6 +364,7 @@ export default definePluginEntry({
         );
         return {
           name: 'record_expense',
+          label: 'Record expense',
           catalogMode: 'direct-only',
           description: [
             '将当前一条消费消息记为一笔 SGD 支出。必须由你理解用户消息并选择金额、一级和二级分类。',
@@ -343,7 +382,7 @@ export default definePluginEntry({
             subcategory: Type.String({ minLength: 1, maxLength: 20 }),
             comment: Type.Optional(Type.String({ maxLength: 255 })),
           }, { additionalProperties: false }),
-          async execute(_id, params) {
+          async execute(_id, params: RecordExpenseParams) {
             if (toolContext.senderIsOwner !== true) {
               throw new Error('无法确认消息发送者为账本所有者，已拒绝入账。');
             }
@@ -372,7 +411,7 @@ export default definePluginEntry({
                 input: normalizedInput,
                 inbound,
                 accountName,
-              });
+              }) as RecordExpenseResult;
             } catch (error) {
               if (!(error instanceof ExpenseRecordingError)) throw error;
               api.logger?.error?.(

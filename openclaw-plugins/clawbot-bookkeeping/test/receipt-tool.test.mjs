@@ -113,7 +113,7 @@ async function executeForTurn(inboundHooks, tool, {
     sessionKey: 'agent:main:main',
     requester: {
       senderId: 'owner-user',
-      isOwner: true,
+      senderIsOwner: true,
     },
   });
   return tool.execute(toolCallId, params);
