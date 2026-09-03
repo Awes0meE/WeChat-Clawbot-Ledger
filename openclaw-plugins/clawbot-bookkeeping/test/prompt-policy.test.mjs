@@ -66,6 +66,7 @@ test('requires safe expense phrasing for unknown merchant shorthand', () => {
     assert.equal(text.includes('记账：麦当劳7.2'), true);
     assert.equal(text.includes('我在麦当劳花了7.2'), true);
     assert.equal(text.includes('记账：不要记午饭7.2'), true);
+    assert.equal(text.includes('能帮我记午饭7.2吗'), true);
   }
   assert.match(prompt, /未授权简写[^。]*不得调用 `record_expense`/u);
   assert.match(prompt, /拒绝[^。]*(?:不得重试|不再调用)[^。]*不得宣称成功/u);

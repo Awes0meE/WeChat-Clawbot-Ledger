@@ -405,6 +405,16 @@ for (const [label, content, amount, comment = ''] of [
   ['hearsay disguised as self payment', '我听说麦当劳花了7.2', '7.2'],
   ['boss reimbursement disguised as self payment', '我老板报销午饭花了7.2', '7.2'],
   ['negated explicit bookkeeping command', '记账：不要记午饭7.2', '7.2'],
+  ['polite negated bookkeeping command', '记账：请不要记午饭7.2', '7.2'],
+  ['negative copula inside bookkeeping command', '记账：这不是午饭7.2', '7.2'],
+  ['example inside bookkeeping command', '记账：比如午饭7.2', '7.2'],
+  ['third-party payment inside bookkeeping command', '记账：朋友请我午饭7.2', '7.2'],
+  ['negated at-location payment', '我在麦当劳没花7.2', '7.2'],
+  ['explicitly negated at-location payment', '我在麦当劳没有花7.2', '7.2'],
+  ['unpaid purchase action', '我买了午饭但没付款7.2', '7.2'],
+  ['example inside purchase action', '我买了比如午饭7.2', '7.2'],
+  ['questioned self payment', '我在麦当劳花了7.2吗', '7.2'],
+  ['questioned shorthand', '午饭7.2吗', '7.2'],
 ]) {
   test(`rejects ${label} before claiming or contacting the ledger`, async () => {
     let claimCount = 0;

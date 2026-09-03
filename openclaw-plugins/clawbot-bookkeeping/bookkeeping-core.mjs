@@ -8,10 +8,11 @@ const QUANTITY_OR_TIME_UNIT = /^(?:个|位|人|根|件|张|瓶|杯|盒|包|份|�
 const ADMIN_AMOUNT_CUE = /(?:订单(?:号)?|余额|原价|标价|用券|券|优惠(?:后)?|折扣|编号|单号)\s*$/u;
 const ADMIN_AMOUNT_CLAUSE = /^\s*(?:订单(?:号)?|余额|原价|标价|用券|优惠|折扣|编号|单号)/u;
 const EXPLICIT_COMMAND_PREFIX = /^(?:(?:(?:请|麻烦)?(?:帮我|给我)?(?:记账|记一笔|记|记录一下|记录|入账))|(?:能帮我(?:记账|记一笔|记|记录一下|记录|入账)))\s*[：:]?\s*/u;
-const NEGATED_COMMAND_DESCRIPTION = /^(?:不要|别|无需|不用|取消|停止|撤销)/u;
+const NON_EXPENSE_SEMANTIC_OPERATOR = /(?:不|没|未|无需|无须|取消|撤销|停止|比如|例如|示例|举例|假如|假设|听说|据说|显示|提醒|记住|保存|引用|转述|请我|替我|代付|请客|报销|退款|退回|返现|收款|收入|到账|转我|免费|预计|计划|准备|将要)/u;
 const SAFE_SHORTHAND = /^(?:早饭|早餐|午饭|午餐|晚饭|晚餐|夜宵|咖啡|奶茶|餐饮|买菜|NTUC购物|食阁吃饭|检查费)$/iu;
 const SAFE_DESCRIPTION = /^[\p{L}\p{N}][\p{L}\p{N}\s·&（）()\-]{0,59}$/u;
-const CURRENCY_OR_MODAL_SUFFIX = /^\s*(?:(?:SGD|新币|新元|人民币|块钱|块|元)\s*)?(?:吗|嘛|呢)?[?？]?\s*$/iu;
+const DECLARATIVE_AMOUNT_SUFFIX = /^\s*(?:(?:SGD|新币|新元|人民币|块钱|块|元)\s*)?$/iu;
+const POLITE_COMMAND_QUESTION_SUFFIX = /^\s*(?:(?:SGD|新币|新元|人民币|块钱|块|元)\s*)?(?:吗[?？]?|[?？])\s*$/iu;
 const SELF_AT_TRAILING_ACTION = /^我(?:刚刚?|刚才|今天|昨晚|中午|晚上)?在(.+?)(?:花了?|消费了?|支付了?|付了?|付款)$/u;
 const SELF_SHORTHAND_TRAILING_ACTION = /^我(?:刚刚?|刚才|今天|昨晚|中午|晚上)?(.+?)(?:花了?|消费了?|支付了?|付了?|付款)$/u;
 const SELF_AMOUNT_ONLY_ACTION = /^我(?:刚刚?|刚才|今天|昨晚|中午|晚上)?(?:花了?|消费了?|支付了?|付了?|付款|买了?)$/u;
@@ -87,15 +88,19 @@ function eligibleAmountCandidates(clause, clauseIndex) {
 function classifyProvableExpenseClause(candidate) {
   const prefix = candidate.clause.slice(0, candidate.matchIndex).trim();
   const suffix = candidate.clause.slice(candidate.matchIndex + candidate.expressionLength);
-  if (!CURRENCY_OR_MODAL_SUFFIX.test(suffix)) return undefined;
+  const hasDeclarativeSuffix = DECLARATIVE_AMOUNT_SUFFIX.test(suffix);
 
   const command = prefix.match(EXPLICIT_COMMAND_PREFIX);
   if (command) {
     const description = prefix.slice(command[0].length).trim();
-    return SAFE_DESCRIPTION.test(description) && !NEGATED_COMMAND_DESCRIPTION.test(description)
+    const allowsQuestion = command[0].trimStart().startsWith('能帮我');
+    const hasAllowedSuffix = hasDeclarativeSuffix
+      || (allowsQuestion && POLITE_COMMAND_QUESTION_SUFFIX.test(suffix));
+    return hasAllowedSuffix && SAFE_DESCRIPTION.test(description)
       ? { kind: 'command', description }
       : undefined;
   }
+  if (!hasDeclarativeSuffix) return undefined;
 
   const selfAtTrailing = prefix.match(SELF_AT_TRAILING_ACTION);
   if (selfAtTrailing && SAFE_DESCRIPTION.test(selfAtTrailing[1].trim())) {
@@ -155,7 +160,7 @@ function isAuthorizedExpenseMessage(content, requestedAmountMinor) {
   const originalText = String(content ?? '');
   const commentIndex = originalText.indexOf('备注');
   const text = (commentIndex < 0 ? originalText : originalText.slice(0, commentIndex)).trim();
-  if (!text || INSTRUCTION_INJECTION.test(text)) return false;
+  if (!text || INSTRUCTION_INJECTION.test(text) || NON_EXPENSE_SEMANTIC_OPERATOR.test(text)) return false;
 
   const clauses = text.split(/[，,。；;！!\r\n]+/u).filter(Boolean);
   const candidates = clauses.flatMap((clause, clauseIndex) => eligibleAmountCandidates(clause, clauseIndex));
