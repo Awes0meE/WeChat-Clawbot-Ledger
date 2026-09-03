@@ -5,6 +5,28 @@ import { DatabaseSync } from 'node:sqlite';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_REQUEST_TIMEOUT_MS = 60_000;
+const SQLITE_BUSY_TIMEOUT_MS = 5_000;
+const SQLITE_BUSY_RETRY_MS = 10;
+const SQLITE_BUSY_WAIT = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+
+function enableWalWithBusyRetry(database) {
+  const deadline = Date.now() + SQLITE_BUSY_TIMEOUT_MS;
+  while (true) {
+    try {
+      database.exec('PRAGMA journal_mode = WAL;');
+      return;
+    } catch (error) {
+      const remaining = deadline - Date.now();
+      if (error?.errcode !== 5 || remaining <= 0) throw error;
+      Atomics.wait(
+        SQLITE_BUSY_WAIT,
+        0,
+        0,
+        Math.min(SQLITE_BUSY_RETRY_MS, remaining),
+      );
+    }
+  }
+}
 
 export function trustedInboundMessageKey(channel, messageId) {
   return createHash('sha256').update(`message\u0000${channel}\u0000${messageId}`, 'utf8').digest('hex');
@@ -75,11 +97,11 @@ export class SqliteReceiptStore {
   constructor(path) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
     this.database = new DatabaseSync(path);
+    this.database.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS};`);
+    enableWalWithBusyRetry(this.database);
+    this.database.exec('PRAGMA synchronous = FULL;');
+    this.database.exec('PRAGMA secure_delete = ON;');
     this.database.exec(`
-      PRAGMA journal_mode = WAL;
-      PRAGMA synchronous = FULL;
-      PRAGMA busy_timeout = 5000;
-      PRAGMA secure_delete = ON;
       CREATE TABLE IF NOT EXISTS message_receipts (
         receipt_key TEXT PRIMARY KEY,
         status TEXT NOT NULL,

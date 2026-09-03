@@ -171,6 +171,53 @@ test('trusted inbound queue lets only one concurrent store claim a message', asy
   }
 });
 
+test('concurrent receipt store constructors serialize startup on a fresh database', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-store-startup-'));
+  const path = join(dir, 'receipts.sqlite');
+  const barrier = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const workerStates = [];
+  try {
+    for (let index = 0; index < 12; index += 1) {
+      const worker = new Worker(new URL('./fixtures/open-receipt-store-worker.mjs', import.meta.url), {
+        workerData: { path, barrier },
+      });
+      workerStates.push({ worker, exited: false });
+    }
+    await Promise.all(workerStates.map(({ worker }) => new Promise((resolve, reject) => {
+      worker.once('message', (message) => message.ready ? resolve() : reject(new Error('worker was not ready')));
+      worker.once('error', reject);
+    })));
+    const opened = workerStates.map(({ worker }) => new Promise((resolve, reject) => {
+      worker.once('message', (message) => resolve(message.opened));
+      worker.once('error', reject);
+    }));
+    const exits = workerStates.map((state) => new Promise((resolve, reject) => {
+      state.worker.once('error', reject);
+      state.worker.once('exit', (code) => {
+        state.exited = true;
+        if (code === 0) resolve();
+        else reject(new Error(`startup worker exited with code ${code}`));
+      });
+    }));
+
+    const openedOutcomesPromise = Promise.allSettled(opened);
+    const exitOutcomesPromise = Promise.allSettled(exits);
+    Atomics.store(new Int32Array(barrier), 0, 1);
+    Atomics.notify(new Int32Array(barrier), 0, workerStates.length);
+    const [openedOutcomes, exitOutcomes] = await Promise.all([
+      openedOutcomesPromise,
+      exitOutcomesPromise,
+    ]);
+    assert.deepEqual(openedOutcomes, Array(12).fill({ status: 'fulfilled', value: true }));
+    assert.deepEqual(exitOutcomes, Array(12).fill({ status: 'fulfilled', value: undefined }));
+  } finally {
+    await Promise.all(workerStates
+      .filter(({ exited }) => !exited)
+      .map(({ worker }) => worker.terminate()));
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
 test('trusted inbound queue discards expired entries without disturbing receipt history', () => {
   const dir = mkdtempSync(join(tmpdir(), 'clawbot-inbound-queue-'));
   const path = join(dir, 'receipts.sqlite');
