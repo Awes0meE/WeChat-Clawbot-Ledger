@@ -310,6 +310,10 @@ for (const [label, content, amount] of [
   ['actual paid amount beside an original price', '午饭原价10，实付7.2', '7.2'],
   ['expense amount beside an order number', '订单123，午饭7.2', '7.2'],
   ['expense amount beside an account balance', '午饭7.2，余额100', '7.2'],
+  ['explicit self-paid expense', '我午饭花了7.2', '7.2'],
+  ['explicit bookkeeping command', '帮我记账：打印纸4.5', '4.5'],
+  ['bookkeeping command using give me wording', '给我记一笔午饭7.2', '7.2'],
+  ['simple drink shorthand', '咖啡3', '3'],
 ]) {
   test(`authorizes ${label} from the current trusted message`, async () => {
     let claimCount = 0;
@@ -368,6 +372,12 @@ for (const [label, content, amount, comment = ''] of [
   ['original price mistaken for actual payment', '午饭原价10，实付7.2', '10'],
   ['balance mistaken for money', '午饭7.2，余额100', '100'],
   ['ambiguous separate payments', '午饭7.2，咖啡3', '7.2'],
+  ['incoming transfer from boss', '老板转我7.2', '7.2'],
+  ['incoming transfer from mother', '妈妈给我7.2', '7.2'],
+  ['customer payment', '客户付款7.2', '7.2'],
+  ['cashback', '午饭返现7.2', '7.2'],
+  ['boss quote', '老板说午饭7.2', '7.2'],
+  ['saved text', '请保存这段文字：午饭7.2', '7.2'],
 ]) {
   test(`rejects ${label} before claiming or contacting the ledger`, async () => {
     let claimCount = 0;
