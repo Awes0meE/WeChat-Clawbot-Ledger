@@ -171,6 +171,34 @@ test('API client encodes keywords and omits undefined expense filters', async ()
   }
 });
 
+test('API client normalizes a blank transaction category name to undefined', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-api-'));
+  const tokenPath = join(dir, 'token.txt');
+  writeFileSync(tokenPath, 'secret-test-token', 'utf8');
+  const api = new EzBookkeepingApi({
+    serverBaseUrl: 'http://127.0.0.1:8180',
+    tokenPath,
+    fetchImpl: async () => new Response(JSON.stringify({ success: true, result: [{
+      type: 3,
+      categoryId: 'market',
+      time: 1_788_425_460,
+      sourceAmount: 825,
+      category: { name: '   ' },
+    }] }), { status: 200 }),
+  });
+
+  try {
+    assert.deepEqual(await api.listExpenseTransactions({ accountId: 'account-1' }), [{
+      time: 1_788_425_460,
+      sourceAmount: 825,
+      categoryId: 'market',
+      categoryName: undefined,
+    }]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('API client rejects malformed expense transaction elements', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'clawbot-api-'));
   const tokenPath = join(dir, 'token.txt');

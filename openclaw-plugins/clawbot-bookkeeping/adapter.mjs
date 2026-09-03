@@ -33,7 +33,7 @@ function sanitizeExpenseTransaction(transaction) {
     if (transaction.category.name !== undefined && typeof transaction.category.name !== 'string') {
       throw new Error('expense transaction category name is invalid');
     }
-    categoryName = transaction.category.name;
+    categoryName = transaction.category.name?.trim() || undefined;
   }
   return {
     time: transaction.time,

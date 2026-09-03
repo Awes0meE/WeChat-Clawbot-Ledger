@@ -119,6 +119,14 @@ test('keeps hidden and real other categories distinct from unknown deleted categ
   });
 });
 
+test('uses the hierarchy category name when a sanitized transaction name is blank', () => {
+  const summary = aggregateExpenseSummary([
+    { time: 1_788_100_000, sourceAmount: 825, categoryId: 'market', categoryName: undefined },
+  ], new Map([['market', '食品酒水']]), new Map([['market', '超市购物']]));
+
+  assert.match(formatExpenseSummary('这个月', summary), /最大三笔：\n08\/30 超市购物：8\.25 SGD/u);
+});
+
 test('rejects transactions whose accumulated summary total is unsafe', () => {
   const categories = new Map([['large', '食品酒水'], ['one', '食品酒水']]);
   assert.throws(

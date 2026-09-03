@@ -160,7 +160,9 @@ test('returns an authoritative owner expense summary for this month', async () =
     assert.match(result.content[0].text, /^这个月一共花了 8\.25 SGD，共 1 笔 📊/u);
     assert.equal(result.details.status, 'ok');
     assert.equal(result.details.totalAmountMinor, 825);
+    assert.equal(requests.filter(({ url }) => new URL(url).pathname.endsWith('/accounts/list.json')).length, 1);
     assert.equal(requests.filter(({ url }) => new URL(url).pathname.endsWith('/transaction/categories/list.json')).length, 1);
+    assert.equal(requests.filter(({ url }) => new URL(url).pathname.endsWith('/transactions/list/all.json')).length, 1);
     const transactionRequest = new URL(requests.at(-1).url);
     assert.equal(transactionRequest.pathname, '/api/v1/transactions/list/all.json');
     assert.equal(transactionRequest.searchParams.get('category_ids'), 'secondary-1');
@@ -227,28 +229,56 @@ test('uses hidden categories for truthful historical mapping and keeps unknown i
   }
 });
 
-test('omits a blank summary keyword instead of treating it as a ledger failure', async () => {
+test('rejects a blank summary keyword before reading a token or contacting the ledger', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-summary-'));
+  let requestCount = 0;
+  const harness = createPluginHarness(tempDirectory, async () => {
+    requestCount += 1;
+    throw new Error('fetch must not run');
+  });
+
+  try {
+    await assert.rejects(
+      () => harness.summarizeExpensesFactory(ownerContext()).execute('tool-call-blank-keyword', {
+        period: 'this_month', keyword: '   ',
+      }),
+      /关键词/u,
+    );
+    assert.equal(requestCount, 0);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('uses a visible primary category id without duplicate reads for a primary-only filter', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-summary-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
-  let transactionRequest;
+  const requests = [];
   const harness = createPluginHarness(tempDirectory, async (url) => {
+    requests.push(new URL(url));
     const pathname = new URL(url).pathname;
     if (pathname.endsWith('/accounts/list.json')) {
       return new Response(JSON.stringify({ success: true, result: [{ id: 'account-1', name: '日常支出', currency: 'SGD' }] }), { status: 200 });
     }
     if (pathname.endsWith('/transaction/categories/list.json')) {
-      return new Response(JSON.stringify({ success: true, result: { 2: [] } }), { status: 200 });
+      return new Response(JSON.stringify({ success: true, result: {
+        2: [{ id: 'primary-1', name: '食品酒水', parentId: '0', subCategories: [] }],
+      } }), { status: 200 });
     }
-    transactionRequest = new URL(url);
     return new Response(JSON.stringify({ success: true, result: [] }), { status: 200 });
   });
 
   try {
-    const result = await harness.summarizeExpensesFactory(ownerContext()).execute('tool-call-blank-keyword', {
-      period: 'this_month', keyword: '   ',
+    const result = await harness.summarizeExpensesFactory(ownerContext()).execute('tool-call-primary-filter', {
+      period: 'this_month', primaryCategory: '食品酒水',
     });
     assert.equal(result.details.status, 'ok');
-    assert.equal(transactionRequest.searchParams.has('keyword'), false);
+    assert.equal(requests.filter((url) => url.pathname.endsWith('/accounts/list.json')).length, 1);
+    assert.equal(requests.filter((url) => url.pathname.endsWith('/transaction/categories/list.json')).length, 1);
+    const transactionRequests = requests.filter((url) => url.pathname.endsWith('/transactions/list/all.json'));
+    assert.equal(transactionRequests.length, 1);
+    assert.equal(transactionRequests[0].searchParams.get('category_ids'), 'primary-1');
   } finally {
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });

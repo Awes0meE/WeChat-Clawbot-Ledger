@@ -202,7 +202,10 @@ export default definePluginEntry({
           const subcategory = params.subcategory === undefined
             ? undefined
             : normalizeSubcategory(params.primaryCategory, params.subcategory);
-          const keyword = params.keyword?.trim() || undefined;
+          const keyword = params.keyword?.trim();
+          if (params.keyword !== undefined && !keyword) {
+            throw new Error('查询关键词不能为空白。');
+          }
           const range = resolveExpenseRange(params);
 
           try {
