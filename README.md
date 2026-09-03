@@ -22,7 +22,7 @@ WeChat -> OpenClaw owner-bound local Qwen
 | 本地模型 | Ollama `qwen3:8b`；8192-token context；thinking off |
 | 账本 | ezBookkeeping 1.6.1；只绑定 `127.0.0.1:8180` |
 | 账户与币种 | 唯一可见 SGD 账户 `日常支出`；回执显示 `日常账本` |
-| 分类 | `config/expense-categories.json` 中固定的 11 个一级、45 个二级分类 |
+| 分类 | 运行时以 `openclaw-plugins/clawbot-bookkeeping/categories.mjs` 的不可变 `CATEGORY_DEFINITIONS` 为权威契约，固定为 11 个一级、45 个二级分类 |
 | 专用代理 allowlist | `record_expense`、`summarize_expenses`、`ezbookkeeping__query_transactions` |
 
 ## 助理行为
@@ -75,9 +75,10 @@ HTTP API token 与原生 MCP token 是两份不同的本机秘密：前者供定
 | 路径 | 用途 |
 | --- | --- |
 | `openclaw-plugins/clawbot-bookkeeping/` | 可信写入、确定性汇总、owner-only MCP resolver 及测试 |
+| `openclaw-plugins/clawbot-bookkeeping/categories.mjs` | 运行时权威分类契约 `CATEGORY_DEFINITIONS` |
 | `openclaw-plugins/openclaw-weixin-stable-id/` | 保留腾讯消息 ID 和发送者元数据的本地微信插件变体 |
 | `openclaw-workspace/AGENTS.md` | 专用本地记账代理的运行提示 |
-| `config/expense-categories.json` | 固定 11/45 分类源 |
+| `config/expense-categories.json` | 脱敏的 11/45 分类导入与部署快照，不是运行时真源 |
 | `config/*.example.json` | 不含真实身份和凭据的 OpenClaw 配置模板 |
 | `scripts/install-ezbookkeeping-task.ps1` | 安装可恢复的 Windows 登录自启动任务 |
 | `scripts/configure-ezbookkeeping-mcp.ps1` | 备份配置、启用本机 MCP、交互生成并保护 MCP token |

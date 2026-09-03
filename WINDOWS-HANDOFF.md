@@ -43,7 +43,7 @@ ezbookkeeping__query_transactions
 
 ## 分类契约
 
-`config/expense-categories.json` 是机器可读真源，分类不可由模型自由发明。当前固定为 11 个一级分类、45 个二级分类：
+运行时以 `openclaw-plugins/clawbot-bookkeeping/categories.mjs` 中不可变的 `CATEGORY_DEFINITIONS` 为权威分类契约；`config/expense-categories.json` 是供初始化和部署核对的脱敏目录快照，不是运行时真源。两者当前都固定为 11 个一级分类、45 个二级分类，分类不可由模型自由发明：
 
 | 一级分类 | 二级分类 |
 | --- | --- |
@@ -301,7 +301,8 @@ rg -n --hidden --glob '!**/node_modules/**' --glob '!**/.git/**' '(?i)password\s
 | `WINDOWS-HANDOFF.md` | 本文件；部署、运行、恢复与微信验收 |
 | `docs/bookkeeping-deployment-brief.md` | 方案与安全权衡摘要 |
 | `docs/expense-categories.md` | 11/45 分类可读表 |
-| `config/expense-categories.json` | 分类机器真源 |
+| `openclaw-plugins/clawbot-bookkeeping/categories.mjs` | 运行时权威分类契约 `CATEGORY_DEFINITIONS` |
+| `config/expense-categories.json` | 脱敏的分类导入与部署快照 |
 | `config/*.example.json` | 脱敏 OpenClaw 配置模板 |
 | `scripts/install-ezbookkeeping-task.ps1` | Windows 计划任务安装 |
 | `scripts/configure-ezbookkeeping-mcp.ps1` | MCP 配置、token 生成和回滚 |

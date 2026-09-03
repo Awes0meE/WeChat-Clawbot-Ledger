@@ -13,7 +13,7 @@ WeChat -> OpenClaw owner-bound local Qwen
 
 手机微信是输入与回复入口，腾讯 iLink 将消息交给 Windows OpenClaw。专用 `bookkeeper` 使用本地 Ollama `qwen3:8b` 理解账本意图；ezBookkeeping 1.6.1 在 `127.0.0.1:8180` 保存和查询本地 SQLite 数据。Gateway 也只绑定 loopback。
 
-配置中的正式账户为唯一可见 SGD 账户 `日常支出`，微信回执显示账本名 `日常账本`。分类以 `config/expense-categories.json` 为唯一机器可读源，固定为 11 个一级分类、45 个二级分类。
+配置中的正式账户为唯一可见 SGD 账户 `日常支出`，微信回执显示账本名 `日常账本`。运行时以 `openclaw-plugins/clawbot-bookkeeping/categories.mjs` 中不可变的 `CATEGORY_DEFINITIONS` 为权威分类契约，固定为 11 个一级分类、45 个二级分类；`config/expense-categories.json` 只是脱敏的导入与部署目录快照。
 
 ## 为什么采用混合接入
 
