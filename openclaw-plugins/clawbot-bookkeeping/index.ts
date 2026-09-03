@@ -74,6 +74,7 @@ type RecordExpenseResult = {
 });
 
 const TRUSTED_INBOUND_MAX_AGE_MS = 10 * 60 * 1000;
+const TOOL_CALL_SLOT_RETENTION_MS = TRUSTED_INBOUND_MAX_AGE_MS;
 
 function trustedInboundLookupKey(kind: 'session' | 'sender' | 'run', value: string) {
   return createHash('sha256').update(`${kind}\u0000${value}`, 'utf8').digest('hex');
@@ -181,7 +182,19 @@ export default definePluginEntry({
     const receiptStore = new SqliteReceiptStore(stateDbPath);
     const preparedRuns = new Set<string>();
     const inboundByRun = new Map<string, InboundMessage>();
-    const inboundByToolCall = new Map<string, { inbound: InboundMessage; runKey: string }>();
+    const toolCallSlots = new Map<string, {
+      runKey: string;
+      inbound?: InboundMessage;
+      ambiguous: boolean;
+      touchedAt: number;
+    }>();
+    const pruneExpiredToolCallSlots = (now = Date.now()) => {
+      for (const [toolCallKey, slot] of toolCallSlots) {
+        if (now - slot.touchedAt > TOOL_CALL_SLOT_RETENTION_MS) {
+          toolCallSlots.delete(toolCallKey);
+        }
+      }
+    };
 
     api.registerMcpServerConnectionResolver({
       serverName: 'ezbookkeeping',
@@ -252,33 +265,53 @@ export default definePluginEntry({
 
     api.on('before_tool_call', (event, context) => {
       if (event.toolName !== 'record_expense') return;
+      const now = Date.now();
+      pruneExpiredToolCallSlots(now);
       const runId = context.runId ?? event.runId;
       const toolCallId = context.toolCallId ?? event.toolCallId;
       if (!runId || !toolCallId || context.requester?.senderIsOwner !== true) return;
       const runKey = transientBindingKey('run', runId);
       const toolCallKey = transientBindingKey('tool-call', toolCallId);
-      if (inboundByToolCall.has(toolCallKey)) return;
+      const existingSlot = toolCallSlots.get(toolCallKey);
+      if (existingSlot) {
+        if (existingSlot.runKey !== runKey) {
+          existingSlot.ambiguous = true;
+          existingSlot.touchedAt = now;
+          delete existingSlot.inbound;
+          inboundByRun.delete(runKey);
+        }
+        return;
+      }
       const inbound = inboundByRun.get(runKey);
-      if (!inbound) return;
-      inboundByRun.delete(runKey);
-      inboundByToolCall.set(toolCallKey, { inbound, runKey });
+      toolCallSlots.set(toolCallKey, {
+        runKey,
+        ...(inbound ? { inbound } : {}),
+        ambiguous: false,
+        touchedAt: now,
+      });
+      if (inbound) inboundByRun.delete(runKey);
     });
 
     api.on('agent_end', (event, context) => {
+      const now = Date.now();
+      pruneExpiredToolCallSlots(now);
       const runId = context.runId ?? event.runId;
       if (!runId) return;
       const runKey = transientBindingKey('run', runId);
       preparedRuns.delete(runKey);
       inboundByRun.delete(runKey);
-      for (const [toolCallKey, binding] of inboundByToolCall) {
-        if (binding.runKey === runKey) inboundByToolCall.delete(toolCallKey);
+      for (const slot of toolCallSlots.values()) {
+        if (slot.runKey === runKey) {
+          delete slot.inbound;
+          slot.touchedAt = now;
+        }
       }
     });
 
     api.on('gateway_stop', () => {
       preparedRuns.clear();
       inboundByRun.clear();
-      inboundByToolCall.clear();
+      toolCallSlots.clear();
       receiptStore.close();
     });
 
@@ -384,16 +417,15 @@ export default definePluginEntry({
             comment: Type.Optional(Type.String({ maxLength: 255 })),
           }, { additionalProperties: false }),
           async execute(_id, params: RecordExpenseParams) {
+            pruneExpiredToolCallSlots();
             if (toolContext.senderIsOwner !== true) {
               throw new Error('无法确认消息发送者为账本所有者，已拒绝入账。');
             }
-            const binding = typeof _id === 'string'
-              ? inboundByToolCall.get(transientBindingKey('tool-call', _id))
+            const slot = typeof _id === 'string'
+              ? toolCallSlots.get(transientBindingKey('tool-call', _id))
               : undefined;
-            const inbound = binding?.inbound;
-            if (typeof _id === 'string') {
-              inboundByToolCall.delete(transientBindingKey('tool-call', _id));
-            }
+            const inbound = slot?.ambiguous === false ? slot.inbound : undefined;
+            if (slot) delete slot.inbound;
             if (!inbound) {
               throw new Error('缺少当前微信消息的可信元数据，已拒绝入账。');
             }

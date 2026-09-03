@@ -102,6 +102,15 @@ async function executeForTurn(inboundHooks, tool, {
   toolCallId,
   params,
 }) {
+  await bindToolCallForTurn(inboundHooks, { runId, toolCallId, params });
+  return tool.execute(toolCallId, params);
+}
+
+async function bindToolCallForTurn(inboundHooks, {
+  runId,
+  toolCallId,
+  params,
+}) {
   await inboundHooks.get('before_tool_call')?.({
     toolName: 'record_expense',
     params,
@@ -116,7 +125,6 @@ async function executeForTurn(inboundHooks, tool, {
       senderIsOwner: true,
     },
   });
-  return tool.execute(toolCallId, params);
 }
 
 function trustedOwnerContext() {
@@ -126,6 +134,28 @@ function trustedOwnerContext() {
     messageChannel: 'openclaw-weixin',
     agentAccountId: 'bot-account',
     requesterSenderId: 'owner-user',
+  };
+}
+
+function successfulExpenseFetch(requests) {
+  return async (url, options) => {
+    requests.push({ url, options });
+    if (url.endsWith('/accounts/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: [
+        { id: 'account-1', name: '日常支出', currency: 'SGD' },
+      ] }), { status: 200 });
+    }
+    if (url.endsWith('/transaction/categories/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: {
+        2: [{ id: 'primary-1', name: '食品酒水', parentId: '0', subCategories: [
+          { id: 'secondary-1', name: '早午晚餐', parentId: 'primary-1' },
+        ] }],
+      } }), { status: 200 });
+    }
+    if (url.endsWith('/transactions/add.json')) {
+      return new Response(JSON.stringify({ success: true, result: { id: 'transaction-collision-test' } }), { status: 200 });
+    }
+    throw new Error(`unexpected URL: ${url}`);
   };
 }
 
@@ -368,6 +398,158 @@ test('does not let a non-message run consume a pending trusted inbound', async (
     assert.equal(result.details.status, 'failed');
     assert.equal(requestCount, 1);
   } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('fails both concurrent calls closed when different runs share one tool call id', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const harness = createPluginHarness(tempDirectory, successfulExpenseFetch(requests));
+
+  try {
+    const cachedTool = harness.rawRecordExpenseFactory(trustedOwnerContext());
+    const firstRunId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭7.2',
+      messageId: 'collision-first-message',
+    });
+    const secondRunId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '晚饭7.2',
+      messageId: 'collision-second-message',
+    });
+    const params = {
+      amount: '7.2',
+      primaryCategory: '食品酒水',
+      subcategory: '早午晚餐',
+    };
+    const results = await Promise.allSettled([
+      executeForTurn(harness.inboundHooks, cachedTool, {
+        runId: firstRunId,
+        toolCallId: 'shared-tool-call-id',
+        params,
+      }),
+      executeForTurn(harness.inboundHooks, cachedTool, {
+        runId: secondRunId,
+        toolCallId: 'shared-tool-call-id',
+        params,
+      }),
+    ]);
+
+    assert.deepEqual(results.map(({ status }) => status), ['rejected', 'rejected']);
+    for (const result of results) {
+      assert.match(result.reason.message, /可信元数据/u);
+    }
+    assert.equal(requests.length, 0);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('keeps a reused tool call id ambiguous after the first run ends', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const harness = createPluginHarness(tempDirectory, successfulExpenseFetch(requests));
+
+  try {
+    const cachedTool = harness.rawRecordExpenseFactory(trustedOwnerContext());
+    const firstRunId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭7.2',
+      messageId: 'ended-collision-first-message',
+    });
+    const params = {
+      amount: '7.2',
+      primaryCategory: '食品酒水',
+      subcategory: '早午晚餐',
+    };
+    await bindToolCallForTurn(harness.inboundHooks, {
+      runId: firstRunId,
+      toolCallId: 'reused-after-end-id',
+      params,
+    });
+    await harness.inboundHooks.get('agent_end')?.({
+      runId: firstRunId,
+      messages: [],
+      success: true,
+    }, { runId: firstRunId });
+
+    const secondRunId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '晚饭7.2',
+      messageId: 'ended-collision-second-message',
+    });
+    await bindToolCallForTurn(harness.inboundHooks, {
+      runId: secondRunId,
+      toolCallId: 'reused-after-end-id',
+      params,
+    });
+
+    await assert.rejects(
+      () => cachedTool.execute('reused-after-end-id', params),
+      /可信元数据/u,
+    );
+    await assert.rejects(
+      () => cachedTool.execute('reused-after-end-id', params),
+      /可信元数据/u,
+    );
+    assert.equal(requests.length, 0);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('expires completed tool call tombstones after the trusted-message window', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const harness = createPluginHarness(tempDirectory, successfulExpenseFetch(requests));
+  const originalNow = Date.now;
+  let now = 2_000_000_000_000;
+  Date.now = () => now;
+
+  try {
+    const cachedTool = harness.rawRecordExpenseFactory(trustedOwnerContext());
+    const params = {
+      amount: '7.2',
+      primaryCategory: '食品酒水',
+      subcategory: '早午晚餐',
+    };
+    const firstRunId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭7.2',
+      messageId: 'expired-slot-first-message',
+      timestamp: 1_788_425_460,
+    });
+    await bindToolCallForTurn(harness.inboundHooks, {
+      runId: firstRunId,
+      toolCallId: 'expired-reused-id',
+      params,
+    });
+    await harness.inboundHooks.get('agent_end')?.({
+      runId: firstRunId,
+      messages: [],
+      success: true,
+    }, { runId: firstRunId });
+
+    now += (10 * 60 * 1000) + 1;
+    const secondRunId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '晚饭7.2',
+      messageId: 'expired-slot-second-message',
+      timestamp: 1_788_425_520,
+    });
+    const result = await executeForTurn(harness.inboundHooks, cachedTool, {
+      runId: secondRunId,
+      toolCallId: 'expired-reused-id',
+      params,
+    });
+
+    assert.equal(result.details.status, 'created');
+    const addRequest = requests.find(({ url }) => url.endsWith('/transactions/add.json'));
+    assert.equal(JSON.parse(addRequest.options.body).time, 1_788_425_520);
+  } finally {
+    Date.now = originalNow;
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
   }
