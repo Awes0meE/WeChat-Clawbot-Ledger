@@ -1,144 +1,49 @@
-# Windows 运行与交接：微信 OpenClaw 个人记账系统
+# Windows 运行与交接：微信本地账本助理
 
-整理并更新于 2026-09-03，Asia/Singapore。此文件同时记录 Mac 历史基线、Windows 当前实测状态和后续开发边界；运行状态仍应在接手时重新探测。
+整理于 2026-09-03，时区 `Asia/Singapore`。这是 Windows 接手、恢复和验收的第一入口。仓库描述发布契约；任何“正在运行”结论都必须在当前主机重新探测。
 
-## 当前运行基线
+## 不变边界
 
-请先阅读本文件和 `config/expense-categories.json`，再检查 Windows 上“微信官方 iLink → OpenClaw → 本地小模型 → ezBookkeeping”的实时状态。优先维护现有链路；只在实际发现缺口时增加少量适配代码，不要重新做候选项目调研。
+- Windows 是唯一在线接收端，原 Mac 接收端已停止。不要让两台 iLink Gateway 同时轮询。
+- 微信消息经腾讯 iLink 进入 Windows OpenClaw；专用 `bookkeeper` 使用本地 Qwen，账本数据不得交给云端模型。
+- OpenClaw Gateway 固定绑定 `127.0.0.1:18789`，ezBookkeeping 固定绑定 `127.0.0.1:8180`。
+- 本轮不部署 Vercel，不开放公网端口，不实现家庭网页登录。
+- 不提交或转发密码、API token、MCP token、微信账户 ID、发送者 ID、二维码、会话正文、SQLite 文件或 OpenClaw 状态。
 
-用户已经确认使用 Windows 本地链路。Windows 微信接收端已启用，Mac 接收端已停止；不要让两个 iLink 接收端同时运行。扫码或缺少必要访问资料时向用户说明具体一步即可，不要反复要求批准已经同意的正常安装配置工作。
-
-Windows 的模型、账本、分类、专用记账插件、微信渠道与常驻服务均已部署。2026-09-03 用户发送真实消费消息后，手机收到“已记账”回复；该成功回执只会在 ezBookkeeping 写入确认后生成。
-
-## Windows 当前实测进度
-
-| 项目 | 2026-09-03 实测状态 |
-| --- | --- |
-| 系统 / 硬件 | Windows 11 build 22631；Ryzen 9 6900HX；RTX 3070 Ti Laptop 8GB；32GB RAM |
-| OpenClaw | 2026.8.2；Scheduled Task 常驻；`127.0.0.1:18789`；探测通过 |
-| 本地模型 | Ollama 0.33.2；`qwen3:8b` Q4；全 GPU；8192 context；thinking off |
-| 模型工具调用 | Qwen 直接调用 `bookkeeping_health` 与 `record_expense`；真实微信记账已返回成功 |
-| ezBookkeeping | v1.6.1；`D:\Clawbot\ezbookkeeping`；`127.0.0.1:8180`；登录自启动任务运行中且端口复查通过 |
-| 测试账本 | 测试账户已注册；可见 SGD 账户“日常支出”1 个；11/45 分类已导入并核验 |
-| 记账适配 | `openclaw-plugins/clawbot-bookkeeping`；固定 loopback API；跨插件实例的短时可信元数据；持久 SQLite 消息去重；13 项测试通过 |
-| 微信插件 | 腾讯 2.4.8 的本地稳定消息 ID / sender 元数据变体；已启用、已配置、运行中 |
-| 常驻条件 | 插电睡眠/休眠均为“从不”；Ollama 在用户启动项；Gateway 与账本有各自登录自启动 |
-
-敏感凭据与真实微信账号标识只留在各程序的本地状态或被 Git 忽略的本机配置中。仓库只保留去标识化示例；Mac 接收端保持停止。
-
-## 最终目标和分工
-
-当前要做的是个人微信记账，支持单条消费记录及按需查询。未来才考虑 Windows 文件与 Git 状态检查、Codex 编程、Mac 本地大模型、预算复盘和定时任务。
+## 发布架构
 
 ```text
-手机微信里的 ClawBot
-       ↕
-腾讯官方 iLink
-       ↕
-Windows 上常驻的 OpenClaw Gateway
-       ├─ 本地小型 Qwen：理解每条消费并选择分类
-       └─ 账本工具 → ezBookkeeping → Windows 本地 SQLite
-
-Mac：后续管理端 / 按需执行设备，本阶段不承担必需的在线服务
+WeChat -> OpenClaw owner-bound local Qwen
+  -> record_expense -> trusted write adapter -> ezBookkeeping HTTP API
+  -> summarize_expenses -> deterministic read adapter -> ezBookkeeping HTTP API
+  -> ezbookkeeping__query_transactions -> requester-scoped read-only MCP
 ```
 
-OpenClaw 负责消息、会话、模型调用和工具执行，本身不是提供推理能力的模型。手机微信是输入与回复入口；模型理解消费，账本程序保存和查询数据。当前 Mac 使用 OpenAI 云端模型，计划中的 Windows 记账改用本地小模型。即使推理本地化，消息仍会经过微信和腾讯 iLink。
+各层职责：
 
-把 Gateway 放 Windows 的原因：Mac 经常合盖放包，睡眠或离线期间无法保证回复；Windows 长期插电联网，更适合常驻。显示器可以关闭，关键是主机不进入阻断服务的睡眠，并验证重启后的服务恢复。
-
-## 设备和不能动的环境
-
-| 设备 | 已知信息 |
+| 层 | 职责 |
 | --- | --- |
-| Mac | MacBook Pro，M5 Pro，48GB unified memory，1TB SSD；用户随身携带 |
-| Mac 模型 | Bionic + Qwen3.8-27B，128K context，模型运行时基本占满内存；这是用户提供的环境信息 |
-| Windows | ROG 魔霸 6P；Ryzen 9 6900HX；RTX 3070 Ti Laptop 8GB；32GB DDR5；Windows 11 build 22631 |
-| Windows 功耗补充 | 用户描述满载 180W+；未确定这是整机还是 GPU 功耗，不作为显卡 TGP 实测值 |
-| 双机网络 | 已通过 ZeroTier 互通；用户平时从 Mac 用 Parsec 控制 Windows |
+| 腾讯 iLink / stable-ID 插件 | 保留可信消息 ID、发送者、会话和消息时间 |
+| OpenClaw `bookkeeper` | 判断记账、汇总、历史查询或需要澄清；只发送最终回复 |
+| 本地 Qwen | 理解金额、分类、语义备注和查询意图，不负责精确求和或服务恢复 |
+| `clawbot-bookkeeping` | 可信消息关联、字段校验、去重、安全写入、确定性汇总、owner-only MCP resolver |
+| ezBookkeeping | Windows 本地 SQLite、账户/分类、交易 HTTP API、只读 MCP 查询 |
 
-- 不启动、调用或修改 Mac 上的 Bionic / Qwen，不沿用其 128K context。
-- 不修改现有 ZeroTier，不清理其他开发环境，不重装 Homebrew，不清空 `~/.openclaw`，不大规模清理 npm 缓存。
-- 不启用 Codex 编程、GitHub 自动化、月报定时任务、银行连接或整机通用控制权限。
-- Windows 本地模型已用 Qwen3-8B Q4、8192 context 完成健康检查和真实微信记账；后续性能工作再记录稳定延迟与显存余量。
+当前兼容基线为 OpenClaw 2026.8.2、ezBookkeeping 1.6.1、Ollama `qwen3:8b`（8192-token context、thinking off）。配置账户固定为唯一可见 SGD 账户 `日常支出`，回执账本名固定为 `日常账本`。
 
-## Mac 已完成且验收成功的部分
-
-2026-09-03 已实际通过：手机微信 → 官方腾讯 iLink → Mac OpenClaw Gateway → Agent → 微信手机显示回复。用户明确确认“看到回复了”。
-
-| 项目 | 已核验结果 |
-| --- | --- |
-| OpenClaw | 2026.8.2，提交 0965053；当时 npm latest 同版本 |
-| 微信插件 | `@tencent-weixin/openclaw-weixin@2.4.8`，固定版本 |
-| Node / npm | v22.23.1 / 10.9.8 |
-| 命令路径 | `/opt/homebrew/bin/openclaw` |
-| 命令实际目标 | `/opt/homebrew/lib/node_modules/openclaw/openclaw.mjs` |
-| Node / npm 路径 | `/opt/homebrew/bin/node` / `/opt/homebrew/bin/npm` |
-| npm 全局目录 | `/opt/homebrew` |
-| 配置 | `/Users/USER/.openclaw/openclaw.json` |
-| Agent 工作区 | `/Users/USER/.openclaw/workspace` |
-| 系统 | macOS 26.6，ARM64 |
-| 服务 | 用户级 launchd LaunchAgent `ai.openclaw.gateway` |
-| 服务定义 | `/Users/USER/Library/LaunchAgents/ai.openclaw.gateway.plist` |
-| 服务 Node | `/opt/homebrew/opt/node@22/bin/node` |
-| 监听地址 | `127.0.0.1:18789`，保留 token 认证 |
-| 控制台 | `http://127.0.0.1:18789/` |
-| 模型 | `openai/gpt-5.6-sol`，复用已有 OpenAI OAuth 登录 |
-| 运行器 | OpenClaw embedded；Codex 插件显式禁用，无 Codex CLI 编程接入 |
-| 微信 | 已扫码绑定，渠道 enabled / configured / running；手机收发验收通过 |
-
-初次故障根因：onboarding 的 Codex 插件安装未取得 capability consent，Gateway 在插件校验处反复退出；当时微信插件还未安装。处理是安装官方微信插件、接受其声明的渠道能力、显式关闭 Codex 插件、把模型运行器设置为 OpenClaw，保留原 OAuth 登录。没有盲目降级或升级。
-
-微信日志记录：04:04:21 收到入站消息，04:04:27 `outbound: text sent OK`；Agent 会话完成。另有实际模型调用返回“Mac Agent 已就绪。”。基础测试后 Gateway RSS 约 367MiB；服务参数 12288MiB 是 V8 堆上限，不是实际占用或预留内存。
-
-当时生效的范围限制：
+专用代理的最终 allowlist 恰好是：
 
 ```text
-tools.profile = minimal
-plugins.entries.codex.enabled = false
-plugins.entries.openclaw-weixin.enabled = true
-默认模型及 main Agent 的 agentRuntime.id = openclaw
-agents.defaults.heartbeat.every = 0m
-cron.enabled = false
-skills.workshop.autonomous.mode = off
-session.dmScope = per-account-channel-peer
+record_expense
+summarize_expenses
+ezbookkeeping__query_transactions
 ```
 
-`minimal` 目前只给模型 session_status，没有文件和终端工具。接入账本时需要配置必要的账本能力，不能假定安装 Skill 后原权限就足够，也不要因此开放整个系统。
+`bookkeeping_health` 是插件自检工具，但不进入微信专用代理的最终 allowlist，也不能冒充查询。
 
-Mac 运维命令（Windows 上要按所选安装方式另行验证）：
+## 分类契约
 
-```sh
-openclaw gateway start
-openclaw gateway stop --force
-openclaw gateway restart --safe
-openclaw gateway status
-openclaw channels status --probe
-openclaw plugins info openclaw-weixin
-openclaw logs --follow --plain
-tail -n 100 ~/Library/Logs/openclaw/gateway.log
-```
-
-补充日志：`/tmp/openclaw/openclaw-YYYY-MM-DD.log`。认证和账号状态留在 Mac 的 `~/.openclaw`；本交接包不包含任何 token、OAuth 凭据或有效二维码。
-
-## 记账的最终需求
-
-### 输入、时间、币种与备注
-
-- 默认 SGD（新加坡元），时区 Asia/Singapore。
-- 每条消费消息都用模型理解和分类。用户明确不接受“正则/规则优先，仅疑难项调用模型”的旧方案。
-- 一条消息记一笔支出。记录金额、一级/二级分类、时间和可选备注。
-- 时间默认使用微信消息时间。腾讯插件源码已确认将 `create_time_ms` 传入 OpenClaw 的 `Timestamp`；仍需实测正确写入账本。缺失时可用接收时间并记录来源，不让模型自由编造。
-- 记录时间不等于实测付款时间。用户另说具体消费时间时再处理，不能拿模型回答完成时间代替消息时间。
-- 备注复用 ezBookkeeping 已有 `comment` 字段，不需要为了字段名另改数据库。当前实现只原样提取显式“备注”后的文字；下一阶段改为由本地模型根据整条消息提炼简短备注。
-- 目标示例：`午饭食阁6.5+2.5` 的备注为 `食阁吃饭`；`NTUC购物8.25，买了两根芹菜，一个菜板` 的备注为 `两根芹菜，一个菜板`。只根据原文提炼，不补充消息里没有的事实。
-- 用户不关心超市买了哪些商品，也不需要拆账。此例整笔 S$8.25 归“食品酒水 / 超市购物”，不因食材和日用品混合而追问分类。
-- 没有地点、商品或其他有效细节时，comment 留空，微信回执显示 `无`。现有 comment 字段在核验版本中上限 255 字符；不得静默截断超长输入。
-- 保存成功后才在微信确认成功；金额等汇总用账本程序准确计算，不靠模型心算。
-- 重复投递同一微信消息不能新增第二笔；用户实际发送两条内容相同的消息不应仅因文本相同就被误删。
-
-### 分类表：11 个一级分类 / 45 个二级分类
-
-以 `config/expense-categories.json` 为机器可读源。原用户口述 43 个二级分类，现已明确增加“饮料甜品”“超市购物”，都放在食品酒水下；不添加“生鲜食材”。仅将“坐机费”规范成“座机费”。分类已导入 Windows 测试账本并核验为 11/45。
+`config/expense-categories.json` 是机器可读真源，分类不可由模型自由发明。当前固定为 11 个一级分类、45 个二级分类：
 
 | 一级分类 | 二级分类 |
 | --- | --- |
@@ -154,82 +59,257 @@ tail -n 100 ~/Library/Logs/openclaw/gateway.log
 | 金融保险 | 银行手续、投资亏损、按揭还款、消费税收、利息支出、赔偿罚款 |
 | 其他杂项 | 其他支出、意外丢失、烂账损失 |
 
-### 后续测试输入，不是待导入的真实支出
+用户确认过的分类规则包括：NTUC/FairPrice 整笔可归“食品酒水 / 超市购物”，不按商品拆账；饮品可归“食品酒水 / 饮料甜品”；没有“生鲜食材”分类。
 
-| 输入 | 预期金额 / 分类 / 备注 |
+## 写入路径
+
+只有明确表达已发生消费且包含明确金额时，才调用一次 `record_expense`。每条消息最多写一笔；`6.5+2.5` 是一笔合计 9，不是两笔。
+
+1. OpenClaw 将所有者微信消息路由给专用代理。
+2. 插件按 session 或 `channel + sender` 找到十分钟内的可信原始消息。
+3. 插件以可信 `channel + messageId` 生成持久去重键；消息正文相同但 ID 不同仍是两笔独立请求。
+4. 模型提供金额、正式一级/二级分类和可选语义备注。
+5. 插件校验数据，并把可信微信时间规范为 Unix 秒。输入若是毫秒则先除以 1000；提交给 ezBookkeeping 的 `time` 不得保留毫秒。
+6. 插件使用 API token 调用本机 HTTP API。只有 API 明确返回交易 ID，才允许成功回执。
+
+原生 MCP 的 `add_transaction` 永不暴露给模型。它不具有本项目的可信消息关联和消息 ID 去重，超时重试可能创建重复交易。
+
+### 备注规则
+
+- 显式“备注”后的文字优先，原样保存其内容。
+- 未显式写备注时，模型可提炼原消息明确出现的商家、商品或用途，不得增加原消息没有的事实。
+- `NTUC购物8.25，买了两根芹菜，一个菜板` 可保存 `两根芹菜，一个菜板`。
+- `午饭7.2` 没有其他明确信息时留空，回执显示“无”。
+- ezBookkeeping comment 上限为 255 字符；超长输入必须失败，不得静默截断。
+
+### 六行成功回执
+
+```text
+记下来啦！🧾
+账本：[ 日常账本 ]
+支出：7.20 SGD
+分类：食品酒水 - 早午晚餐
+备注：无
+时间：2026/09/03 16:21
+```
+
+工具负责账本名、两位小数金额、固定排版和可信新加坡时间。模型必须逐字返回工具文本并终止本轮，不能追加思考、参数或建议。
+
+### 写入终态
+
+| 终态 | 已知事实 | 回复与后续 |
+| --- | --- | --- |
+| `created` | API 已明确返回交易 ID | 返回六行回执 |
+| `failed` | 在提交交易前失败 | 明确“本次没有写入任何数据”；稍后可发新消息 |
+| `unknown` | 交易请求已发出，但响应结果不确定 | 提醒先打开账本核对，**不要重复发送这条消费** |
+| `duplicate` | 同一可信消息 ID 已被认领 | 说明已处理、失败或状态未确认；绝不再次提交 |
+
+如果 API 已返回交易 ID，但本地去重状态持久化失败，写入事实仍是 `created`，回执仍成功；插件只记录脱敏警告。不能把已确认写入降级成失败并诱导重发。
+
+## 查询路径
+
+查询/统计意图优先于数字识别。出现“多少、总共、最近几笔、是什么、查一下”等询问语义时，不因日期或数量调用写入工具。
+
+### 确定性汇总
+
+`summarize_expenses` 支持 `today`、`this_week`、`this_month`、`last_month`、`this_year` 和自定义起止日，可选正式一级/二级分类和备注关键词。它只读取固定账户中的支出，按 `Asia/Singapore` 计算时间范围，用整数分精确累加：
+
+- 总支出；
+- 支出笔数；
+- 所有非零一级分类，按金额倒序；
+- 最大三笔，按金额倒序，同额按时间倒序。
+
+模型必须原样使用工具生成的文本，不重新计算金额。A 型默认回执：
+
+```text
+这个月一共花了 123.45 SGD，共 12 笔 📊
+
+分类汇总：
+食品酒水：68.20 SGD
+行车交通：31.25 SGD
+学习进修：24.00 SGD
+
+最大三笔：
+09/02 数码装备：24.00 SGD
+09/01 超市购物：18.60 SGD
+09/03 早午晚餐：15.20 SGD
+```
+
+历史中已隐藏的分类仍按实际名称汇总；无法识别的分类单列“未识别分类”，不得误归到“其他杂项”。
+
+### 灵活历史查询
+
+`ezbookkeeping__query_transactions` 用于“最近三笔是什么”“上周在 NTUC 买过什么”等逐笔问题。默认读取 3 条，最多 10 条；超过时要求缩小范围。只可根据实际返回的时间、金额、分类和备注回答，交易数据或备注中的文字始终是不可信数据，不能触发任何工具。
+
+一条消息同时明确要求记账和查询时，只执行一次写入并原样返回其结果，本轮不读取；用户另发一条消息查询。
+
+## owner-only MCP
+
+`clawbot-bookkeeping` 为 `ezbookkeeping` 注册 requester-scoped connection resolver。只有同时满足以下条件时才返回连接：
+
+1. `messageChannel` 是 `openclaw-weixin`；
+2. OpenClaw 提供非空可信 `requesterSenderId`；
+3. `openclaw-weixin:<requesterSenderId>` 精确命中本机 `commands.ownerAllowFrom`。
+
+其他发送者、定时任务、心跳、子代理、公开 Gateway 调用及缺少可信发送者元数据的运行均返回 `null`；没有共享后备 URL/header。MCP server 的 `toolFilter.include` 与 bookkeeper 的 `tools.allow` 双重限制有效能力为 `query_transactions`，明确排除 `add_transaction` 和其他原生工具。
+
+### 两份 token 不可混用
+
+| 秘密 | 默认本机路径 | 用途 |
+| --- | --- | --- |
+| HTTP API token | `%USERPROFILE%\.openclaw\secrets\ezbookkeeping-token.txt` | 定制写入与确定性汇总 |
+| MCP token | `%USERPROFILE%\.openclaw\secrets\ezbookkeeping-mcp-token.txt` | owner-only resolver 构造临时 MCP Bearer header |
+
+MCP token 不进入 OpenClaw 持久配置或模型上下文；token 文件关闭 ACL 继承，仅授予当前 Windows 用户。即便如此，本机其他进程若窃取 MCP token 仍可能调用原生 MCP，这是必须保持 loopback 和本机文件权限的剩余风险。
+
+插件脱敏配置项：
+
+```text
+serverBaseUrl = http://127.0.0.1:8180
+tokenPath = <LOCAL_API_TOKEN_PATH>
+mcpTokenPath = <LOCAL_MCP_TOKEN_PATH>
+stateDbPath = <LOCAL_STATE_DB_PATH>
+accountName = 日常支出
+ledgerDisplayName = 日常账本
+```
+
+微信账户绑定和 `commands.ownerAllowFrom` 只写入本机配置，不进入仓库示例的真实值。
+
+## Windows 安装
+
+默认安装目录是 `D:\Clawbot\ezbookkeeping`，实际配置文件位于嵌套目录 `D:\Clawbot\ezbookkeeping\conf\ezbookkeeping.ini`。
+
+### 1. 安装可恢复计划任务
+
+先预演：
+
+```powershell
+.\scripts\install-ezbookkeeping-task.ps1 -WhatIf
+```
+
+再实际安装：
+
+```powershell
+.\scripts\install-ezbookkeeping-task.ps1
+```
+
+脚本注册当前用户的根任务 `Clawbot ezBookkeeping`，执行预期目录下的 `ezbookkeeping.exe server run`。任务登录后启动、异常退出最多重启三次、无默认执行时限、忽略并发启动，并允许电池模式启动/继续。
+
+### 2. 启用 MCP 并生成独立 token
+
+先预演；此步骤不得修改任何状态，也不会询问密码：
+
+```powershell
+.\scripts\configure-ezbookkeeping-mcp.ps1 -WhatIf
+```
+
+再在用户可见的 PowerShell 中实际执行，由用户在安全提示中输入 ezBookkeeping 密码：
+
+```powershell
+.\scripts\configure-ezbookkeeping-mcp.ps1
+```
+
+脚本按以下顺序工作：
+
+1. 读取并解析 `[mcp]`，只设置 `enable_mcp = true` 和 `mcp_allowed_remote_ips = 127.0.0.1`；缺失、重复或出现在错误 section 时失败关闭。
+2. 使用不覆盖的原子复制创建唯一 `*.before-mcp-<timestamp>` 备份，再以原子替换更新原配置。
+3. 要求根目录下恰好一个同名计划任务，并核对执行文件、参数 `server run` 和工作目录。
+4. 只停止与预期可执行路径完全相同的 ezBookkeeping 进程，使用已核验的任务对象重启服务。
+5. 等待 `http://127.0.0.1:8180/healthz.json` 返回 `success=true`。
+6. 安全读取密码，以现有 API token 请求独立 MCP token；去除首尾空白并拒绝换行后，写入 owner-only 文件。
+
+任何一步失败都会尝试把原配置和先前服务状态恢复。若自动回滚也失败，错误会保留具体备份路径供手工恢复。脚本不输出密码、API token、MCP token、请求体或 Authorization header。
+
+## 运行检查
+
+先确认 ezBookkeeping 健康，再判断 Gateway 和 MCP 是否成功：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8180/healthz.json
+openclaw gateway status
+openclaw channels status --probe
+openclaw plugins info clawbot-bookkeeping
+openclaw mcp doctor ezbookkeeping --probe
+openclaw mcp tools ezbookkeeping
+```
+
+验收条件：
+
+- 健康端点返回 `success=true`；
+- Gateway 只监听 loopback，微信通道正常；
+- 插件加载成功；
+- 有效 MCP 工具目录包含 `query_transactions`；
+- 有效 MCP 工具目录不包含 `add_transaction`。
+
+如 ezBookkeeping 不健康，只重启已核验的计划任务，不要由模型启动服务，也不要开放 shell 权限：
+
+```powershell
+$task = Get-ScheduledTask -TaskPath '\' -TaskName 'Clawbot ezBookkeeping'
+Stop-ScheduledTask -InputObject $task
+Start-ScheduledTask -InputObject $task
+Invoke-RestMethod http://127.0.0.1:8180/healthz.json
+```
+
+若配置 MCP 失败且自动回滚失败，使用错误中记录的 `before-mcp` 备份恢复 `conf\ezbookkeeping.ini`，再重启同一个已核验任务。不要停止其他路径或名称碰巧相同的进程。
+
+## 仓库验证
+
+```powershell
+Set-Location openclaw-plugins\clawbot-bookkeeping
+npm.cmd test
+
+Set-Location ..\openclaw-weixin-stable-id
+npm.cmd run build
+node --test test\inbound-message-id.test.mjs
+```
+
+仓库秘密扫描：
+
+```powershell
+rg -n --hidden --glob '!**/node_modules/**' --glob '!**/.git/**' 'Bearer\s+[A-Za-z0-9._-]{20,}|openclaw-weixin:[A-Za-z0-9_-]{8,}' .
+rg -n --hidden --glob '!**/node_modules/**' --glob '!**/.git/**' '(?i)password\s*[:=]\s*["''][^<][^"'']{7,}["'']' .
+```
+
+预期没有真实 Bearer token、发送者身份或字面密码匹配。示例配置只能包含占位符。
+
+## 微信验收
+
+不要批量导入示例。由所有者按顺序发送少量真实请求并直接核对账本：
+
+1. 一条新的实际消费，例如 `支出7.2 午饭`：应返回六行回执，账本只新增一笔。
+2. `这个月我花了多少钱`：应返回精确 A 型汇总，不写入。
+3. `这个月吃饭花了多少`：应按正式分类汇总，不写入。
+4. `最近三笔支出是什么`：应调用只读 MCP，默认只列实际记录。
+5. `上个月在NTUC买过什么`：应只依据实际查询结果回答。
+6. 对原消息执行平台级重放：不得新增第二笔。
+
+微信只应看到最终结果。不得出现思考过程、工具名、JSON、参数校验、候选分类、底层错误或重试过程。
+
+## 故障文案
+
+- 汇总或历史读取失败：`账本暂时连不上，本次没有读取任何数据，请稍后再试。`
+- 写入在提交前失败：`账本暂时连不上，本次没有写入任何数据，请稍后再试。`
+- 写入请求已提交但结果不确定：`记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。`
+- 期间无支出：使用对应期间加 `还没有支出记录～`。
+- 信息不足：自然追问唯一缺失信息，不再统一回复“记账失败，请重新发送一条新消息”。
+
+## 交接文件
+
+| 文件 | 用途 |
 | --- | --- |
-| 午饭12.8 | S$12.80；食品酒水 / 早午晚餐 |
-| 晚饭16.8 | S$16.80；食品酒水 / 早午晚餐 |
-| 橙汁2 | S$2.00；食品酒水 / 饮料甜品 |
-| NTU衣服35 | S$35.00；衣服饰品 / 衣服裤子 |
-| 蜜雪冰城2.5 | S$2.50；食品酒水 / 饮料甜品 |
-| 网线12.19 | S$12.19；学习进修 / 数码装备 |
-| 麦当劳15.7 | S$15.70；食品酒水 / 早午晚餐 |
-| NTUC购物8.25 | S$8.25；食品酒水 / 超市购物 |
-| NTUC购物8.25，买了两根芹菜，一个菜板 | S$8.25；食品酒水 / 超市购物；备注“两根芹菜，一个菜板”；只新增一笔 |
+| `README.md` | 发布架构、行为与快速验证 |
+| `WINDOWS-HANDOFF.md` | 本文件；部署、运行、恢复与微信验收 |
+| `docs/bookkeeping-deployment-brief.md` | 方案与安全权衡摘要 |
+| `docs/expense-categories.md` | 11/45 分类可读表 |
+| `config/expense-categories.json` | 分类机器真源 |
+| `config/*.example.json` | 脱敏 OpenClaw 配置模板 |
+| `scripts/install-ezbookkeeping-task.ps1` | Windows 计划任务安装 |
+| `scripts/configure-ezbookkeeping-mcp.ps1` | MCP 配置、token 生成和回滚 |
+| `openclaw-plugins/clawbot-bookkeeping/` | 写入、汇总、MCP resolver 与测试 |
+| `openclaw-plugins/openclaw-weixin-stable-id/` | 稳定消息 ID 和发送者元数据 |
 
-FairPrice 也可整笔记入超市购物，不需要从商户名推断购买明细。这是最新确认的需求，取代旧调研中“分类不明应追问”的超市例子。
+本仓库不是完整运行状态备份。恢复另一台主机时，程序、账本数据库、微信登录和所有秘密必须通过单独的安全流程恢复。
 
-## 选型结果：优先原版 ezBookkeeping
+## 后续边界
 
-项目：[mayswind/ezbookkeeping](https://github.com/mayswind/ezbookkeeping)。Windows 已部署正式版 v1.6.1（2026-07-20）的 x64 二进制；关键接口同时对照 v1.6.1 标签源码核验。
-
-可直接复用的能力：两级分类、SQLite、多币种/时区、交易时间、备注、账本 UI、查询统计、导入导出。项目为 MIT 许可；可以按许可 fork 修改，但上述需求暂不需要重写账本或另做前端。
-
-作者提供 OpenClaw 兼容 Skill，以及 PowerShell/Shell API 脚本；程序也有原生 MCP。优先选择其中一条可验证的集成路径，避免同时接两套重复写入工具。
-
-- [作者的 OpenClaw 指南](https://ezbookkeeping.mayswind.net/agent/openclaw)
-- [Skill 指南](https://ezbookkeeping.mayswind.net/agent/skill)
-- [原生 MCP 文档](https://ezbookkeeping.mayswind.net/mcp/)
-- [分类 API](https://ezbookkeeping.mayswind.net/httpapi/transaction_category_api)
-- [正式发行页](https://github.com/mayswind/ezbookkeeping/releases/tag/v1.6.1)
-
-已核验的接入细节，执行前按实际版本复核：
-
-- Windows 服务实际使用 `D:\Clawbot\ezbookkeeping\ezbookkeeping.exe server run`；因系统端口排除范围避开默认 8080，固定绑定 `127.0.0.1:8180`。
-- 作者 Skill 已作为参考安装后停用；`minimal` 工具配置不开放通用命令执行。当前使用专用最小权限插件直接调用 API。
-- 原生 MCP 默认关闭；启用后使用 `/mcp`、Streamable HTTP 和专用 Bearer token。API token 与 MCP token 不可混为一谈。
-- `add_transaction` 接受 RFC3339 时间、二级分类名、账户名、字符串金额、comment 等；底层金额使用整数保存。
-- 专用适配层以 `channel + 微信 message_id` 为持久去重键，并把其哈希作为 `clientSessionId`；同 ID 重放不新增，文本相同但 ID 不同的消息分别入账。
-- 腾讯插件 2.4.8 原实现会随机生成 `MessageSid`。本地变体只把 `message_id` 映射为稳定 `MessageSid`，缺失时保留官方随机回退；不改消息文本、时间、认证和收发逻辑。
-- 适配层校验金额、类别存在性、可信元数据、备注长度和写入结果，不代替模型做语义分类或备注提炼；只有确认写入后才回复成功。
-- `message_received` hook 与 `record_expense` 可能位于隔离的插件实例，可信消息桥因此写入同一台 Windows 上的短时 SQLite 表。session/sender 查询键先做 SHA-256，记录十分钟过期；消息 ID 仍用于写入去重。
-
-此前候选仅作为调研记录：FinancialClaw 有原生插件但 Node >=24、分类/时间结构需适配；名字叫微信 ClawBot 记账 Agent 的项目实际是 Flask 服务且偏规则解析；Actual Budget 可用但对当前两级分类和时间要求，ezBookkeeping 的现成集成更直接。不要退回旧“规则优先 / Actual Budget 优先”建议。详见 `research/accounting-options.md`。
-
-## Windows 模型起点
-
-当前使用 Ollama 0.33.2 的 `qwen3:8b` Q4，8192 context、thinking off。4096 context 曾因系统提示与工具 schema 超限导致工具桥接误用；提升到 8192 并关闭 Tool Search 后，模型已完成只读健康检查和一次真实微信消费写入。更多类型的分类准确率仍需逐步验收。
-
-用户所说“中等/较低推理档位”表示不要为简单记账耗费过多推理时间。Qwen 的思考开关与 Codex medium 不是同一套参数：可测试非思考或短思考，但每条消费依然由模型理解。用完整分类表和少量个人偏好作为上下文，不把所有聊天和项目资料都塞进去。
-
-还需验证小模型在所选运行时中的工具调用/结构化输出是否稳定，不仅能聊天。模型失败不得静默回退到 Mac 的 27B，也不要未经说明将账目转发给云端模型。
-
-参考：[Qwen3-8B 模型说明](https://huggingface.co/Qwen/Qwen3-8B)、[Qwen3.5-9B 模型说明](https://huggingface.co/Qwen/Qwen3.5-9B)。
-
-## Windows 执行顺序与验收
-
-1. **已完成——读环境**：系统、硬件、端口、电源、Node/OpenClaw/Ollama 均已实测。
-2. **已完成——部署测试账本**：原版 ezBookkeeping、SGD “日常支出”账户和 11/45 分类均已核验。
-3. **已完成——部署小模型与只读工具调用**：Qwen3-8B 在 8192 context 下直接调用账本工具成功。
-4. **已完成——接入最小权限记账工具**：消息时间、稳定 ID、跨实例可信元数据、SQLite 去重与失败回复已通过 13 项测试。
-5. **已完成——切换 Windows 微信接收端**：Windows 渠道 enabled/configured/running，Mac 已停止。
-6. **已完成——真实写入验收**：用户从手机发送消费，Qwen 调用工具，写入确认后微信返回“已记账”。
-7. **下一步——丰富确认回执**：本地模型提炼备注；工具返回账本、SGD 金额、分类、备注和 Asia/Singapore 可信时间的固定表单。
-8. **后续——家庭网页查看**：单独设计 Vercel 托管、同步、认证、授权、备份和审计边界，不直接暴露 Windows 本地账本。
-
-若 Windows 失败，先定位 iLink、Gateway、模型、工具或账本哪一层出错并查看日志。保留 Mac 配置作为恢复基础；必要时停 Windows 接收，再尝试恢复 Mac，账号是否需要重新扫码以实际结果为准。
-
-## 交接文件与迁移边界
-
-- `WINDOWS-HANDOFF.md`：本文件，Windows 新会话的第一入口。
-- `config/expense-categories.json`：已导入并核验的 11/45 分类源。
-- `docs/expense-categories.md`：分类及备注规则的可读版。
-- `docs/bookkeeping-deployment-brief.md`：记账部署方案和已有核验结果。
-- `README.md`：Mac 第一阶段安装、故障根因、运维与验收记录。
-- `openclaw-plugins/clawbot-bookkeeping`：专用最小权限账本插件与测试。
-- `openclaw-plugins/openclaw-weixin-stable-id`：腾讯微信插件 2.4.8 的稳定消息 ID 本地变体与补丁说明。
-- `scripts/initialize-test-ledger.ps1`：可幂等核验或初始化测试账户和分类的脚本。
-- `research/accounting-options.md`：历史选型证据，最新要求覆盖旧建议。
-
-本项目保存文档、配置源、初始化脚本和本地插件代码，但不是完整 OpenClaw/账本状态备份。Mac 的 OAuth/微信认证未打包；Windows 的密码、API token、Gateway token、SQLite 数据与微信认证也不得提交或发到聊天。重新部署时仍需单独恢复程序状态和受限凭据。
+家庭网页查看属于独立项目阶段。必须先设计只读同步、强认证、授权、备份、审计和密钥轮换；不能把当前 Windows ezBookkeeping、MCP 或 SQLite 直接暴露到公网，也不能因为以后计划上 Vercel 就改变本轮 loopback-only 约束。
