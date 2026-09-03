@@ -34,7 +34,7 @@ export function normalizeMessageTimestamp(timestamp) {
   if (!Number.isFinite(numeric) || numeric <= 0) {
     throw new Error('trusted message timestamp is unavailable');
   }
-  return Math.trunc(numeric < 1_000_000_000_000 ? numeric * 1000 : numeric);
+  return Math.trunc(numeric >= 1_000_000_000_000 ? numeric / 1000 : numeric);
 }
 
 function messageReceiptKey(inbound) {

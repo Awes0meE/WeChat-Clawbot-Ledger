@@ -31,8 +31,8 @@ test('rejects comments longer than ezBookkeeping supports', () => {
 });
 
 test('normalizes second and millisecond event timestamps', () => {
-  assert.equal(normalizeMessageTimestamp(1_788_383_891), 1_788_383_891_000);
-  assert.equal(normalizeMessageTimestamp(1_788_383_891_456), 1_788_383_891_456);
+  assert.equal(normalizeMessageTimestamp(1_788_425_460), 1_788_425_460);
+  assert.equal(normalizeMessageTimestamp(1_788_425_460_000), 1_788_425_460);
 });
 
 test('records one expense and preserves trusted message metadata', async () => {
@@ -80,7 +80,7 @@ test('records one expense and preserves trusted message metadata', async () => {
       channel: 'ilink',
       messageId: 'wechat-message-1',
       content: 'NTUC购物8.25，备注买了两根芹菜，一个菜板',
-      timestamp: 1_788_383_891_456,
+      timestamp: 1_788_425_460_000,
     },
   });
 
@@ -89,7 +89,7 @@ test('records one expense and preserves trusted message metadata', async () => {
   assert.deepEqual(calls[0], {
     type: 3,
     categoryId: 'category-1',
-    time: 1_788_383_891_456,
+    time: 1_788_425_460,
     utcOffset: 480,
     sourceAccountId: 'account-1',
     sourceAmount: 825,
