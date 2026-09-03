@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import plugin from '../index.ts';
 
-function createPluginHarness(tempDirectory, fetchImpl) {
+function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
   const hooks = new Map();
   let summarizeExpensesFactory;
   let summarizeExpensesDefinition;
@@ -19,6 +19,7 @@ function createPluginHarness(tempDirectory, fetchImpl) {
       mcpTokenPath: join(tempDirectory, 'mcp-token.txt'),
       stateDbPath: join(tempDirectory, 'receipts.sqlite'),
       accountName: '日常支出',
+      ...pluginConfig,
     },
     logger: {
       error(message) { logs.push(message); },
@@ -81,6 +82,12 @@ test('declares the owner-only expense summary tool in the plugin manifest', () =
     'summarize_expenses',
   ]);
   assert.deepEqual(manifest.toolMetadata.summarize_expenses, { profiles: ['minimal'] });
+  assert.deepEqual(manifest.configSchema.properties.requestTimeoutMs, {
+    type: 'integer',
+    minimum: 1,
+    maximum: 60000,
+    default: 10000,
+  });
 });
 
 test('registers only the requester-scoped read-only ezBookkeeping MCP resolver', async () => {
@@ -326,6 +333,33 @@ test('returns a stable failure without sensitive ledger details when a read fail
     assert.deepEqual(result.details, { status: 'failed' });
     assert.equal(harness.logs.some((entry) => /test-token|transaction secret/u.test(entry)), false);
     assert.match(harness.logs[0], /Error/u);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('returns the stable no-data failure when an expense summary request times out', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-summary-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  let requestCount = 0;
+  const harness = createPluginHarness(tempDirectory, async () => {
+    requestCount += 1;
+    return new Promise(() => {});
+  }, { requestTimeoutMs: 10 });
+
+  try {
+    const startedAt = Date.now();
+    const result = await harness.summarizeExpensesFactory(ownerContext()).execute(
+      'tool-call-read-timeout',
+      { period: 'this_month' },
+    );
+    assert.equal(result.content[0].text, '账本暂时连不上，本次没有读取任何数据，请稍后再试。');
+    assert.deepEqual(result.details, { status: 'failed' });
+    assert.equal(requestCount, 1);
+    assert.match(harness.logs[0], /Error/u);
+    assert.doesNotMatch(harness.logs[0], /token|accounts\/list/u);
+    assert.equal(Date.now() - startedAt < 500, true);
   } finally {
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });

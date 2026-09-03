@@ -60,6 +60,12 @@
       "ledgerDisplayName": {
         "type": "string",
         "const": "日常账本"
+      },
+      "requestTimeoutMs": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 60000,
+        "default": 10000
       }
     }
   }

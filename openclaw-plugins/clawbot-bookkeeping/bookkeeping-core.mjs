@@ -162,9 +162,17 @@ export async function recordExpense({ api, store, input, inbound, accountName = 
     });
     throw new ExpenseRecordingError('unknown');
   }
+  const transactionId = typeof created?.id === 'string' ? created.id.trim() : '';
+  if (!transactionId) {
+    store.uncertain(receiptKey, {
+      status: 'unknown',
+      clientSessionId,
+    });
+    throw new ExpenseRecordingError('unknown');
+  }
   const receipt = {
     status: 'created',
-    transactionId: created.id,
+    transactionId,
     clientSessionId,
     amountMinor: sourceAmount,
     primaryCategory: input.primaryCategory,

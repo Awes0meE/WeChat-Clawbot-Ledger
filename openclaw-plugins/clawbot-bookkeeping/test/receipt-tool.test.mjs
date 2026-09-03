@@ -7,7 +7,7 @@ import test from 'node:test';
 import plugin from '../index.ts';
 import { SqliteReceiptStore } from '../adapter.mjs';
 
-function createPluginHarness(tempDirectory, fetchImpl) {
+function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
   const inboundHooks = new Map();
   let recordExpenseFactory;
   let recordExpenseDefinition;
@@ -17,6 +17,7 @@ function createPluginHarness(tempDirectory, fetchImpl) {
       tokenPath: join(tempDirectory, 'token.txt'),
       stateDbPath: join(tempDirectory, 'receipts.sqlite'),
       accountName: '日常支出',
+      ...pluginConfig,
     },
     on(name, handler) {
       inboundHooks.set(name, handler);
@@ -219,6 +220,84 @@ test('returns an unknown outcome and prevents retry after a transaction transpor
     assert.deepEqual(first.details, { status: 'unknown' });
     assert.equal(retry.content[0].text, '同一条微信消息正在处理或状态未确认，未重复入账。');
     assert.equal(retry.details.status, 'duplicate');
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('returns a definite no-write result when a prewrite request times out', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  let requestCount = 0;
+  const harness = createPluginHarness(tempDirectory, async () => {
+    requestCount += 1;
+    return new Promise(() => {});
+  }, { requestTimeoutMs: 10 });
+
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, { messageId: 'wechat-message-prewrite-timeout' });
+    const startedAt = Date.now();
+    const result = await harness.recordExpenseFactory(trustedOwnerContext()).execute('tool-call-prewrite-timeout', {
+      amount: '8.25',
+      primaryCategory: '食品酒水',
+      subcategory: '超市购物',
+      comment: '两根芹菜，一个菜板',
+    });
+
+    assert.equal(result.content[0].text, '账本暂时连不上，本次没有写入任何数据，请稍后再试。');
+    assert.deepEqual(result.details, { status: 'failed' });
+    assert.equal(requestCount, 1);
+    assert.equal(Date.now() - startedAt < 500, true);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('returns unknown and prevents a second POST when transaction creation times out', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  let addCount = 0;
+  const harness = createPluginHarness(tempDirectory, async (url) => {
+    if (url.endsWith('/accounts/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: [
+        { id: 'account-1', name: '日常支出', currency: 'SGD' },
+      ] }), { status: 200 });
+    }
+    if (url.endsWith('/transaction/categories/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: {
+        2: [{ id: 'primary-1', name: '食品酒水', parentId: '0', subCategories: [
+          { id: 'secondary-1', name: '超市购物', parentId: 'primary-1' },
+        ] }],
+      } }), { status: 200 });
+    }
+    if (url.endsWith('/transactions/add.json')) {
+      addCount += 1;
+      return new Promise(() => {});
+    }
+    throw new Error('unexpected test request');
+  }, { requestTimeoutMs: 10 });
+
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, { messageId: 'wechat-message-post-timeout' });
+    const tool = harness.recordExpenseFactory(trustedOwnerContext());
+    const params = {
+      amount: '8.25',
+      primaryCategory: '食品酒水',
+      subcategory: '超市购物',
+      comment: '两根芹菜，一个菜板',
+    };
+    const startedAt = Date.now();
+    const first = await tool.execute('tool-call-post-timeout-1', params);
+    const replay = await tool.execute('tool-call-post-timeout-2', params);
+
+    assert.equal(first.content[0].text, '记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。');
+    assert.deepEqual(first.details, { status: 'unknown' });
+    assert.equal(replay.content[0].text, '同一条微信消息正在处理或状态未确认，未重复入账。');
+    assert.equal(replay.details.status, 'duplicate');
+    assert.equal(addCount, 1);
+    assert.equal(Date.now() - startedAt < 500, true);
   } finally {
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });

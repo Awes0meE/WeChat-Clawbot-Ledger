@@ -208,6 +208,91 @@ test('deduplicates the same message id but not identical text from a new message
   assert.equal(addCount, 2);
 });
 
+for (const [label, addResult] of [
+  ['null', null],
+  ['missing', {}],
+  ['non-string', { id: 123 }],
+  ['empty', { id: '' }],
+  ['blank', { id: '  \r\n' }],
+]) {
+  test(`treats a ${label} transaction id as unknown and deduplicates replay`, async () => {
+    let addCount = 0;
+    let completeCount = 0;
+    const receipts = new Map();
+    const store = {
+      claim(key) {
+        if (receipts.has(key)) return receipts.get(key);
+        receipts.set(key, { status: 'pending' });
+        return null;
+      },
+      complete() {
+        completeCount += 1;
+      },
+      uncertain(key, value) {
+        receipts.set(key, { ...value, status: 'unknown' });
+      },
+    };
+    const api = {
+      async resolveAccountId() { return 'account-1'; },
+      async resolveExpenseCategoryId() { return 'category-1'; },
+      async addTransaction() {
+        addCount += 1;
+        return addResult;
+      },
+    };
+    const request = {
+      api,
+      store,
+      input: { amount: '7.2', primaryCategory: '食品酒水', subcategory: '早午晚餐' },
+      inbound: {
+        channel: 'ilink',
+        messageId: `invalid-transaction-id-${label}`,
+        content: '午饭7.2',
+        timestamp: 1_788_425_460,
+      },
+    };
+
+    await assert.rejects(
+      () => recordExpense(request),
+      (error) => error instanceof ExpenseRecordingError && error.outcome === 'unknown',
+    );
+    const replay = await recordExpense(request);
+
+    assert.deepEqual(replay, {
+      status: 'duplicate',
+      previousStatus: 'unknown',
+      transactionId: undefined,
+    });
+    assert.equal(addCount, 1);
+    assert.equal(completeCount, 0);
+  });
+}
+
+test('stores the normalized authoritative transaction id', async () => {
+  let stored;
+  const result = await recordExpense({
+    api: {
+      async resolveAccountId() { return 'account-1'; },
+      async resolveExpenseCategoryId() { return 'category-1'; },
+      async addTransaction() { return { id: '  transaction-trimmed  ' }; },
+    },
+    store: {
+      claim() { return null; },
+      complete(_key, value) { stored = value; },
+    },
+    input: { amount: '7.2', primaryCategory: '食品酒水', subcategory: '早午晚餐' },
+    inbound: {
+      channel: 'ilink',
+      messageId: 'normalized-transaction-id',
+      content: '午饭7.2',
+      timestamp: 1_788_425_460,
+    },
+  });
+
+  assert.equal(result.transactionId, 'transaction-trimmed');
+  assert.equal(stored.transactionId, 'transaction-trimmed');
+});
+
 test('refuses to write without a trusted inbound message id', async () => {
   await assert.rejects(() => recordExpense({
     api: {},

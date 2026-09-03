@@ -2,6 +2,9 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+const MAX_REQUEST_TIMEOUT_MS = 60_000;
+
 function expenseCategoryId(value) {
   if ((typeof value !== 'string' && typeof value !== 'number')
     || (typeof value === 'number' && !Number.isFinite(value))
@@ -141,14 +144,25 @@ export class SqliteReceiptStore {
 }
 
 export class EzBookkeepingApi {
-  constructor({ serverBaseUrl, tokenPath, fetchImpl = globalThis.fetch }) {
+  constructor({
+    serverBaseUrl,
+    tokenPath,
+    fetchImpl = globalThis.fetch,
+    requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+  }) {
     const parsed = new URL(serverBaseUrl);
     if (parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1' || parsed.port !== '8180') {
       throw new Error('bookkeeping server must be the fixed loopback endpoint http://127.0.0.1:8180');
     }
+    if (!Number.isSafeInteger(requestTimeoutMs)
+      || requestTimeoutMs < 1
+      || requestTimeoutMs > MAX_REQUEST_TIMEOUT_MS) {
+      throw new Error('bookkeeping request timeout must be an integer from 1 to 60000 milliseconds');
+    }
     this.baseUrl = parsed.toString().replace(/\/$/, '');
     this.tokenPath = tokenPath;
     this.fetch = fetchImpl;
+    this.requestTimeoutMs = requestTimeoutMs;
   }
 
   async #request(path, { method = 'GET', body, query } = {}) {
@@ -160,22 +174,46 @@ export class EzBookkeepingApi {
         url.searchParams.set(key, String(value));
       }
     }
-    const response = await this.fetch(url.toString(), {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json; charset=utf-8',
-        'X-Timezone-Name': 'Asia/Singapore',
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    const controller = new AbortController();
+    const timeoutError = new Error('ezBookkeeping request timed out');
+    let timeoutId;
+    const timeout = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => {
+        reject(timeoutError);
+        controller.abort();
+      }, this.requestTimeoutMs);
     });
-    const payload = await response.json();
-    if (!response.ok || payload.success !== true) {
-      const code = payload?.errorCode ?? response.status;
-      const message = payload?.errorMessage ?? response.statusText;
-      throw new Error(`ezBookkeeping request failed (${code}): ${message}`);
+    try {
+      const response = await Promise.race([
+        Promise.resolve(this.fetch(url.toString(), {
+          method,
+          signal: controller.signal,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json; charset=utf-8',
+            'X-Timezone-Name': 'Asia/Singapore',
+          },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        })).catch((error) => {
+          if (controller.signal.aborted) throw timeoutError;
+          throw error;
+        }),
+        timeout,
+      ]);
+      const payload = await Promise.race([response.json(), timeout]);
+      if (!response.ok || payload.success !== true) {
+        throw new Error(`ezBookkeeping request failed (HTTP ${response.status})`);
+      }
+      return payload.result;
+    } catch (error) {
+      if (error === timeoutError || controller.signal.aborted) throw timeoutError;
+      if (error instanceof Error && /^ezBookkeeping request failed \(HTTP \d+\)$/u.test(error.message)) {
+        throw error;
+      }
+      throw new Error('ezBookkeeping request failed');
+    } finally {
+      clearTimeout(timeoutId);
     }
-    return payload.result;
   }
 
   async health() {

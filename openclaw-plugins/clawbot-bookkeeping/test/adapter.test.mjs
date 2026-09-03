@@ -326,3 +326,99 @@ test('API client refuses non-loopback bookkeeping servers', () => {
     tokenPath: 'ignored',
   }), /loopback/i);
 });
+
+test('API client requires a safe bounded integer request timeout', () => {
+  for (const requestTimeoutMs of [0, -1, 1.5, 60_001, Number.POSITIVE_INFINITY, '10']) {
+    assert.throws(() => new EzBookkeepingApi({
+      serverBaseUrl: 'http://127.0.0.1:8180',
+      tokenPath: 'ignored',
+      requestTimeoutMs,
+    }), /timeout/i);
+  }
+  assert.doesNotThrow(() => new EzBookkeepingApi({
+    serverBaseUrl: 'http://127.0.0.1:8180',
+    tokenPath: 'ignored',
+  }));
+  assert.doesNotThrow(() => new EzBookkeepingApi({
+    serverBaseUrl: 'http://127.0.0.1:8180',
+    tokenPath: 'ignored',
+    requestTimeoutMs: 60_000,
+  }));
+});
+
+test('API client times out when fetch ignores its abort signal', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-api-'));
+  const tokenPath = join(dir, 'token.txt');
+  writeFileSync(tokenPath, 'secret-test-token', 'utf8');
+  let signal;
+  const api = new EzBookkeepingApi({
+    serverBaseUrl: 'http://127.0.0.1:8180',
+    tokenPath,
+    requestTimeoutMs: 10,
+    fetchImpl: async (_url, options) => {
+      signal = options.signal;
+      return new Promise(() => {});
+    },
+  });
+
+  try {
+    await assert.rejects(() => api.resolveAccountId('日常支出'), /^Error: ezBookkeeping request timed out$/u);
+    assert.equal(signal instanceof AbortSignal, true);
+    assert.equal(signal.aborted, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('API client keeps abort-aware fetch timeout errors free of request secrets', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-api-'));
+  const tokenPath = join(dir, 'private-token-file.txt');
+  writeFileSync(tokenPath, 'secret-test-token', 'utf8');
+  const api = new EzBookkeepingApi({
+    serverBaseUrl: 'http://127.0.0.1:8180',
+    tokenPath,
+    requestTimeoutMs: 10,
+    fetchImpl: async (url, options) => new Promise((_resolve, reject) => {
+      options.signal.addEventListener('abort', () => {
+        reject(new Error(`aborted ${url} ${options.headers.Authorization} ${options.body ?? ''}`));
+      }, { once: true });
+    }),
+  });
+
+  try {
+    await assert.rejects(
+      () => api.addTransaction({ comment: 'private-body-marker' }),
+      (error) => error instanceof Error
+        && error.message === 'ezBookkeeping request timed out'
+        && !/secret-test-token|private-body-marker|transactions\/add/u.test(error.message),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('API client clears the request timeout after fetch completes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-api-'));
+  const tokenPath = join(dir, 'token.txt');
+  writeFileSync(tokenPath, 'secret-test-token', 'utf8');
+  let aborted = false;
+  const api = new EzBookkeepingApi({
+    serverBaseUrl: 'http://127.0.0.1:8180',
+    tokenPath,
+    requestTimeoutMs: 10,
+    fetchImpl: async (_url, options) => {
+      options.signal.addEventListener('abort', () => { aborted = true; }, { once: true });
+      return new Response(JSON.stringify({ success: true, result: [
+        { id: 'account-1', name: '日常支出', currency: 'SGD' },
+      ] }), { status: 200 });
+    },
+  });
+
+  try {
+    assert.equal(await api.resolveAccountId('日常支出'), 'account-1');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(aborted, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

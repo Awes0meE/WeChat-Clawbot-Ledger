@@ -140,8 +140,9 @@ export default definePluginEntry({
       : 'D:\\Clawbot\\state\\message-receipts.sqlite';
     const accountName = typeof config.accountName === 'string' ? config.accountName : '日常支出';
     const ledgerDisplayName = typeof config.ledgerDisplayName === 'string' ? config.ledgerDisplayName : '日常账本';
+    const requestTimeoutMs = config.requestTimeoutMs === undefined ? 10_000 : config.requestTimeoutMs;
 
-    const bookkeepingApi = new EzBookkeepingApi({ serverBaseUrl, tokenPath });
+    const bookkeepingApi = new EzBookkeepingApi({ serverBaseUrl, tokenPath, requestTimeoutMs });
     const receiptStore = new SqliteReceiptStore(stateDbPath);
 
     api.registerMcpServerConnectionResolver({
