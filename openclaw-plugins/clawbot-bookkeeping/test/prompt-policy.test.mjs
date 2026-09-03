@@ -32,6 +32,7 @@ test('makes every expense result strictly terminal', () => {
 
   assert.equal(prompt.includes('`record_expense` 的任何结果都必须逐字复制，并立即终止本轮：不得添加任何后缀或提示，且不再调用任何工具。'), true);
   assert.equal(prompt.includes('记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。'), true);
+  assert.equal(prompt.includes('这条消息无法确认是一笔金额一致的已发生消费，本次没有入账。'), true);
   assert.doesNotMatch(prompt, /(?:结果|返回)[^。\n]*(?:请|提示).*另发/u);
   assert.equal(prompt.includes('逐字复制其结果；同一轮不得读取，再提示用户另发一条查询'), false);
   assert.equal(prompt.includes('逐字返回结果并请用户另发查询'), false);

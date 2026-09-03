@@ -318,14 +318,17 @@ export default definePluginEntry({
               `clawbot-bookkeeping: ExpenseRecordingError outcome=${error.outcome} message=${error.message}`,
             );
             const unknown = error.outcome === 'unknown';
+            const rejected = error.outcome === 'rejected';
             return {
               content: [{
                 type: 'text',
-                text: unknown
-                  ? '记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。'
-                  : '账本暂时连不上，本次没有写入任何数据，请稍后再试。',
+                text: rejected
+                  ? '这条消息无法确认是一笔金额一致的已发生消费，本次没有入账。'
+                  : unknown
+                    ? '记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。'
+                    : '账本暂时连不上，本次没有写入任何数据，请稍后再试。',
               }],
-              details: { status: unknown ? 'unknown' : 'failed' },
+              details: { status: rejected ? 'rejected' : unknown ? 'unknown' : 'failed' },
             };
           }
           if (result.dedupeStatus === 'unconfirmed') {

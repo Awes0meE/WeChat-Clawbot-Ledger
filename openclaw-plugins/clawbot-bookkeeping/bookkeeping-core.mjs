@@ -2,12 +2,17 @@ import { createHash } from 'node:crypto';
 
 const MAX_EZBOOKKEEPING_AMOUNT_MINOR = 9_999_999_999_999;
 const MAX_COMMENT_CHARACTERS = 255;
+const AMOUNT_EXPRESSION = /\d+(?:\.\d{1,2})?(?:\s*[+＋]\s*\d+(?:\.\d{1,2})?)*/gu;
+const NON_WRITE_CONTEXT = /(?:不要记|不用记|别记|不记账|不要入账|别入账|取消记账|取消入账|撤销|比如|例如|举例|假如|假设|如果|要是|倘若)/u;
+const QUERY_CONTEXT = /(?:多少|几笔|什么|哪些|哪笔|查询|查一下|查下|查账|统计|汇总|合计|总计|历史|最近|买过|有没有|是否|吗|嘛|呢|[?？])/u;
 
 export class ExpenseRecordingError extends Error {
   constructor(outcome) {
     const message = outcome === 'not_written'
       ? 'expense was not written'
-      : 'expense write outcome is unknown';
+      : outcome === 'rejected'
+        ? 'expense write authorization was rejected'
+        : 'expense write outcome is unknown';
     super(message);
     this.name = 'ExpenseRecordingError';
     this.outcome = outcome;
@@ -26,6 +31,36 @@ export function parseAmountToMinorUnits(value) {
     throw new Error('amount is outside the supported ezBookkeeping range');
   }
   return minorUnits;
+}
+
+function expressionAmountToMinorUnits(expression) {
+  try {
+    return expression
+      .split(/[+＋]/u)
+      .reduce((sum, part) => sum + parseAmountToMinorUnits(part.trim()), 0);
+  } catch {
+    return undefined;
+  }
+}
+
+function hasExpenseContextText(clause) {
+  const residue = clause
+    .replace(AMOUNT_EXPRESSION, '')
+    .replace(/(?:SGD|新币|新元|人民币|块钱|块|元)/giu, '')
+    .replace(/[年月日号点分秒￥¥$\s+\-*/=：:（）()【】\[\]]/gu, '');
+  return /\p{L}/u.test(residue);
+}
+
+function isAuthorizedExpenseMessage(content, requestedAmountMinor) {
+  const text = String(content ?? '').trim();
+  if (!text || NON_WRITE_CONTEXT.test(text)) return false;
+
+  return text.split(/[，,。；;！!\r\n]+/u).some((clause) => {
+    if (!clause || QUERY_CONTEXT.test(clause) || !hasExpenseContextText(clause)) return false;
+    return [...clause.matchAll(AMOUNT_EXPRESSION)].some(
+      (match) => expressionAmountToMinorUnits(match[0]) === requestedAmountMinor,
+    );
+  });
 }
 
 export function extractVerbatimComment(content) {
@@ -112,6 +147,9 @@ export function duplicateResponseText(result) {
 export async function recordExpense({ api, store, input, inbound, accountName = '日常支出' }) {
   const receiptKey = messageReceiptKey(inbound);
   const sourceAmount = parseAmountToMinorUnits(input.amount);
+  if (!isAuthorizedExpenseMessage(inbound.content, sourceAmount)) {
+    throw new ExpenseRecordingError('rejected');
+  }
   const comment = resolveExpenseComment(inbound.content, input.comment);
   const time = normalizeMessageTimestamp(inbound.timestamp);
   const clientSessionId = clientSessionIdFor(receiptKey);
