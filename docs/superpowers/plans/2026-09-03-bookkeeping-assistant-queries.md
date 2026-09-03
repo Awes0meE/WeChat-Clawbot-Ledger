@@ -1073,117 +1073,13 @@ git commit -m "feat: route bookkeeping queries before writes"
 
 - [ ] **Step 1: Create the secure MCP setup script**
 
-Implement `configure-ezbookkeeping-mcp.ps1` with `[CmdletBinding(SupportsShouldProcess)]`. It must update the INI, restart only the exact local ezBookkeeping executable, wait for health, then securely create the token; `-WhatIf` must return before prompting for a password:
+Implement `configure-ezbookkeeping-mcp.ps1` with `[CmdletBinding(SupportsShouldProcess)]`; the checked-in script, not an abbreviated plan snippet, is the executable source of truth. Its default INI is `D:\Clawbot\ezbookkeeping\conf\ezbookkeeping.ini`, and `-WhatIf` returns before every mutation or password prompt.
 
-```powershell
-[CmdletBinding(SupportsShouldProcess)]
-param(
-    [string]$ConfigPath = 'D:\Clawbot\ezbookkeeping\ezbookkeeping.ini',
-    [string]$ApiTokenPath = "$env:USERPROFILE\.openclaw\secrets\ezbookkeeping-token.txt",
-    [string]$McpTokenPath = "$env:USERPROFILE\.openclaw\secrets\ezbookkeeping-mcp-token.txt",
-    [string]$TaskName = 'Clawbot ezBookkeeping',
-    [int]$ExpiresInSeconds = 31536000
-)
-
-$configText = [IO.File]::ReadAllText($ConfigPath, [Text.Encoding]::UTF8)
-$updated = [regex]::Replace($configText, '(?m)^enable_mcp\s*=.*$', 'enable_mcp = true')
-$updated = [regex]::Replace($updated, '(?m)^mcp_allowed_remote_ips\s*=.*$', 'mcp_allowed_remote_ips = 127.0.0.1')
-if ($updated -notmatch '(?m)^enable_mcp\s*=\s*true\s*$' -or
-    $updated -notmatch '(?m)^mcp_allowed_remote_ips\s*=\s*127\.0\.0\.1\s*$') {
-    throw 'Could not locate both ezBookkeeping MCP settings.'
-}
-if (-not $PSCmdlet.ShouldProcess($ConfigPath, 'Enable MCP, restart ezBookkeeping, and create a protected token')) {
-    return
-}
-
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$utf8NoBom = New-Object Text.UTF8Encoding($false)
-Copy-Item -LiteralPath $ConfigPath -Destination "$ConfigPath.before-mcp-$stamp"
-[IO.File]::WriteAllText($ConfigPath, $updated, $utf8NoBom)
-
-Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-$expectedExecutable = [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $ConfigPath) 'ezbookkeeping.exe'))
-$ownedProcesses = Get-CimInstance Win32_Process -Filter "Name='ezbookkeeping.exe'" | Where-Object {
-    $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $expectedExecutable
-}
-foreach ($process in $ownedProcesses) {
-    Stop-Process -Id $process.ProcessId -Force
-}
-Start-ScheduledTask -TaskName $TaskName
-
-$healthy = $false
-foreach ($attempt in 1..15) {
-    try {
-        $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8180/healthz.json' -TimeoutSec 2
-        if ($health.success -eq $true) { $healthy = $true; break }
-    } catch {}
-    Start-Sleep -Seconds 1
-}
-if (-not $healthy) { throw 'ezBookkeeping did not become healthy after restart.' }
-
-$password = Read-Host 'ezBookkeeping password' -AsSecureString
-$pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($password)
-try {
-    $plainPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
-    $apiToken = [IO.File]::ReadAllText($ApiTokenPath, [Text.Encoding]::UTF8).Trim()
-    $headers = @{ Authorization = "Bearer $apiToken" }
-    $body = @{ expiresInSeconds = $ExpiresInSeconds; password = $plainPassword } | ConvertTo-Json -Compress
-    $response = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8180/api/v1/tokens/generate/mcp.json' -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $body
-    if ($response.success -ne $true -or [string]::IsNullOrWhiteSpace($response.result.token)) {
-        throw 'ezBookkeeping did not return an MCP token.'
-    }
-    $directory = Split-Path -Parent $McpTokenPath
-    New-Item -ItemType Directory -Path $directory -Force | Out-Null
-    [IO.File]::WriteAllText($McpTokenPath, $response.result.token, $utf8NoBom)
-    $acl = New-Object Security.AccessControl.FileSecurity
-    $acl.SetAccessRuleProtection($true, $false)
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $rule = New-Object Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', 'Allow')
-    $acl.AddAccessRule($rule)
-    Set-Acl -LiteralPath $McpTokenPath -AclObject $acl
-    Write-Host 'MCP enabled and token stored without displaying it.'
-} finally {
-    if ($pointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
-    $plainPassword = $null
-    $password = $null
-}
-```
+The implementation must parse only the unambiguous `[mcp]` settings, create a collision-safe sibling backup, write a sibling temporary file, and use `[IO.File]::Replace` rather than overwriting the live INI directly. Before service control it must resolve exactly one root task and validate the exact Windows PowerShell 5.1 launcher, `-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden` arguments, wrapped normalized `ezbookkeeping.exe server run`, and working directory. Stop/start uses that task object via `-InputObject`; process cleanup is limited to the normalized expected executable. Health or token failure restores both configuration and prior service state. Token output is normalized, newline-free, written with owner-only ACLs, and no password, request body, header, or token is logged.
 
 - [ ] **Step 2: Create the scheduled-task installer**
 
-Implement `install-ezbookkeeping-task.ps1`:
-
-```powershell
-[CmdletBinding(SupportsShouldProcess)]
-param(
-    [string]$InstallDirectory = 'D:\Clawbot\ezbookkeeping',
-    [string]$TaskName = 'Clawbot ezBookkeeping'
-)
-
-$executable = Join-Path $InstallDirectory 'ezbookkeeping.exe'
-if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
-    throw "ezBookkeeping executable not found: $executable"
-}
-
-$action = New-ScheduledTaskAction -Execute $executable -Argument 'server run' -WorkingDirectory $InstallDirectory
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
-$settings = New-ScheduledTaskSettingsSet `
-    -RestartCount 3 `
-    -RestartInterval (New-TimeSpan -Minutes 1) `
-    -ExecutionTimeLimit ([TimeSpan]::Zero) `
-    -MultipleInstances IgnoreNew `
-    -StartWhenAvailable `
-    -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries
-$principal = New-ScheduledTaskPrincipal `
-    -UserId "$env:USERDOMAIN\$env:USERNAME" `
-    -LogonType Interactive `
-    -RunLevel Limited
-
-if ($PSCmdlet.ShouldProcess($TaskName, 'Register persistent ezBookkeeping task')) {
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
-}
-```
+Implement `install-ezbookkeeping-task.ps1` with the checked-in script as the executable source of truth. It resolves the install directory, expected `ezbookkeeping.exe`, and system Windows PowerShell 5.1 path before `ShouldProcess`. The registered root task action executes Windows PowerShell with the exact hidden, non-interactive arguments above and the normalized install directory; it never registers `ezbookkeeping.exe` as a direct visible action. Keep login trigger, limited current-user principal, bounded restart policy, no execution time limit, single-instance behavior, and battery-safe settings.
 
 - [ ] **Step 3: Parse-check both scripts and inspect `-WhatIf` output**
 
@@ -1260,6 +1156,7 @@ Record:
 
 - why write remains custom and deduplicated;
 - how requester-scoped MCP checks `commands.ownerAllowFrom`;
+- the immutable runtime category contract has exactly 11 primary and 45 secondary categories;
 - API token versus MCP token;
 - Unix seconds for ezBookkeeping transaction time;
 - rich receipt and A-style summary templates;
@@ -1291,7 +1188,7 @@ npm.cmd run build
 node --test test\inbound-message-id.test.mjs
 ```
 
-Expected: all bookkeeping tests pass; stable-ID build and three tests pass.
+Expected: all 81 bookkeeping plugin tests pass; stable-ID build and all three tests pass.
 
 Commit:
 
@@ -1303,7 +1200,7 @@ git commit -m "docs: document local bookkeeping assistant operations"
 ### Task 9: Deploy locally and perform end-to-end acceptance
 
 **Files:**
-- Runtime only: `D:\Clawbot\ezbookkeeping\ezbookkeeping.ini`
+- Runtime only: `D:\Clawbot\ezbookkeeping\conf\ezbookkeeping.ini`
 - Runtime only: `%USERPROFILE%\.openclaw\openclaw.json`
 - Runtime only: `%USERPROFILE%\.openclaw\secrets\ezbookkeeping-mcp-token.txt`
 - Runtime only: installed `clawbot-bookkeeping` plugin and bookkeeper workspace
@@ -1315,7 +1212,7 @@ Use timestamped copies beside the live files, outside the repository:
 ```powershell
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 Copy-Item -LiteralPath "$env:USERPROFILE\.openclaw\openclaw.json" -Destination "$env:USERPROFILE\.openclaw\openclaw.json.before-assistant-$stamp"
-Copy-Item -LiteralPath 'D:\Clawbot\ezbookkeeping\ezbookkeeping.ini' -Destination "D:\Clawbot\ezbookkeeping\ezbookkeeping.ini.before-assistant-$stamp"
+Copy-Item -LiteralPath 'D:\Clawbot\ezbookkeeping\conf\ezbookkeeping.ini' -Destination "D:\Clawbot\ezbookkeeping\conf\ezbookkeeping.ini.before-assistant-$stamp"
 ```
 
 Expected: both backup files exist outside the Git worktree.
@@ -1347,14 +1244,19 @@ Expected: review finds no unresolved critical issue, both worktrees are clean, l
 From the primary repository, run:
 
 ```powershell
+.\scripts\install-ezbookkeeping-task.ps1 -WhatIf
 .\scripts\install-ezbookkeeping-task.ps1
-Start-ScheduledTask -TaskName 'Clawbot ezBookkeeping'
+$tasks = @(Get-ScheduledTask -ErrorAction Stop | Where-Object {
+  $_.TaskName -eq 'Clawbot ezBookkeeping' -and $_.TaskPath -eq '\'
+})
+if ($tasks.Count -ne 1) { throw 'Expected exactly one root Clawbot ezBookkeeping task.' }
+$task = $tasks[0]
+Start-ScheduledTask -InputObject $task -ErrorAction Stop
 Start-Sleep -Seconds 3
-Get-ScheduledTask -TaskName 'Clawbot ezBookkeeping' | Select-Object TaskName,State
 Invoke-RestMethod -Uri 'http://127.0.0.1:8180/healthz.json' -TimeoutSec 5
 ```
 
-Expected: task state is `Running` and health response reports success.
+Expected: `-WhatIf` changes nothing; actual installation re-registers the tested exact Windows PowerShell 5.1 hidden action before the unique root task object is resolved and started; health response reports success. Never start an unverified task selected only by name.
 
 - [ ] **Step 4: Enable MCP and create the protected token**
 
@@ -1424,23 +1326,35 @@ Use the WeChat client's resend action once on the original expense message. Expe
 
 - [ ] **Step 8: Verify failure behavior without risking a write**
 
-Stop ezBookkeeping, send only a query, then restart it:
+Re-register the tested exact task action, resolve its unique root object, stop ezBookkeeping, send only a query, then restart the same object. Keep this in one PowerShell session so `finally` restores the service even if the check fails:
 
 ```powershell
-Stop-ScheduledTask -TaskName 'Clawbot ezBookkeeping'
+.\scripts\install-ezbookkeeping-task.ps1 -WhatIf
+.\scripts\install-ezbookkeeping-task.ps1
+$tasks = @(Get-ScheduledTask -ErrorAction Stop | Where-Object {
+  $_.TaskName -eq 'Clawbot ezBookkeeping' -and $_.TaskPath -eq '\'
+})
+if ($tasks.Count -ne 1) { throw 'Expected exactly one root Clawbot ezBookkeeping task.' }
+$task = $tasks[0]
 $expectedExecutable = [IO.Path]::GetFullPath('D:\Clawbot\ezbookkeeping\ezbookkeeping.exe')
-Get-CimInstance Win32_Process -Filter "Name='ezbookkeeping.exe'" | Where-Object {
-  $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $expectedExecutable
-} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-$healthFailed = $false
 try {
-  Invoke-RestMethod -Uri 'http://127.0.0.1:8180/healthz.json' -TimeoutSec 2
-} catch {
-  $healthFailed = $true
+  Stop-ScheduledTask -InputObject $task -ErrorAction Stop
+  Get-CimInstance Win32_Process -Filter "Name='ezbookkeeping.exe'" | Where-Object {
+    $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $expectedExecutable
+  } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop }
+  $healthFailed = $false
+  try {
+    Invoke-RestMethod -Uri 'http://127.0.0.1:8180/healthz.json' -TimeoutSec 2
+  } catch {
+    $healthFailed = $true
+  }
+  if (-not $healthFailed) { throw 'Health unexpectedly succeeded while the service was stopped.' }
+  Read-Host 'Send only the planned WeChat query now, then press Enter to restore ezBookkeeping'
+} finally {
+  Start-ScheduledTask -InputObject $task -ErrorAction Stop
+  Start-Sleep -Seconds 3
+  Invoke-RestMethod -Uri 'http://127.0.0.1:8180/healthz.json' -TimeoutSec 5
 }
-if (-not $healthFailed) { throw 'Health unexpectedly succeeded while the service was stopped.' }
-Start-ScheduledTask -TaskName 'Clawbot ezBookkeeping'
-Start-Sleep -Seconds 3
 ```
 
 Expected during the stopped interval: `账本暂时连不上，本次没有读取任何数据，请稍后再试。` No write request is sent. After restart, repeat the query and receive the normal summary.
