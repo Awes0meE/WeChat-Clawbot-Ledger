@@ -10,7 +10,35 @@ import {
   EzBookkeepingApi,
   isSqliteBusyError,
   SqliteReceiptStore,
+  trustedInboundMessageKey,
 } from '../adapter.mjs';
+
+function pendingExpenseProposal({
+  conversationKey = 'a'.repeat(64),
+  messageId = 'pending-message-1',
+  amount = '7.2',
+  timestamp = 1_788_425_460,
+  observedAt = 2_000_000_000_000,
+} = {}) {
+  return {
+    sourceMessageKey: trustedInboundMessageKey('openclaw-weixin', messageId),
+    sourceInbound: {
+      channel: 'openclaw-weixin',
+      messageId,
+      content: `午饭${amount}吗`,
+      timestamp,
+      observedAt,
+      timeSource: 'message',
+      conversationKey,
+    },
+    input: {
+      amount,
+      primaryCategory: '食品酒水',
+      subcategory: '早午晚餐',
+      comment: '午饭',
+    },
+  };
+}
 
 test('SQLite busy classifier accepts primary and extended BUSY codes only', () => {
   assert.equal(isSqliteBusyError({ errcode: 5 }), true);
@@ -56,6 +84,117 @@ test('SQLite receipt store retains an uncertain write outcome for deduplication'
       status: 'unknown',
       clientSessionId: 'session-1',
     });
+  } finally {
+    store?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('pending expense confirmation is durable and replaced per conversation', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-pending-confirmation-'));
+  const path = join(dir, 'receipts.sqlite');
+  const conversationKey = 'a'.repeat(64);
+  const otherConversationKey = 'b'.repeat(64);
+  const now = 2_000_000_000_000;
+  let first;
+  let second;
+  try {
+    first = new SqliteReceiptStore(path);
+    first.replacePendingExpenseConfirmation(
+      conversationKey,
+      pendingExpenseProposal({ conversationKey, messageId: 'pending-first' }),
+      now + 600_000,
+      now,
+    );
+    first.replacePendingExpenseConfirmation(
+      conversationKey,
+      pendingExpenseProposal({
+        conversationKey,
+        messageId: 'pending-replacement',
+        amount: '3.5',
+        timestamp: 1_788_425_520,
+      }),
+      now + 600_000,
+      now,
+    );
+    first.replacePendingExpenseConfirmation(
+      otherConversationKey,
+      pendingExpenseProposal({ conversationKey: otherConversationKey, messageId: 'pending-other' }),
+      now + 600_000,
+      now,
+    );
+    first.close();
+    first = undefined;
+
+    second = new SqliteReceiptStore(path);
+    const taken = second.takePendingExpenseConfirmation(conversationKey, now);
+    assert.equal(taken.status, 'active');
+    assert.equal(taken.proposal.sourceInbound.messageId, 'pending-replacement');
+    assert.equal(taken.proposal.input.amount, '3.5');
+    assert.deepEqual(second.takePendingExpenseConfirmation(conversationKey, now), { status: 'missing' });
+    assert.equal(second.takePendingExpenseConfirmation(otherConversationKey, now).status, 'active');
+  } finally {
+    first?.close();
+    second?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('pending expense confirmation expires and can be discarded idempotently', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-pending-confirmation-'));
+  const path = join(dir, 'receipts.sqlite');
+  const expiredKey = 'c'.repeat(64);
+  const discardedKey = 'd'.repeat(64);
+  const now = 2_000_000_000_000;
+  let store;
+  try {
+    store = new SqliteReceiptStore(path);
+    store.replacePendingExpenseConfirmation(
+      expiredKey,
+      pendingExpenseProposal({ conversationKey: expiredKey, messageId: 'pending-expired' }),
+      now - 1,
+      now - 601_000,
+    );
+    assert.deepEqual(store.takePendingExpenseConfirmation(expiredKey, now), { status: 'expired' });
+    assert.deepEqual(store.takePendingExpenseConfirmation(expiredKey, now), { status: 'missing' });
+
+    store.replacePendingExpenseConfirmation(
+      discardedKey,
+      pendingExpenseProposal({ conversationKey: discardedKey, messageId: 'pending-discarded' }),
+      now + 600_000,
+      now,
+    );
+    assert.equal(store.discardPendingExpenseConfirmation(discardedKey), true);
+    assert.equal(store.discardPendingExpenseConfirmation(discardedKey), false);
+    assert.deepEqual(store.takePendingExpenseConfirmation(discardedKey, now), { status: 'missing' });
+  } finally {
+    store?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('malformed pending expense confirmation is deleted and fails closed', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-pending-confirmation-'));
+  const path = join(dir, 'receipts.sqlite');
+  const conversationKey = 'e'.repeat(64);
+  const now = 2_000_000_000_000;
+  let store;
+  try {
+    store = new SqliteReceiptStore(path);
+    store.close();
+    store = undefined;
+
+    const database = new DatabaseSync(path);
+    database.prepare(`
+      INSERT INTO pending_expense_confirmations
+        (conversation_key, payload_json, expires_at, updated_at)
+      VALUES (?, ?, ?, ?)
+    `).run(conversationKey, '{not-json', now + 600_000, now);
+    database.close();
+
+    store = new SqliteReceiptStore(path);
+    assert.deepEqual(store.takePendingExpenseConfirmation(conversationKey, now), { status: 'missing' });
+    assert.deepEqual(store.takePendingExpenseConfirmation(conversationKey, now), { status: 'missing' });
   } finally {
     store?.close();
     rmSync(dir, { recursive: true, force: true });

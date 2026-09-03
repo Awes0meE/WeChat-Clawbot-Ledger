@@ -56,6 +56,38 @@ function normalizeTrustedInboundPayload(value) {
   };
 }
 
+const HASH_KEY_PATTERN = /^[a-f0-9]{64}$/u;
+
+function normalizePendingExpenseProposal(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || typeof value.sourceMessageKey !== 'string'
+    || !HASH_KEY_PATTERN.test(value.sourceMessageKey)
+    || !value.input || typeof value.input !== 'object' || Array.isArray(value.input)) {
+    return undefined;
+  }
+  const sourceInbound = normalizeTrustedInboundPayload(value.sourceInbound);
+  const conversationKey = value.sourceInbound?.conversationKey;
+  if (!sourceInbound || typeof conversationKey !== 'string' || !HASH_KEY_PATTERN.test(conversationKey)
+    || typeof value.input.amount !== 'string'
+    || !/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/u.test(value.input.amount)
+    || typeof value.input.primaryCategory !== 'string' || value.input.primaryCategory.trim() === ''
+    || typeof value.input.subcategory !== 'string' || value.input.subcategory.trim() === ''
+    || (value.input.comment !== undefined
+      && (typeof value.input.comment !== 'string' || Array.from(value.input.comment).length > 255))) {
+    return undefined;
+  }
+  return {
+    sourceMessageKey: value.sourceMessageKey,
+    sourceInbound: { ...sourceInbound, conversationKey },
+    input: {
+      amount: value.input.amount,
+      primaryCategory: value.input.primaryCategory,
+      subcategory: value.input.subcategory,
+      ...(value.input.comment === undefined ? {} : { comment: value.input.comment }),
+    },
+  };
+}
+
 function expenseCategoryId(value) {
   if ((typeof value !== 'string' && typeof value !== 'number')
     || (typeof value === 'number' && !Number.isFinite(value))
@@ -126,6 +158,12 @@ export class SqliteReceiptStore {
       );
       CREATE INDEX IF NOT EXISTS trusted_inbound_queue_lookup
       ON trusted_inbound_queue_lookups (lookup_key, message_key);
+      CREATE TABLE IF NOT EXISTS pending_expense_confirmations (
+        conversation_key TEXT PRIMARY KEY,
+        payload_json TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
     `);
     this.#migrateLegacyTrustedInboundMessages();
     this.insertPending = this.database.prepare(`
@@ -173,6 +211,24 @@ export class SqliteReceiptStore {
       DELETE FROM trusted_inbound_queue
       WHERE claimed_at IS NULL AND expires_at < ?
     `);
+    this.upsertPendingExpenseConfirmation = this.database.prepare(`
+      INSERT INTO pending_expense_confirmations
+        (conversation_key, payload_json, expires_at, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(conversation_key) DO UPDATE SET
+        payload_json = excluded.payload_json,
+        expires_at = excluded.expires_at,
+        updated_at = excluded.updated_at
+    `);
+    this.selectPendingExpenseConfirmation = this.database.prepare(`
+      SELECT payload_json, expires_at
+      FROM pending_expense_confirmations
+      WHERE conversation_key = ?
+    `);
+    this.deletePendingExpenseConfirmation = this.database.prepare(`
+      DELETE FROM pending_expense_confirmations
+      WHERE conversation_key = ?
+    `);
   }
 
   claim(key) {
@@ -192,6 +248,51 @@ export class SqliteReceiptStore {
 
   uncertain(key, payload) {
     this.#update(key, 'unknown', { ...payload, status: 'unknown' });
+  }
+
+  replacePendingExpenseConfirmation(conversationKey, proposal, expiresAt, now = Date.now()) {
+    const normalized = normalizePendingExpenseProposal(proposal);
+    if (!HASH_KEY_PATTERN.test(String(conversationKey ?? ''))
+      || !Number.isSafeInteger(expiresAt) || expiresAt <= 0
+      || !Number.isSafeInteger(now) || now <= 0
+      || !normalized || normalized.sourceInbound.conversationKey !== conversationKey) {
+      throw new Error('pending expense confirmation is invalid');
+    }
+    this.upsertPendingExpenseConfirmation.run(
+      conversationKey,
+      JSON.stringify(normalized),
+      expiresAt,
+      now,
+    );
+  }
+
+  takePendingExpenseConfirmation(conversationKey, now = Date.now()) {
+    if (!HASH_KEY_PATTERN.test(String(conversationKey ?? ''))
+      || !Number.isSafeInteger(now) || now <= 0) {
+      throw new Error('pending expense confirmation lookup is invalid');
+    }
+    return this.#withImmediateTransaction(() => {
+      const row = this.selectPendingExpenseConfirmation.get(conversationKey);
+      if (!row) return { status: 'missing' };
+      this.deletePendingExpenseConfirmation.run(conversationKey);
+      if (!Number.isSafeInteger(row.expires_at) || row.expires_at < now) {
+        return { status: 'expired' };
+      }
+      let proposal;
+      try {
+        proposal = normalizePendingExpenseProposal(JSON.parse(row.payload_json));
+      } catch {
+        proposal = undefined;
+      }
+      return proposal ? { status: 'active', proposal } : { status: 'missing' };
+    });
+  }
+
+  discardPendingExpenseConfirmation(conversationKey) {
+    if (!HASH_KEY_PATTERN.test(String(conversationKey ?? ''))) {
+      throw new Error('pending expense confirmation lookup is invalid');
+    }
+    return Number(this.deletePendingExpenseConfirmation.run(conversationKey).changes) === 1;
   }
 
   enqueueTrustedInbound(lookupKeys, messageKey, payload, expiresAt) {
