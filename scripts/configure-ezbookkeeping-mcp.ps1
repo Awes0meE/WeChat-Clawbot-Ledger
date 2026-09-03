@@ -1,6 +1,7 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [string]$ConfigPath = 'D:\Clawbot\ezbookkeeping\ezbookkeeping.ini',
+    [string]$ConfigPath = 'D:\Clawbot\ezbookkeeping\conf\ezbookkeeping.ini',
+    [string]$InstallDirectory = 'D:\Clawbot\ezbookkeeping',
     [string]$ApiTokenPath = "$env:USERPROFILE\.openclaw\secrets\ezbookkeeping-token.txt",
     [string]$McpTokenPath = "$env:USERPROFILE\.openclaw\secrets\ezbookkeeping-mcp-token.txt",
     [string]$TaskName = 'Clawbot ezBookkeeping',
@@ -128,6 +129,38 @@ function Set-OwnerOnlyTokenFile {
     [IO.File]::WriteAllText($Path, $Token, $Encoding)
 }
 
+function Stop-ExpectedEzBookkeepingProcesses {
+    param([Parameter(Mandatory = $true)][string]$ExpectedExecutable)
+
+    $ownedProcesses = Get-CimInstance Win32_Process -Filter "Name='ezbookkeeping.exe'" -ErrorAction Stop | Where-Object {
+        $_.ExecutablePath -and ([string]::Equals((Get-NormalizedPath -Path $_.ExecutablePath), $ExpectedExecutable, [StringComparison]::OrdinalIgnoreCase))
+    }
+    foreach ($process in $ownedProcesses) {
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+    }
+}
+
+function Restore-ConfigurationAndService {
+    param(
+        [Parameter(Mandatory = $true)][string]$BackupPath,
+        [Parameter(Mandatory = $true)][string]$ConfigPath,
+        [Parameter(Mandatory = $true)][object]$Task,
+        [Parameter(Mandatory = $true)][string]$ExpectedExecutable,
+        [bool]$TaskWasRunning,
+        [bool]$TaskStopped,
+        [bool]$TaskStarted
+    )
+
+    [IO.File]::Copy($BackupPath, $ConfigPath, $true)
+    if ($TaskStarted) {
+        Stop-ScheduledTask -InputObject $Task -ErrorAction Stop
+        Stop-ExpectedEzBookkeepingProcesses -ExpectedExecutable $ExpectedExecutable
+    }
+    if ($TaskWasRunning -and $TaskStopped) {
+        Start-ScheduledTask -InputObject $Task -ErrorAction Stop
+    }
+}
+
 $passwordPointer = [IntPtr]::Zero
 $securePassword = $null
 $plainPassword = $null
@@ -135,12 +168,16 @@ $apiToken = $null
 $mcpToken = $null
 $headers = $null
 $body = $null
+$backupPath = $null
+$task = $null
+$expectedExecutable = $null
+$taskWasRunning = $false
+$taskStopped = $false
+$taskStarted = $false
+$configWritten = $false
 
 try {
-    $backupPath = Copy-ConfigToUniqueBackup -ConfigPath $ConfigPath
-    [IO.File]::WriteAllText($ConfigPath, $updatedConfig, $utf8NoBom)
-
-    $installDirectory = Get-NormalizedPath -Path (Split-Path -Parent ([IO.Path]::GetFullPath($ConfigPath)))
+    $installDirectory = Get-NormalizedPath -Path $InstallDirectory
     $expectedExecutable = Get-NormalizedPath -Path (Join-Path $installDirectory 'ezbookkeeping.exe')
     if (-not (Test-Path -LiteralPath $expectedExecutable -PathType Leaf)) {
         throw 'The expected ezBookkeeping executable was not found.'
@@ -161,15 +198,16 @@ try {
     if ($taskActions.Count -ne 1 -or $matchingActions.Count -ne 1) {
         throw 'The ezBookkeeping scheduled task action does not match the expected local service command.'
     }
-    Stop-ScheduledTask -InputObject $task -ErrorAction Stop
+    $taskWasRunning = ([string]$task.State -eq 'Running')
 
-    $ownedProcesses = Get-CimInstance Win32_Process -Filter "Name='ezbookkeeping.exe'" -ErrorAction Stop | Where-Object {
-        $_.ExecutablePath -and ([string]::Equals([IO.Path]::GetFullPath($_.ExecutablePath), $expectedExecutable, [StringComparison]::OrdinalIgnoreCase))
-    }
-    foreach ($process in $ownedProcesses) {
-        Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
-    }
+    $backupPath = Copy-ConfigToUniqueBackup -ConfigPath $ConfigPath
+    [IO.File]::WriteAllText($ConfigPath, $updatedConfig, $utf8NoBom)
+    $configWritten = $true
+    Stop-ScheduledTask -InputObject $task -ErrorAction Stop
+    $taskStopped = $true
+    Stop-ExpectedEzBookkeepingProcesses -ExpectedExecutable $expectedExecutable
     Start-ScheduledTask -InputObject $task -ErrorAction Stop
+    $taskStarted = $true
 
     $healthy = $false
     $healthDeadline = (Get-Date).AddSeconds(15)
@@ -200,7 +238,7 @@ try {
     }
     $headers = @{ Authorization = "Bearer $apiToken" }
     $body = @{ expiresInSeconds = $ExpiresInSeconds; password = $plainPassword } | ConvertTo-Json -Compress
-    $response = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8180/api/v1/tokens/generate/mcp.json' -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $body -ErrorAction Stop
+    $response = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8180/api/v1/tokens/generate/mcp.json' -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $body -TimeoutSec 15 -ErrorAction Stop
     $mcpToken = ([string]$response.result.token).Trim()
     if ($response.success -ne $true -or [string]::IsNullOrWhiteSpace($mcpToken) -or $mcpToken -match '[\r\n]') {
         throw 'ezBookkeeping did not return an MCP token.'
@@ -208,6 +246,17 @@ try {
     Set-OwnerOnlyTokenFile -Path $McpTokenPath -Token $mcpToken -Encoding $utf8NoBom
     Write-Host 'MCP enabled and token stored securely.'
 } catch {
+    $rollbackSucceeded = $true
+    if ($configWritten) {
+        try {
+            Restore-ConfigurationAndService -BackupPath $backupPath -ConfigPath $ConfigPath -Task $task -ExpectedExecutable $expectedExecutable -TaskWasRunning $taskWasRunning -TaskStopped $taskStopped -TaskStarted $taskStarted
+        } catch {
+            $rollbackSucceeded = $false
+        }
+    }
+    if (-not $rollbackSucceeded) {
+        throw 'Local ezBookkeeping MCP setup failed and automatic rollback could not be completed. Restore the configuration backup and service state before retrying.'
+    }
     throw 'Could not complete local ezBookkeeping MCP setup. Check the configuration, task, and service health, then retry.'
 } finally {
     if ($passwordPointer -ne [IntPtr]::Zero) {
