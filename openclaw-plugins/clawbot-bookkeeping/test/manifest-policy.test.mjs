@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 test('declares only the read-only ezBookkeeping MCP surface without credentials', () => {
@@ -16,4 +18,13 @@ test('declares only the read-only ezBookkeeping MCP surface without credentials'
   assert.equal(manifestText.includes('mcp-token'), false);
   assert.equal(manifest.configSchema.properties.mcpTokenPath.type, 'string');
   assert.equal(manifest.configSchema.properties.mcpTokenPath.minLength > 0, true);
+});
+
+test('uses the current user profile for the default bookkeeping API token path', () => {
+  const source = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
+  const expectedDefault = join(homedir(), '.openclaw', 'secrets', 'ezbookkeeping-token.txt');
+
+  assert.equal(expectedDefault, join(homedir(), '.openclaw', 'secrets', 'ezbookkeeping-token.txt'));
+  assert.match(source, /: join\(homedir\(\), '\.openclaw', 'secrets', 'ezbookkeeping-token\.txt'\)/);
+  assert.doesNotMatch(source, /C:\\\\Users\\\\[^\\]+\\\\\.openclaw\\\\secrets\\\\ezbookkeeping-token\.txt/);
 });

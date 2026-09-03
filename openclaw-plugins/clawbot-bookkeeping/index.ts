@@ -131,7 +131,7 @@ export default definePluginEntry({
       : 'http://127.0.0.1:8180';
     const tokenPath = typeof config.tokenPath === 'string'
       ? config.tokenPath
-      : 'C:\\Users\\USER\\.openclaw\\secrets\\ezbookkeeping-token.txt';
+      : join(homedir(), '.openclaw', 'secrets', 'ezbookkeeping-token.txt');
     const mcpTokenPath = typeof config.mcpTokenPath === 'string'
       ? config.mcpTokenPath
       : join(homedir(), '.openclaw', 'secrets', 'ezbookkeeping-mcp-token.txt');
