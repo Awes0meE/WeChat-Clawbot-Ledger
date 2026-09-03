@@ -13,6 +13,15 @@
   "activation": {
     "onStartup": true
   },
+  "mcpServers": {
+    "ezbookkeeping": {
+      "transport": "streamable-http",
+      "url": "http://127.0.0.1:8180/mcp",
+      "toolFilter": {
+        "include": ["query_transactions"]
+      }
+    }
+  },
   "toolMetadata": {
     "bookkeeping_health": {
       "profiles": ["minimal"]
@@ -33,6 +42,10 @@
         "const": "http://127.0.0.1:8180"
       },
       "tokenPath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "mcpTokenPath": {
         "type": "string",
         "minLength": 1
       },

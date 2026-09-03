@@ -34,6 +34,7 @@ test('correlates trusted metadata across isolated plugin instances', async () =>
       inboundHooks.set(name, handler);
     },
     registerTool() {},
+    registerMcpServerConnectionResolver() {},
   };
   const toolApi = {
     pluginConfig,
@@ -45,6 +46,7 @@ test('correlates trusted metadata across isolated plugin instances', async () =>
         recordExpenseFactory = definition;
       }
     },
+    registerMcpServerConnectionResolver() {},
   };
 
   try {

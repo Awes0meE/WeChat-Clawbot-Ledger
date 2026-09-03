@@ -27,6 +27,7 @@ function createPluginHarness(tempDirectory, fetchImpl) {
         recordExpenseDefinition = definition;
       }
     },
+    registerMcpServerConnectionResolver() {},
   };
   const originalFetch = globalThis.fetch;
   globalThis.fetch = fetchImpl;

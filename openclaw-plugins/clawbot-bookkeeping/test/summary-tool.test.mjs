@@ -10,16 +10,21 @@ function createPluginHarness(tempDirectory, fetchImpl) {
   const hooks = new Map();
   let summarizeExpensesFactory;
   let summarizeExpensesDefinition;
+  let mcpServerConnectionResolver;
   const logs = [];
   const pluginApi = {
     pluginConfig: {
       serverBaseUrl: 'http://127.0.0.1:8180',
       tokenPath: join(tempDirectory, 'token.txt'),
+      mcpTokenPath: join(tempDirectory, 'mcp-token.txt'),
       stateDbPath: join(tempDirectory, 'receipts.sqlite'),
       accountName: '日常支出',
     },
     logger: {
       error(message) { logs.push(message); },
+    },
+    config: {
+      commands: { ownerAllowFrom: ['openclaw-weixin:alice'] },
     },
     on(name, handler) {
       hooks.set(name, handler);
@@ -30,6 +35,9 @@ function createPluginHarness(tempDirectory, fetchImpl) {
         summarizeExpensesDefinition = definition;
       }
     },
+    registerMcpServerConnectionResolver(resolver) {
+      mcpServerConnectionResolver = resolver;
+    },
   };
   const originalFetch = globalThis.fetch;
   globalThis.fetch = fetchImpl;
@@ -39,6 +47,7 @@ function createPluginHarness(tempDirectory, fetchImpl) {
     logs,
     summarizeExpensesFactory,
     summarizeExpensesDefinition,
+    mcpServerConnectionResolver,
     restore() {
       hooks.get('gateway_stop')?.({}, {});
       globalThis.fetch = originalFetch;
@@ -72,6 +81,24 @@ test('declares the owner-only expense summary tool in the plugin manifest', () =
     'summarize_expenses',
   ]);
   assert.deepEqual(manifest.toolMetadata.summarize_expenses, { profiles: ['minimal'] });
+});
+
+test('registers only the requester-scoped read-only ezBookkeeping MCP resolver', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-summary-'));
+  const harness = createPluginHarness(tempDirectory, async () => { throw new Error('fetch must not run'); });
+  try {
+    assert.equal(harness.mcpServerConnectionResolver.serverName, 'ezbookkeeping');
+    const manifest = JSON.parse(readFileSync(new URL('../openclaw.plugin.json', import.meta.url), 'utf8'));
+    assert.deepEqual(manifest.mcpServers.ezbookkeeping.toolFilter.include, ['query_transactions']);
+    assert.equal(manifest.mcpServers.ezbookkeeping.toolFilter.include.includes('add_transaction'), false);
+    assert.equal(await harness.mcpServerConnectionResolver.resolve({
+      messageChannel: 'openclaw-weixin',
+      requesterSenderId: 'stranger',
+    }), null);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
 });
 
 test('uses separate strict schemas for natural and custom summary periods', () => {

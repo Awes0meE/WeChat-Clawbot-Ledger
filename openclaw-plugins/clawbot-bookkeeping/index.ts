@@ -1,5 +1,7 @@
 import { Type } from 'typebox';
 import { createHash } from 'node:crypto';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry';
 
 import { EzBookkeepingApi, SqliteReceiptStore } from './adapter.mjs';
@@ -20,6 +22,7 @@ import {
   formatExpenseSummary,
   resolveExpenseRange,
 } from './expense-summary.mjs';
+import { createOwnerMcpConnectionResolver } from './mcp-connection.mjs';
 
 type InboundMessage = {
   channel: string;
@@ -129,6 +132,9 @@ export default definePluginEntry({
     const tokenPath = typeof config.tokenPath === 'string'
       ? config.tokenPath
       : 'C:\\Users\\USER\\.openclaw\\secrets\\ezbookkeeping-token.txt';
+    const mcpTokenPath = typeof config.mcpTokenPath === 'string'
+      ? config.mcpTokenPath
+      : join(homedir(), '.openclaw', 'secrets', 'ezbookkeeping-mcp-token.txt');
     const stateDbPath = typeof config.stateDbPath === 'string'
       ? config.stateDbPath
       : 'D:\\Clawbot\\state\\message-receipts.sqlite';
@@ -137,6 +143,15 @@ export default definePluginEntry({
 
     const bookkeepingApi = new EzBookkeepingApi({ serverBaseUrl, tokenPath });
     const receiptStore = new SqliteReceiptStore(stateDbPath);
+
+    api.registerMcpServerConnectionResolver({
+      serverName: 'ezbookkeeping',
+      resolve: createOwnerMcpConnectionResolver({
+        config: api.config,
+        serverBaseUrl,
+        mcpTokenPath,
+      }),
+    });
 
     api.on('message_received', (event, context) => {
       const sessionKey = context.sessionKey ?? event.sessionKey;
