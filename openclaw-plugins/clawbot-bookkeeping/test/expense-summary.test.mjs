@@ -124,7 +124,7 @@ test('uses the hierarchy category name when a sanitized transaction name is blan
     { time: 1_788_100_000, sourceAmount: 825, categoryId: 'market', categoryName: undefined },
   ], new Map([['market', '食品酒水']]), new Map([['market', '超市购物']]));
 
-  assert.match(formatExpenseSummary('这个月', summary), /最大三笔：\n08\/30 超市购物：8\.25 SGD/u);
+  assert.match(formatExpenseSummary('这个月', summary), /- 🏆 最大三笔\n  - 08\/30 超市购物：8\.25 SGD/u);
 });
 
 test('rejects transactions whose accumulated summary total is unsafe', () => {
@@ -152,11 +152,11 @@ test('formats a category breakdown and the three largest expenses', () => {
   const formatted = formatExpenseSummary('这个月', summary);
 
   assert.match(formatted, /^这个月一共花了 41\.95 SGD，共 4 笔 📊/u);
-  assert.match(formatted, /分类汇总：\n学习进修：24\.00 SGD\n食品酒水：17\.95 SGD/u);
-  assert.match(formatted, /最大三笔：\n08\/30 数码装备：24\.00 SGD/u);
+  assert.match(formatted, /- 📂 分类汇总\n  - 学习进修：24\.00 SGD\n  - 食品酒水：17\.95 SGD/u);
+  assert.match(formatted, /- 🏆 最大三笔\n  - 08\/30 数码装备：24\.00 SGD/u);
   assert.equal(formatExpenseSummary('这个月', {
     totalAmountMinor: 0, count: 0, categories: [], largest: [],
-  }), '这个月还没有支出记录～');
+  }), '这个月还没有支出记录哦～');
 });
 
 test('formats large safe integer cent amounts exactly', () => {

@@ -331,7 +331,7 @@ test('returns a stable failure without sensitive ledger details when a read fail
   try {
     const tool = harness.summarizeExpensesFactory(ownerContext());
     const result = await tool.execute('tool-call-read-failure', { period: 'this_month' });
-    assert.equal(result.content[0].text, '账本暂时连不上，本次没有读取任何数据，请稍后再试。');
+    assert.equal(result.content[0].text, '账本暂时连不上，这次没有读取任何数据～ 稍后再试试吧。');
     assert.deepEqual(result.details, { status: 'failed' });
     assert.equal(harness.logs.some((entry) => /test-token|transaction secret/u.test(entry)), false);
     assert.match(harness.logs[0], /Error/u);
@@ -356,7 +356,7 @@ test('returns the stable no-data failure when an expense summary request times o
       'tool-call-read-timeout',
       { period: 'this_month' },
     );
-    assert.equal(result.content[0].text, '账本暂时连不上，本次没有读取任何数据，请稍后再试。');
+    assert.equal(result.content[0].text, '账本暂时连不上，这次没有读取任何数据～ 稍后再试试吧。');
     assert.deepEqual(result.details, { status: 'failed' });
     assert.equal(requestCount, 1);
     assert.match(harness.logs[0], /Error/u);
@@ -386,7 +386,7 @@ test('turns a malformed transaction response into the same stable read failure',
 
   try {
     const result = await harness.summarizeExpensesFactory(ownerContext()).execute('tool-call-malformed', { period: 'this_month' });
-    assert.equal(result.content[0].text, '账本暂时连不上，本次没有读取任何数据，请稍后再试。');
+    assert.equal(result.content[0].text, '账本暂时连不上，这次没有读取任何数据～ 稍后再试试吧。');
     assert.deepEqual(result.details, { status: 'failed' });
     assert.equal(harness.logs.some((entry) => /sensitive comment/u.test(entry)), false);
   } finally {

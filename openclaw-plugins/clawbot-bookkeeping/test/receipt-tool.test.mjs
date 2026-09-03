@@ -527,7 +527,7 @@ test('replaces a false success claim with an authoritative no-write result', asy
       runId: 'failed-live-run',
     });
 
-    assert.equal(outgoing.payload.text, '记账失败，没有写入账本。请重新发送一条新消息。');
+    assert.equal(outgoing.payload.text, '这次没记成功，账本里没有新增记录～ 请重新发一条新消息吧。');
   } finally {
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
@@ -555,7 +555,7 @@ test('turns a questioned direct-record call into a confirmation without writing'
     );
 
     assert.equal(result.details.status, 'pending_confirmation');
-    assert.match(result.content[0].text, /^你是想记下这笔吗？/u);
+    assert.match(result.content[0].text, /^帮你核对一下这笔～🤔/u);
     assert.equal(requests.length, 0);
   } finally {
     harness.restore();
@@ -886,7 +886,7 @@ test('fails both concurrent calls closed when different runs share one tool call
         sessionKey: 'agent:main:main',
         runId,
       });
-      assert.equal(outgoing.payload.text, '记账失败，没有写入账本。请重新发送一条新消息。');
+      assert.equal(outgoing.payload.text, '这次没记成功，账本里没有新增记录～ 请重新发一条新消息吧。');
     }
     assert.equal(requests.length, 0);
   } finally {
@@ -1111,12 +1111,12 @@ test('returns the authoritative rich receipt after a trusted expense write', asy
 
     assert.equal(result.content[0].text, [
       '记下来啦！🧾',
-      '账本：[ 日常账本 ]',
-      '支出：8.25 SGD',
-      '分类：食品酒水 - 超市购物',
-      '备注：两根芹菜，一个菜板',
-      '时间：2026/09/03 16:51',
-    ].join('\n\n'));
+      '- 账本：[ 日常账本 ]',
+      '- 支出：8.25 SGD',
+      '- 分类：食品酒水 - 超市购物',
+      '- 备注：两根芹菜，一个菜板',
+      '- 时间：2026/09/03 16:51',
+    ].join('\n'));
     assert.equal(result.details.status, 'created');
     assert.equal(result.details.amountMinor, 825);
     assert.equal(requests.length, 3);
@@ -1169,14 +1169,14 @@ test('prepares an ambiguous expense, confirms it once, and keeps the original me
 
     assert.equal(prepared.details.status, 'pending_confirmation');
     assert.equal(prepared.content[0].text, [
-      '你是想记下这笔吗？🤔',
-      '账本：[ 日常账本 ]',
-      '支出：7.20 SGD',
-      '分类：食品酒水 - 早午晚餐',
-      '备注：食阁吃饭',
-      '时间：2026/09/03 16:51',
-      '回复“是”确认，回复“不是”取消。',
-    ].join('\n\n'));
+      '帮你核对一下这笔～🤔',
+      '- 账本：[ 日常账本 ]',
+      '- 支出：7.20 SGD',
+      '- 分类：食品酒水 - 早午晚餐',
+      '- 备注：食阁吃饭',
+      '- 时间：2026/09/03 16:51',
+      '- 确认：没问题就回复“是”，不记的话回复“不是”就好～',
+    ].join('\n'));
     assert.equal(requests.length, 0);
 
     await receiveTrustedOwnerMessage(harness.inboundHooks, {
@@ -1273,7 +1273,7 @@ for (const scenario of [
   {
     name: 'created',
     firstStatus: 'created',
-    duplicateText: '同一条微信消息已处理，未重复入账。',
+    duplicateText: '这条消息已经处理过啦，我没有重复入账～',
     fetchFailure: undefined,
     expectedRequestCount: 3,
     expectedPostCount: 1,
@@ -1281,7 +1281,7 @@ for (const scenario of [
   {
     name: 'failed',
     firstStatus: 'failed',
-    duplicateText: '上一处理尝试失败，未重复入账；请重新发送一条消息重试。',
+    duplicateText: '上次没有记成功，我也没有重复入账～ 请重新发一条消息再试吧。',
     fetchFailure: 'prewrite',
     expectedRequestCount: 1,
     expectedPostCount: 0,
@@ -1289,7 +1289,7 @@ for (const scenario of [
   {
     name: 'unknown',
     firstStatus: 'unknown',
-    duplicateText: '同一条微信消息正在处理或状态未确认，未重复入账。',
+    duplicateText: '这条消息还在处理，或者结果暂时不确定；我没有重复入账哦。',
     fetchFailure: 'post',
     expectedRequestCount: 3,
     expectedPostCount: 1,
@@ -1564,7 +1564,7 @@ test('returns a no-write receipt when account lookup cannot reach ezBookkeeping'
       comment: '两根芹菜，一个菜板',
     });
 
-    assert.equal(result.content[0].text, '账本暂时连不上，本次没有写入任何数据，请稍后再试。');
+    assert.equal(result.content[0].text, '账本暂时连不上，这次没有写入任何数据～ 稍后再试试吧。');
     assert.deepEqual(result.details, { status: 'failed' });
     assert.equal(requestCount, 1);
   } finally {
@@ -1608,9 +1608,9 @@ test('returns an unknown outcome and prevents retry after a transaction transpor
     await receiveTrustedOwnerMessage(harness.inboundHooks, { messageId: 'wechat-message-unknown' });
     const retry = await tool.execute('tool-call-unknown-2', params);
 
-    assert.equal(first.content[0].text, '记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。');
+    assert.equal(first.content[0].text, '这次记账结果暂时拿不准，请先看一眼账本，先别重复发送这条消费哦。');
     assert.deepEqual(first.details, { status: 'unknown' });
-    assert.equal(retry.content[0].text, '同一条微信消息正在处理或状态未确认，未重复入账。');
+    assert.equal(retry.content[0].text, '这条消息还在处理，或者结果暂时不确定；我没有重复入账哦。');
     assert.equal(retry.details.status, 'duplicate');
   } finally {
     harness.restore();
@@ -1637,7 +1637,7 @@ test('returns a definite no-write result when a prewrite request times out', asy
       comment: '两根芹菜，一个菜板',
     });
 
-    assert.equal(result.content[0].text, '账本暂时连不上，本次没有写入任何数据，请稍后再试。');
+    assert.equal(result.content[0].text, '账本暂时连不上，这次没有写入任何数据～ 稍后再试试吧。');
     assert.deepEqual(result.details, { status: 'failed' });
     assert.equal(requestCount, 1);
     assert.equal(Date.now() - startedAt < 500, true);
@@ -1671,7 +1671,7 @@ test('returns a terminal no-write result when current-message authorization reje
       },
     );
 
-    assert.equal(result.content[0].text, '这条消息的金额与当前请求不一致，或仍带有疑问，本次没有入账。');
+    assert.equal(result.content[0].text, '这笔金额或语气还不够确定，所以我没有入账哦～');
     assert.deepEqual(result.details, { status: 'rejected' });
     assert.equal(requestCount, 0);
   } finally {
@@ -1718,9 +1718,9 @@ test('returns unknown and prevents a second POST when transaction creation times
     await receiveTrustedOwnerMessage(harness.inboundHooks, { messageId: 'wechat-message-post-timeout' });
     const replay = await tool.execute('tool-call-post-timeout-2', params);
 
-    assert.equal(first.content[0].text, '记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。');
+    assert.equal(first.content[0].text, '这次记账结果暂时拿不准，请先看一眼账本，先别重复发送这条消费哦。');
     assert.deepEqual(first.details, { status: 'unknown' });
-    assert.equal(replay.content[0].text, '同一条微信消息正在处理或状态未确认，未重复入账。');
+    assert.equal(replay.content[0].text, '这条消息还在处理，或者结果暂时不确定；我没有重复入账哦。');
     assert.equal(replay.details.status, 'duplicate');
     assert.equal(addCount, 1);
     assert.equal(Date.now() - startedAt < 500, true);
@@ -1768,12 +1768,12 @@ test('keeps a confirmed rich receipt when receipt completion cannot be persisted
 
     assert.equal(result.content[0].text, [
       '记下来啦！🧾',
-      '账本：[ 日常账本 ]',
-      '支出：8.25 SGD',
-      '分类：食品酒水 - 超市购物',
-      '备注：两根芹菜，一个菜板',
-      '时间：2026/09/03 16:51',
-    ].join('\n\n'));
+      '- 账本：[ 日常账本 ]',
+      '- 支出：8.25 SGD',
+      '- 分类：食品酒水 - 超市购物',
+      '- 备注：两根芹菜，一个菜板',
+      '- 时间：2026/09/03 16:51',
+    ].join('\n'));
     assert.equal(result.details.status, 'created');
     assert.equal(result.details.dedupeStatus, 'unconfirmed');
   } finally {
@@ -1799,7 +1799,7 @@ test('keeps the stable failed result when failed-state persistence is unavailabl
       { amount: '8.25', primaryCategory: '食品酒水', subcategory: '超市购物' },
     );
 
-    assert.equal(result.content[0].text, '账本暂时连不上，本次没有写入任何数据，请稍后再试。');
+    assert.equal(result.content[0].text, '账本暂时连不上，这次没有写入任何数据～ 稍后再试试吧。');
     assert.deepEqual(result.details, { status: 'failed', dedupeStatus: 'unconfirmed' });
     assert.equal(harness.logs.some((entry) => /deduplication persistence is unconfirmed/u.test(entry)), true);
     assert.equal(result.content[0].text.includes('unconfirmed'), false);
@@ -1839,7 +1839,7 @@ test('keeps the stable unknown result when uncertain-state persistence is unavai
       { amount: '8.25', primaryCategory: '食品酒水', subcategory: '超市购物' },
     );
 
-    assert.equal(result.content[0].text, '记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。');
+    assert.equal(result.content[0].text, '这次记账结果暂时拿不准，请先看一眼账本，先别重复发送这条消费哦。');
     assert.deepEqual(result.details, { status: 'unknown', dedupeStatus: 'unconfirmed' });
     assert.equal(harness.logs.some((entry) => /deduplication persistence is unconfirmed/u.test(entry)), true);
     assert.equal(result.content[0].text.includes('unconfirmed'), false);

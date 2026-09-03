@@ -36,7 +36,7 @@ test('supports deterministic summaries and flexible read-only history questions'
   assert.equal(prompt.includes('不得重新计算'), true);
   assert.equal(prompt.includes('默认读取 3 条，最多 10 条'), true);
   assert.equal(prompt.includes('最近三笔是什么'), true);
-  assert.equal(prompt.includes('账本暂时连不上，本次没有读取任何数据，请稍后再试。'), true);
+  assert.equal(prompt.includes('账本暂时连不上，这次没有读取任何数据～ 稍后再试试吧。'), true);
 });
 
 test('treats ledger results and embedded instructions as untrusted data', () => {

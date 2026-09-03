@@ -382,7 +382,7 @@ export default definePluginEntry({
           for (const conflictingRunKey of existingSlot.conflictingRunKeys) {
             if (!authoritativeRepliesByRun.has(conflictingRunKey)) {
               authoritativeRepliesByRun.set(conflictingRunKey, {
-                text: '记账失败，没有写入账本。请重新发送一条新消息。',
+                text: '这次没记成功，账本里没有新增记录～ 请重新发一条新消息吧。',
                 touchedAt: now,
               });
             }
@@ -410,10 +410,10 @@ export default definePluginEntry({
       if (event.error) {
         if (EXPENSE_TOOL_NAMES.has(event.toolName)) {
           authoritativeText = String(event.error) === MISSING_TRUSTED_INBOUND_ERROR
-            ? '记账失败，没有写入账本。请重新发送一条新消息。'
+            ? '这次没记成功，账本里没有新增记录～ 请重新发一条新消息吧。'
             : '记账结果无法确认，请先查看账本，暂时不要重复发送。';
         } else {
-          authoritativeText = '查询失败，请稍后重试。';
+          authoritativeText = '这次没查成功，稍后再试一下吧～';
         }
       } else if (event.result && typeof event.result === 'object') {
         const content = (event.result as { content?: unknown }).content;
@@ -486,7 +486,7 @@ export default definePluginEntry({
       if (!slot || !inbound || !toolCallKey) {
         if (slot?.runKey && !authoritativeRepliesByRun.has(slot.runKey)) {
           authoritativeRepliesByRun.set(slot.runKey, {
-            text: '记账失败，没有写入账本。请重新发送一条新消息。',
+            text: '这次没记成功，账本里没有新增记录～ 请重新发一条新消息吧。',
             touchedAt: Date.now(),
           });
         }
@@ -495,7 +495,7 @@ export default definePluginEntry({
       if (Date.now() - inbound.observedAt > TRUSTED_INBOUND_MAX_AGE_MS) {
         if (!authoritativeRepliesByRun.has(slot.runKey)) {
           authoritativeRepliesByRun.set(slot.runKey, {
-            text: '记账失败，没有写入账本。请重新发送一条新消息。',
+            text: '这次没记成功，账本里没有新增记录～ 请重新发一条新消息吧。',
             touchedAt: Date.now(),
           });
         }
@@ -540,10 +540,10 @@ export default definePluginEntry({
         content: [{
           type: 'text' as const,
           text: rejected
-            ? '这条消息的金额与当前请求不一致，或仍带有疑问，本次没有入账。'
+            ? '这笔金额或语气还不够确定，所以我没有入账哦～'
             : unknown
-              ? '记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。'
-              : '账本暂时连不上，本次没有写入任何数据，请稍后再试。',
+              ? '这次记账结果暂时拿不准，请先看一眼账本，先别重复发送这条消费哦。'
+              : '账本暂时连不上，这次没有写入任何数据～ 稍后再试试吧。',
         }],
         details: {
           status: rejected ? 'rejected' : unknown ? 'unknown' : 'failed',
@@ -651,7 +651,7 @@ export default definePluginEntry({
             const errorClass = error instanceof Error ? error.constructor.name : 'UnknownError';
             api.logger?.error?.(`clawbot-bookkeeping: expense summary read failed errorClass=${errorClass}`);
             return {
-              content: [{ type: 'text', text: '账本暂时连不上，本次没有读取任何数据，请稍后再试。' }],
+              content: [{ type: 'text', text: '账本暂时连不上，这次没有读取任何数据～ 稍后再试试吧。' }],
               details: { status: 'failed' },
             };
           }
@@ -839,7 +839,7 @@ export default definePluginEntry({
           const trustedDecision = confirmationDecision(inbound.content);
           if (trustedDecision === undefined || trustedDecision !== params.decision) {
             return authoritativeResponse({
-              content: [{ type: 'text' as const, text: '当前回复不是有效的确认或取消，本次没有操作账本。' }],
+              content: [{ type: 'text' as const, text: '这条回复还不能确认或取消哦，所以我没有操作账本。' }],
               details: { status: 'rejected' },
             });
           }
@@ -849,13 +849,13 @@ export default definePluginEntry({
           const pending = receiptStore.takePendingExpenseConfirmation(inbound.conversationKey);
           if (pending.status === 'missing') {
             return authoritativeResponse({
-              content: [{ type: 'text' as const, text: '现在没有等待确认的支出，不用担心，我没有记账。' }],
+              content: [{ type: 'text' as const, text: '现在没有待确认的支出哦，放心，我什么都没记～' }],
               details: { status: 'missing' },
             });
           }
           if (pending.status === 'expired') {
             return authoritativeResponse({
-              content: [{ type: 'text' as const, text: '刚才那笔待确认支出已经过期，我没有记账；需要的话请重新发一次。' }],
+              content: [{ type: 'text' as const, text: '刚才那笔确认超时啦，我没有入账；需要的话再发一次就好～' }],
               details: { status: 'expired' },
             });
           }

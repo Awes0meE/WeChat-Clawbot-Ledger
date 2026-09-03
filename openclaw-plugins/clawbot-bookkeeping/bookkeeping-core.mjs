@@ -186,12 +186,12 @@ export function formatExpenseReceipt({
 
   return [
     '记下来啦！🧾',
-    `账本：[ ${ledgerDisplayName} ]`,
-    `支出：${(Number(amountMinor) / 100).toFixed(2)} SGD`,
-    `分类：${primaryCategory} - ${subcategory}`,
-    `备注：${displayComment || '无'}`,
-    `时间：${formattedTime}`,
-  ].join('\n\n');
+    `- 账本：[ ${ledgerDisplayName} ]`,
+    `- 支出：${(Number(amountMinor) / 100).toFixed(2)} SGD`,
+    `- 分类：${primaryCategory} - ${subcategory}`,
+    `- 备注：${displayComment || '无'}`,
+    `- 时间：${formattedTime}`,
+  ].join('\n');
 }
 
 export function formatExpenseConfirmation({
@@ -209,12 +209,12 @@ export function formatExpenseConfirmation({
     subcategory,
     comment,
     time,
-  }).split('\n\n').slice(1);
+  }).split('\n').slice(1);
   return [
-    '你是想记下这笔吗？🤔',
+    '帮你核对一下这笔～🤔',
     ...receiptLines,
-    '回复“是”确认，回复“不是”取消。',
-  ].join('\n\n');
+    '- 确认：没问题就回复“是”，不记的话回复“不是”就好～',
+  ].join('\n');
 }
 
 export function normalizeMessageTimestamp(timestamp) {
@@ -239,12 +239,12 @@ function clientSessionIdFor(receiptKey) {
 
 export function duplicateResponseText(result) {
   if (result?.previousStatus === 'failed') {
-    return '上一处理尝试失败，未重复入账；请重新发送一条消息重试。';
+    return '上次没有记成功，我也没有重复入账～ 请重新发一条消息再试吧。';
   }
   if (result?.previousStatus !== 'created') {
-    return '同一条微信消息正在处理或状态未确认，未重复入账。';
+    return '这条消息还在处理，或者结果暂时不确定；我没有重复入账哦。';
   }
-  return '同一条微信消息已处理，未重复入账。';
+  return '这条消息已经处理过啦，我没有重复入账～';
 }
 
 function validateExpenseInput(input, inbound) {
