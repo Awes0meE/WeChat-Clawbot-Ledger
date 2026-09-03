@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -58,10 +59,11 @@ function trustedOwnerContext() {
 async function receiveTrustedOwnerMessage(inboundHooks, {
   content = 'NTUC购物8.25，买了两根芹菜，一个菜板',
   messageId = 'wechat-message-3',
+  timestamp = 1_788_425_460,
 } = {}) {
   await inboundHooks.get('message_received')({
     content,
-    timestamp: 1_788_425_460,
+    timestamp,
     messageId,
     senderId: 'owner-user',
     sessionKey: 'agent:main:main',
@@ -148,6 +150,134 @@ test('returns the authoritative rich receipt after a trusted expense write', asy
       comment: '两根芹菜，一个菜板',
       clientSessionId: addBody.clientSessionId,
     });
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('keeps coupon arithmetic from replacing the requested expense amount', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  let addBody;
+  const harness = createPluginHarness(tempDirectory, async (url, options) => {
+    if (url.endsWith('/accounts/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: [
+        { id: 'account-1', name: '日常支出', currency: 'SGD' },
+      ] }), { status: 200 });
+    }
+    if (url.endsWith('/transaction/categories/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: {
+        2: [{ id: 'primary-1', name: '食品酒水', parentId: '0', subCategories: [
+          { id: 'secondary-1', name: '早午晚餐', parentId: 'primary-1' },
+        ] }],
+      } }), { status: 200 });
+    }
+    if (url.endsWith('/transactions/add.json')) {
+      addBody = JSON.parse(options.body);
+      return new Response(JSON.stringify({ success: true, result: { id: 'transaction-coupon' } }), { status: 200 });
+    }
+    throw new Error('unexpected test request');
+  });
+
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭7.2，用券2+3',
+      messageId: 'wechat-message-coupon',
+    });
+    const result = await harness.recordExpenseFactory(trustedOwnerContext()).execute('tool-call-coupon', {
+      amount: '7.2',
+      primaryCategory: '食品酒水',
+      subcategory: '早午晚餐',
+    });
+
+    assert.equal(result.details.status, 'created');
+    assert.equal(addBody.sourceAmount, 720);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('binds a record tool to the trusted message present when the tool is materialized', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  let addBody;
+  const harness = createPluginHarness(tempDirectory, async (url, options) => {
+    if (url.endsWith('/accounts/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: [
+        { id: 'account-1', name: '日常支出', currency: 'SGD' },
+      ] }), { status: 200 });
+    }
+    if (url.endsWith('/transaction/categories/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: {
+        2: [{ id: 'primary-1', name: '食品酒水', parentId: '0', subCategories: [
+          { id: 'secondary-1', name: '早午晚餐', parentId: 'primary-1' },
+        ] }],
+      } }), { status: 200 });
+    }
+    if (url.endsWith('/transactions/add.json')) {
+      addBody = JSON.parse(options.body);
+      return new Response(JSON.stringify({ success: true, result: { id: 'transaction-bound' } }), { status: 200 });
+    }
+    throw new Error('unexpected test request');
+  });
+
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭7.2，备注鸡饭',
+      messageId: 'wechat-message-first',
+      timestamp: 1_788_425_460,
+    });
+    const firstTool = harness.recordExpenseFactory(trustedOwnerContext());
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '出租车7.2，备注回家',
+      messageId: 'wechat-message-second',
+      timestamp: 1_788_425_520,
+    });
+    const result = await firstTool.execute('tool-call-bound-first', {
+      amount: '7.2',
+      primaryCategory: '食品酒水',
+      subcategory: '早午晚餐',
+    });
+
+    const expectedSessionId = createHash('sha256')
+      .update('openclaw-weixin:wechat-message-first', 'utf8')
+      .digest('hex');
+    assert.equal(result.details.status, 'created');
+    assert.equal(addBody.time, 1_788_425_460);
+    assert.equal(addBody.comment, '鸡饭');
+    assert.equal(addBody.clientSessionId, expectedSessionId);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('keeps a materialized record tool closed when it had no trusted message snapshot', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  let requestCount = 0;
+  const harness = createPluginHarness(tempDirectory, async () => {
+    requestCount += 1;
+    throw new Error('HTTP must not be reached');
+  });
+
+  try {
+    const toolWithoutSnapshot = harness.recordExpenseFactory(trustedOwnerContext());
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭7.2',
+      messageId: 'wechat-message-arrived-later',
+    });
+    await assert.rejects(
+      () => toolWithoutSnapshot.execute('tool-call-without-snapshot', {
+        amount: '7.2',
+        primaryCategory: '食品酒水',
+        subcategory: '早午晚餐',
+      }),
+      /可信元数据/u,
+    );
+    assert.equal(requestCount, 0);
   } finally {
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
@@ -399,9 +529,9 @@ test('does not translate validation or receipt-store claim errors into a no-writ
 
   try {
     await receiveTrustedOwnerMessage(harness.inboundHooks, { messageId: 'wechat-message-invalid-amount' });
-    const tool = harness.recordExpenseFactory(trustedOwnerContext());
+    const invalidAmountTool = harness.recordExpenseFactory(trustedOwnerContext());
     await assert.rejects(
-      () => tool.execute('tool-call-invalid-amount', {
+      () => invalidAmountTool.execute('tool-call-invalid-amount', {
         amount: '999999999999.99',
         primaryCategory: '食品酒水',
         subcategory: '超市购物',
@@ -413,8 +543,9 @@ test('does not translate validation or receipt-store claim errors into a no-writ
       content: `NTUC购物8.25，备注${'字'.repeat(256)}`,
       messageId: 'wechat-message-invalid-note',
     });
+    const invalidNoteTool = harness.recordExpenseFactory(trustedOwnerContext());
     await assert.rejects(
-      () => tool.execute('tool-call-invalid-note', {
+      () => invalidNoteTool.execute('tool-call-invalid-note', {
         amount: '8.25',
         primaryCategory: '食品酒水',
         subcategory: '超市购物',
@@ -428,8 +559,9 @@ test('does not translate validation or receipt-store claim errors into a no-writ
     };
     try {
       await receiveTrustedOwnerMessage(harness.inboundHooks, { messageId: 'wechat-message-claim-error' });
+      const claimErrorTool = harness.recordExpenseFactory(trustedOwnerContext());
       await assert.rejects(
-        () => tool.execute('tool-call-claim-error', {
+        () => claimErrorTool.execute('tool-call-claim-error', {
           amount: '8.25',
           primaryCategory: '食品酒水',
           subcategory: '超市购物',

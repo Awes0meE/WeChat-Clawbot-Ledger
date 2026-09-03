@@ -56,15 +56,6 @@ function trustedInboundLookupKeys({
   return keys;
 }
 
-function additiveAmountFromMessage(content: string): string | undefined {
-  const expression = content.match(/\d+(?:\.\d{1,2})?(?:\s*[+＋]\s*\d+(?:\.\d{1,2})?)+/u)?.[0];
-  if (!expression) return undefined;
-  const totalCents = expression
-    .split(/[+＋]/u)
-    .reduce((sum, part) => sum + Math.round(Number(part.trim()) * 100), 0);
-  return (totalCents / 100).toFixed(2).replace(/\.00$/u, '').replace(/(\.\d)0$/u, '$1');
-}
-
 function documentedCategoryId(value: unknown): string | undefined {
   if ((typeof value !== 'string' && typeof value !== 'number')
     || (typeof value === 'number' && !Number.isFinite(value))
@@ -259,106 +250,111 @@ export default definePluginEntry({
     );
 
     api.registerTool(
-      (toolContext) => ({
-        name: 'record_expense',
-        catalogMode: 'direct-only',
-        description: [
-          '将当前一条消费消息记为一笔 SGD 支出。必须由你理解用户消息并选择金额、一级和二级分类。',
-          '不要把“备注”后的文字放进参数；工具会从可信原始消息中原样提取。',
-          '若原始消息未明确标注“备注”，可提供简短且有依据的商户、商品或用途说明；不得编造信息。',
-          '超市消费整笔归食品酒水/超市购物；网线归学习进修/数码装备。',
-          '早餐、午餐、晚餐、早饭、午饭、晚饭或一般餐饮，二级分类一律使用“早午晚餐”，不要使用“餐饮”“午餐”等非正式名称。',
-          '同一消息中的加法金额表示一笔消费总额，例如“6.5+2.5”必须只调用一次并传入“9”。',
-          '工具成功后，最终回复只能原样采用工具返回的“已记账”结果；不得展示思考、参数校验、候选分类或重试过程。',
-          CATEGORY_GUIDE,
-        ].join('\n'),
-        parameters: Type.Object({
-          amount: Type.String({ pattern: '^(?:0|[1-9]\\d*)(?:\\.\\d{1,2})?$' }),
-          primaryCategory: Type.Union(PRIMARY_CATEGORIES.map((value) => Type.Literal(value))),
-          subcategory: Type.String({ minLength: 1, maxLength: 20 }),
-          comment: Type.Optional(Type.String({ maxLength: 255 })),
-        }, { additionalProperties: false }),
-        async execute(_id, params) {
-          if (toolContext.senderIsOwner !== true) {
-            throw new Error('无法确认消息发送者为账本所有者，已拒绝入账。');
-          }
-          const sessionKey = toolContext.sessionKey;
-          const lookupKeys = trustedInboundLookupKeys({
+      (toolContext) => {
+        const sessionKey = toolContext.sessionKey;
+        const lookupKeys = toolContext.senderIsOwner === true
+          ? trustedInboundLookupKeys({
             sessionKey,
             channel: toolContext.messageChannel,
             senderId: toolContext.requesterSenderId,
-          });
-          const inbound = receiptStore.findTrustedInbound(lookupKeys) as InboundMessage | undefined;
-          api.logger?.info?.(
-            `clawbot-bookkeeping: tool metadata owner=${toolContext.senderIsOwner === true} session=${Boolean(sessionKey)} requester=${Boolean(toolContext.requesterSenderId)} channel=${toolContext.messageChannel ?? 'none'} durableMatch=${Boolean(inbound)} lookupKeys=${lookupKeys.length}`,
-          );
-          if (!inbound) {
-            throw new Error('缺少当前微信消息的可信元数据，已拒绝入账。');
-          }
-          if (Date.now() - inbound.observedAt > TRUSTED_INBOUND_MAX_AGE_MS) {
-            throw new Error('当前微信消息的可信元数据已过期，已拒绝入账。');
-          }
-          const normalizedInput = {
-            ...params,
-            amount: additiveAmountFromMessage(inbound.content) ?? params.amount,
-            subcategory: normalizeSubcategory(params.primaryCategory, params.subcategory),
-          };
-          let result;
-          try {
-            result = await recordExpense({
-              api: bookkeepingApi,
-              store: receiptStore,
-              input: normalizedInput,
-              inbound,
-              accountName,
-            });
-          } catch (error) {
-            if (!(error instanceof ExpenseRecordingError)) throw error;
-            api.logger?.error?.(
-              `clawbot-bookkeeping: ExpenseRecordingError outcome=${error.outcome} message=${error.message}`,
-            );
-            const unknown = error.outcome === 'unknown';
-            const rejected = error.outcome === 'rejected';
+          })
+          : [];
+        const inbound = lookupKeys.length > 0
+          ? receiptStore.findTrustedInbound(lookupKeys) as InboundMessage | undefined
+          : undefined;
+        api.logger?.info?.(
+          `clawbot-bookkeeping: tool metadata owner=${toolContext.senderIsOwner === true} session=${Boolean(sessionKey)} requester=${Boolean(toolContext.requesterSenderId)} channel=${toolContext.messageChannel ?? 'none'} durableMatch=${Boolean(inbound)} lookupKeys=${lookupKeys.length}`,
+        );
+        return {
+          name: 'record_expense',
+          catalogMode: 'direct-only',
+          description: [
+            '将当前一条消费消息记为一笔 SGD 支出。必须由你理解用户消息并选择金额、一级和二级分类。',
+            '不要把“备注”后的文字放进参数；工具会从可信原始消息中原样提取。',
+            '若原始消息未明确标注“备注”，可提供简短且有依据的商户、商品或用途说明；不得编造信息。',
+            '超市消费整笔归食品酒水/超市购物；网线归学习进修/数码装备。',
+            '早餐、午餐、晚餐、早饭、午饭、晚饭或一般餐饮，二级分类一律使用“早午晚餐”，不要使用“餐饮”“午餐”等非正式名称。',
+            '同一消息中的加法金额表示一笔消费总额，例如“6.5+2.5”必须只调用一次并传入“9”。',
+            '工具成功后，最终回复只能原样采用工具返回的“已记账”结果；不得展示思考、参数校验、候选分类或重试过程。',
+            CATEGORY_GUIDE,
+          ].join('\n'),
+          parameters: Type.Object({
+            amount: Type.String({ pattern: '^(?:0|[1-9]\\d*)(?:\\.\\d{1,2})?$' }),
+            primaryCategory: Type.Union(PRIMARY_CATEGORIES.map((value) => Type.Literal(value))),
+            subcategory: Type.String({ minLength: 1, maxLength: 20 }),
+            comment: Type.Optional(Type.String({ maxLength: 255 })),
+          }, { additionalProperties: false }),
+          async execute(_id, params) {
+            if (toolContext.senderIsOwner !== true) {
+              throw new Error('无法确认消息发送者为账本所有者，已拒绝入账。');
+            }
+            if (!inbound) {
+              throw new Error('缺少当前微信消息的可信元数据，已拒绝入账。');
+            }
+            if (Date.now() - inbound.observedAt > TRUSTED_INBOUND_MAX_AGE_MS) {
+              throw new Error('当前微信消息的可信元数据已过期，已拒绝入账。');
+            }
+            const normalizedInput = {
+              ...params,
+              subcategory: normalizeSubcategory(params.primaryCategory, params.subcategory),
+            };
+            let result;
+            try {
+              result = await recordExpense({
+                api: bookkeepingApi,
+                store: receiptStore,
+                input: normalizedInput,
+                inbound,
+                accountName,
+              });
+            } catch (error) {
+              if (!(error instanceof ExpenseRecordingError)) throw error;
+              api.logger?.error?.(
+                `clawbot-bookkeeping: ExpenseRecordingError outcome=${error.outcome} message=${error.message}`,
+              );
+              const unknown = error.outcome === 'unknown';
+              const rejected = error.outcome === 'rejected';
+              return {
+                content: [{
+                  type: 'text',
+                  text: rejected
+                    ? '这条消息无法确认是一笔金额一致的已发生消费，本次没有入账。'
+                    : unknown
+                      ? '记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。'
+                      : '账本暂时连不上，本次没有写入任何数据，请稍后再试。',
+                }],
+                details: { status: rejected ? 'rejected' : unknown ? 'unknown' : 'failed' },
+              };
+            }
+            if (result.dedupeStatus === 'unconfirmed') {
+              api.logger?.warn?.(
+                'clawbot-bookkeeping: ExpenseRecordingError outcome=written_unconfirmed message=expense write confirmed; deduplication persistence is unconfirmed',
+              );
+            }
+            const details = { ...result, currency: 'SGD', timeSource: inbound.timeSource };
+            if (result.status === 'duplicate') {
+              return {
+                content: [{ type: 'text', text: duplicateResponseText(result) }],
+                details,
+              };
+            }
             return {
               content: [{
                 type: 'text',
-                text: rejected
-                  ? '这条消息无法确认是一笔金额一致的已发生消费，本次没有入账。'
-                  : unknown
-                    ? '记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。'
-                    : '账本暂时连不上，本次没有写入任何数据，请稍后再试。',
+                text: formatExpenseReceipt({
+                  ledgerDisplayName,
+                  amountMinor: result.amountMinor,
+                  primaryCategory: normalizedInput.primaryCategory,
+                  subcategory: normalizedInput.subcategory,
+                  comment: result.comment,
+                  time: result.time,
+                }),
               }],
-              details: { status: rejected ? 'rejected' : unknown ? 'unknown' : 'failed' },
-            };
-          }
-          if (result.dedupeStatus === 'unconfirmed') {
-            api.logger?.warn?.(
-              'clawbot-bookkeeping: ExpenseRecordingError outcome=written_unconfirmed message=expense write confirmed; deduplication persistence is unconfirmed',
-            );
-          }
-          const details = { ...result, currency: 'SGD', timeSource: inbound.timeSource };
-          if (result.status === 'duplicate') {
-            return {
-              content: [{ type: 'text', text: duplicateResponseText(result) }],
               details,
             };
-          }
-          return {
-            content: [{
-              type: 'text',
-              text: formatExpenseReceipt({
-                ledgerDisplayName,
-                amountMinor: result.amountMinor,
-                primaryCategory: normalizedInput.primaryCategory,
-                subcategory: normalizedInput.subcategory,
-                comment: result.comment,
-                time: result.time,
-              }),
-            }],
-            details,
-          };
-        },
-      }),
+          },
+        };
+      },
       { name: 'record_expense' },
     );
   },

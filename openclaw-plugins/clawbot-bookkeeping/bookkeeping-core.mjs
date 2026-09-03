@@ -3,8 +3,10 @@ import { createHash } from 'node:crypto';
 const MAX_EZBOOKKEEPING_AMOUNT_MINOR = 9_999_999_999_999;
 const MAX_COMMENT_CHARACTERS = 255;
 const AMOUNT_EXPRESSION = /\d+(?:\.\d{1,2})?(?:\s*[+＋]\s*\d+(?:\.\d{1,2})?)*/gu;
-const NON_WRITE_CONTEXT = /(?:不要记|不用记|别记|不记账|不要入账|别入账|取消记账|取消入账|撤销|比如|例如|举例|假如|假设|如果|要是|倘若)/u;
-const QUERY_CONTEXT = /(?:多少|几笔|什么|哪些|哪笔|查询|查一下|查下|查账|统计|汇总|合计|总计|历史|最近|买过|有没有|是否|吗|嘛|呢|[?？])/u;
+const QUERY_CONTEXT = /(?:多少|几笔|什么|哪些|哪笔|查(?:询|一下|下|看|账)?|统计|汇总|合计|总计|历史|最近|买过|有没有|是否|吗|嘛|呢|[?？])/u;
+const NON_EXPENSE_CONTEXT = /(?:不要记|不用记|别记|不记账|不要入账|别入账|取消记账|取消入账|撤销|比如|例如|举例|假如|假设|如果|要是|倘若|预计|估计|预算|计划|打算|可能|还没付(?:款)?|尚未付(?:款)?|未付(?:款)?|没付(?:款)?|待付(?:款)?|朋友.{0,4}(?:转|给|付|还)(?:给)?我|别人.{0,4}(?:转|给|付|还)(?:给)?我|收到|收款|收入|工资|奖金)/u;
+const INSTRUCTION_INJECTION = /(?:record_expense|summarize_expenses|query_transactions|(?:忽略|无视|跳过).{0,12}(?:之前|前面|以上|规则|指令)|(?:调用|执行|使用).{0,8}(?:工具|函数))/iu;
+const QUANTITY_OR_TIME_UNIT = /^(?:个|位|人|根|件|张|瓶|杯|盒|包|份|次|天|小时|分钟|秒|公里|千米|米|厘米|毫米|km|kg|公斤|斤|克|年|月|日|号|点)/iu;
 
 export class ExpenseRecordingError extends Error {
   constructor(outcome) {
@@ -53,14 +55,23 @@ function hasExpenseContextText(clause) {
 
 function isAuthorizedExpenseMessage(content, requestedAmountMinor) {
   const text = String(content ?? '').trim();
-  if (!text || NON_WRITE_CONTEXT.test(text)) return false;
+  if (!text || INSTRUCTION_INJECTION.test(text)) return false;
 
-  return text.split(/[，,。；;！!\r\n]+/u).some((clause) => {
-    if (!clause || QUERY_CONTEXT.test(clause) || !hasExpenseContextText(clause)) return false;
-    return [...clause.matchAll(AMOUNT_EXPRESSION)].some(
-      (match) => expressionAmountToMinorUnits(match[0]) === requestedAmountMinor,
-    );
-  });
+  let blockedByEarlierClause = false;
+  for (const clause of text.split(/[，,。；;！!\r\n]+/u)) {
+    if (!clause) continue;
+    const disallowedContext = QUERY_CONTEXT.test(clause) || NON_EXPENSE_CONTEXT.test(clause);
+    const matchingAmount = [...clause.matchAll(AMOUNT_EXPRESSION)].some((match) => {
+      const suffix = clause.slice((match.index ?? 0) + match[0].length).trimStart();
+      return !QUANTITY_OR_TIME_UNIT.test(suffix)
+        && expressionAmountToMinorUnits(match[0]) === requestedAmountMinor;
+    });
+    if (matchingAmount) {
+      return !blockedByEarlierClause && !disallowedContext && hasExpenseContextText(clause);
+    }
+    if (disallowedContext) blockedByEarlierClause = true;
+  }
+  return false;
 }
 
 export function extractVerbatimComment(content) {
