@@ -78,7 +78,7 @@ function isAuthorizedExpenseMessage(content, requestedAmountMinor) {
 function normalizeTransactionId(value) {
   if (typeof value !== 'string') return '';
   const transactionId = value.trim();
-  if (Array.from(transactionId).length > 128 || /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(transactionId)) {
+  if (Array.from(transactionId).length > 128 || /[\p{C}\p{Zl}\p{Zp}]/u.test(transactionId)) {
     return '';
   }
   return transactionId;

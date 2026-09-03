@@ -215,6 +215,8 @@ for (const [label, addResult] of [
   ['empty', { id: '' }],
   ['blank', { id: '  \r\n' }],
   ['control-character', { id: 'transaction-1\nforged' }],
+  ['private-use-character', { id: 'transaction-1\uE000' }],
+  ['unassigned-character', { id: 'transaction-1\u0378' }],
   ['overlong', { id: 'a'.repeat(129) }],
 ]) {
   test(`treats a ${label} transaction id as unknown and deduplicates replay`, async () => {
