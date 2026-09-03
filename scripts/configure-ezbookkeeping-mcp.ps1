@@ -84,6 +84,30 @@ function Copy-ConfigToUniqueBackup {
     throw 'Could not create a unique ezBookkeeping configuration backup.'
 }
 
+function Write-ConfigAtomically {
+    param(
+        [Parameter(Mandatory = $true)][string]$ConfigPath,
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][System.Text.Encoding]$Encoding
+    )
+
+    $directory = Split-Path -Parent $ConfigPath
+    $leafName = Split-Path -Leaf $ConfigPath
+    $temporaryConfigPath = Join-Path $directory ('.' + $leafName + '.mcp-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+    $replacementBackupPath = $temporaryConfigPath + '.replace-backup'
+    try {
+        [IO.File]::WriteAllText($temporaryConfigPath, $Text, $Encoding)
+        [IO.File]::Replace($temporaryConfigPath, $ConfigPath, $replacementBackupPath)
+    } finally {
+        if (Test-Path -LiteralPath $temporaryConfigPath) {
+            Remove-Item -LiteralPath $temporaryConfigPath -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path -LiteralPath $replacementBackupPath) {
+            Remove-Item -LiteralPath $replacementBackupPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Get-NormalizedPath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -201,7 +225,7 @@ try {
     $taskWasRunning = ([string]$task.State -eq 'Running')
 
     $backupPath = Copy-ConfigToUniqueBackup -ConfigPath $ConfigPath
-    [IO.File]::WriteAllText($ConfigPath, $updatedConfig, $utf8NoBom)
+    Write-ConfigAtomically -ConfigPath $ConfigPath -Text $updatedConfig -Encoding $utf8NoBom
     $configWritten = $true
     Stop-ScheduledTask -InputObject $task -ErrorAction Stop
     $taskStopped = $true
@@ -255,7 +279,7 @@ try {
         }
     }
     if (-not $rollbackSucceeded) {
-        throw 'Local ezBookkeeping MCP setup failed and automatic rollback could not be completed. Restore the configuration backup and service state before retrying.'
+        throw ("Local ezBookkeeping MCP setup failed and automatic rollback could not be completed. Restore the configuration backup at '{0}' and service state before retrying." -f $backupPath)
     }
     throw 'Could not complete local ezBookkeeping MCP setup. Check the configuration, task, and service health, then retry.'
 } finally {

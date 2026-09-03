@@ -84,7 +84,7 @@ test('runtime setup scripts keep non-mutating approval guards before secrets or 
   assert.match(configureSource.slice(guardStart, guardEnd), /return/);
   for (const prohibitedOperation of [
     '[IO.File]::Copy',
-    '[IO.File]::WriteAllText($ConfigPath',
+    'Write-ConfigAtomically',
     'Get-ScheduledTask',
     'Stop-ScheduledTask',
     'Start-ScheduledTask',
@@ -186,6 +186,9 @@ test('configure source uses atomic backups, strict task actions, and normalized 
   assert.match(configureSource, /\[string\]\$ConfigPath = 'D:\\Clawbot\\ezbookkeeping\\conf\\ezbookkeeping\.ini'/);
   assert.match(configureSource, /\[string\]\$InstallDirectory = 'D:\\Clawbot\\ezbookkeeping'/);
   assert.match(configureSource, /tokens\/generate\/mcp\.json'.*-TimeoutSec 15/);
+  assert.doesNotMatch(configureSource, /\[IO\.File\]::WriteAllText\(\$ConfigPath/);
+  assert.match(configureSource, /\[IO\.File\]::Replace\(\$temporaryConfigPath, \$ConfigPath, \$replacementBackupPath\)/);
+  assert.match(configureSource, /Restore the configuration backup at '\{0\}'/);
 });
 
 test('configure script accepts the nested conf layout and performs the secured happy path in order', () => {
@@ -226,7 +229,14 @@ function Invoke-RestMethod {
   throw 'Unexpected URI.'
 }
 function Read-Host { [CmdletBinding()] param([string]$Prompt, [switch]$AsSecureString) [void]($global:trace += 'password'); $secure = New-Object System.Security.SecureString; 'temporary-password'.ToCharArray() | ForEach-Object { $secure.AppendChar($_) }; $secure.MakeReadOnly(); Write-Output -NoEnumerate $secure }
-function Set-Acl { [CmdletBinding()] param([string]$LiteralPath, [object]$AclObject) if (-not $AclObject.AreAccessRulesProtected) { throw 'ACL inheritance was not disabled.' }; [void]($global:trace += 'acl') }
+function Set-Acl {
+  [CmdletBinding()]
+  param([string]$LiteralPath, [object]$AclObject)
+  $currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+  $rules = @($AclObject.Access | Where-Object { $_.IdentityReference.Value -eq $currentIdentity })
+  if (-not $AclObject.AreAccessRulesProtected -or $rules.Count -ne 1 -or $rules[0].FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl -or $rules[0].AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { throw 'ACL was not exactly current-user FullControl allow.' }
+  [void]($global:trace += 'acl')
+}
 try { & $args[0] -ConfigPath $args[1] -InstallDirectory $args[2] -ApiTokenPath $args[3] -McpTokenPath $args[4] -TaskName $global:expectedTaskName -Confirm:$false } catch { throw ('Happy-path error after ' + ($global:trace -join ',') + ': ' + (($Error | ForEach-Object { $_.Exception.Message }) -join ' | ')) }
 if (($global:trace -join ',') -ne 'stop,start,health,password,token,acl') { throw ('Unexpected call order: ' + ($global:trace -join ',')) }
 `, 'utf8');
@@ -267,6 +277,36 @@ if (($global:trace -join ',') -ne 'stop,start,health,password,token,stop,start')
 `, 'utf8');
     runPowerShell(['-File', wrapperPath, configureScript, configPath, temporaryDirectory, apiTokenPath, join(temporaryDirectory, 'mcp.txt'), executablePath]);
     assert.equal(readFileSync(configPath, 'utf8'), originalIni);
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test('a locked replace leaves the original INI and atomic backup intact without temporary residue', () => {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'clawbot-runtime-replace-fault-'));
+  try {
+    const configDirectory = join(temporaryDirectory, 'conf');
+    const configPath = join(configDirectory, 'ezbookkeeping.ini');
+    const executablePath = join(temporaryDirectory, 'ezbookkeeping.exe');
+    const wrapperPath = join(temporaryDirectory, 'run-replace-fault-shim.ps1');
+    const originalIni = '[mcp]\nenable_mcp = false\nmcp_allowed_remote_ips = 10.0.0.1\n';
+    mkdirSync(configDirectory);
+    writeFileSync(configPath, originalIni, 'utf8');
+    writeFileSync(executablePath, '', 'utf8');
+    writeFileSync(wrapperPath, `
+$global:configLock = $null
+$global:configPath = $args[1]
+$global:task = [pscustomobject]@{ TaskName = 'Clawbot replace fault'; TaskPath = '\\'; State = 'Ready'; Actions = @([pscustomobject]@{ Execute = $args[4]; Arguments = 'server run'; WorkingDirectory = $args[2] }) }
+function Get-ScheduledTask { [CmdletBinding()] param() $global:configLock = [IO.File]::Open($global:configPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read); $global:task }
+try { & $args[0] -ConfigPath $args[1] -InstallDirectory $args[2] -ApiTokenPath $args[3] -McpTokenPath (Join-Path $args[2] 'mcp.txt') -TaskName 'Clawbot replace fault' -Confirm:$false; throw 'Expected locked replace failure.' } catch { if ($_.Exception.Message -notmatch 'Could not complete local ezBookkeeping MCP setup') { throw } } finally { if ($global:configLock) { $global:configLock.Dispose() } }
+`, 'utf8');
+    runPowerShell(['-File', wrapperPath, configureScript, configPath, temporaryDirectory, join(temporaryDirectory, 'api.txt'), executablePath]);
+    assert.equal(readFileSync(configPath, 'utf8'), originalIni);
+    const names = readdirSync(configDirectory);
+    const backups = names.filter((name) => name.includes('.before-mcp-'));
+    assert.equal(backups.length, 1);
+    assert.deepEqual(readFileSync(join(configDirectory, backups[0])), Buffer.from(originalIni, 'utf8'));
+    assert.equal(names.some((name) => name.endsWith('.tmp')), false);
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true });
   }
