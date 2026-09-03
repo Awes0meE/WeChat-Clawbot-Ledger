@@ -60,11 +60,20 @@ export class SqliteReceiptStore {
         payload_json TEXT NOT NULL,
         updated_at INTEGER NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS trusted_inbound_messages (
-        lookup_key TEXT PRIMARY KEY,
+      CREATE TABLE IF NOT EXISTS trusted_inbound_queue (
+        arrival_order INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_key TEXT NOT NULL UNIQUE,
         payload_json TEXT NOT NULL,
-        expires_at INTEGER NOT NULL
+        expires_at INTEGER NOT NULL,
+        claimed_at INTEGER
       );
+      CREATE TABLE IF NOT EXISTS trusted_inbound_queue_lookups (
+        lookup_key TEXT NOT NULL,
+        message_key TEXT NOT NULL,
+        PRIMARY KEY (lookup_key, message_key)
+      );
+      CREATE INDEX IF NOT EXISTS trusted_inbound_queue_lookup
+      ON trusted_inbound_queue_lookups (lookup_key, message_key);
     `);
     this.insertPending = this.database.prepare(`
       INSERT OR IGNORE INTO message_receipts (receipt_key, status, payload_json, updated_at)
@@ -78,19 +87,29 @@ export class SqliteReceiptStore {
       SET status = ?, payload_json = ?, updated_at = ?
       WHERE receipt_key = ?
     `);
-    this.upsertTrustedInbound = this.database.prepare(`
-      INSERT INTO trusted_inbound_messages (lookup_key, payload_json, expires_at)
+    this.insertTrustedInbound = this.database.prepare(`
+      INSERT OR IGNORE INTO trusted_inbound_queue (message_key, payload_json, expires_at)
       VALUES (?, ?, ?)
-      ON CONFLICT(lookup_key) DO UPDATE SET
-        payload_json = excluded.payload_json,
-        expires_at = excluded.expires_at
     `);
-    this.selectTrustedInbound = this.database.prepare(`
-      SELECT payload_json FROM trusted_inbound_messages
-      WHERE lookup_key = ? AND expires_at >= ?
+    this.insertTrustedInboundLookup = this.database.prepare(`
+      INSERT OR IGNORE INTO trusted_inbound_queue_lookups (lookup_key, message_key)
+      VALUES (?, ?)
     `);
-    this.deleteExpiredTrustedInbound = this.database.prepare(`
-      DELETE FROM trusted_inbound_messages WHERE expires_at < ?
+    this.claimTrustedInboundMessage = this.database.prepare(`
+      UPDATE trusted_inbound_queue
+      SET claimed_at = ?, payload_json = '{}'
+      WHERE message_key = ? AND claimed_at IS NULL
+    `);
+    this.deleteExpiredTrustedInboundLookups = this.database.prepare(`
+      DELETE FROM trusted_inbound_queue_lookups
+      WHERE message_key IN (
+        SELECT message_key FROM trusted_inbound_queue
+        WHERE claimed_at IS NULL AND expires_at < ?
+      )
+    `);
+    this.deleteExpiredTrustedInboundMessages = this.database.prepare(`
+      DELETE FROM trusted_inbound_queue
+      WHERE claimed_at IS NULL AND expires_at < ?
     `);
   }
 
@@ -113,25 +132,64 @@ export class SqliteReceiptStore {
     this.#update(key, 'unknown', { ...payload, status: 'unknown' });
   }
 
-  putTrustedInbound(lookupKeys, payload, expiresAt) {
+  enqueueTrustedInbound(lookupKeys, messageKey, payload, expiresAt) {
     const keys = [...new Set(lookupKeys.filter((key) => typeof key === 'string' && key.length > 0))];
-    if (keys.length === 0) return;
-    const now = Date.now();
-    this.deleteExpiredTrustedInbound.run(now);
+    if (keys.length === 0 || typeof messageKey !== 'string' || messageKey.length === 0) return;
     const payloadJson = JSON.stringify(payload);
-    for (const key of keys) {
-      this.upsertTrustedInbound.run(key, payloadJson, expiresAt);
-    }
+    this.#withImmediateTransaction(() => {
+      this.#deleteExpiredTrustedInbound(Date.now());
+      const inserted = this.insertTrustedInbound.run(messageKey, payloadJson, expiresAt);
+      if (Number(inserted.changes) !== 1) return;
+      for (const key of keys) this.insertTrustedInboundLookup.run(key, messageKey);
+    });
   }
 
-  findTrustedInbound(lookupKeys, now = Date.now()) {
-    this.deleteExpiredTrustedInbound.run(now);
-    for (const key of lookupKeys) {
-      if (typeof key !== 'string' || key.length === 0) continue;
-      const existing = this.selectTrustedInbound.get(key, now);
-      if (existing) return JSON.parse(existing.payload_json);
+  claimTrustedInbound(lookupKeys, now = Date.now()) {
+    const keys = [...new Set(lookupKeys.filter((key) => typeof key === 'string' && key.length > 0))];
+    if (keys.length === 0) return undefined;
+    const placeholders = keys.map(() => '?').join(', ');
+    const selectOldest = this.database.prepare(`
+      SELECT queued.message_key, queued.payload_json
+      FROM trusted_inbound_queue AS queued
+      WHERE queued.claimed_at IS NULL
+        AND queued.expires_at >= ?
+        AND EXISTS (
+          SELECT 1 FROM trusted_inbound_queue_lookups AS lookup
+          WHERE lookup.message_key = queued.message_key
+            AND lookup.lookup_key IN (${placeholders})
+        )
+      ORDER BY queued.arrival_order ASC
+      LIMIT 1
+    `);
+    const claimed = this.#withImmediateTransaction(() => {
+      this.#deleteExpiredTrustedInbound(now);
+      const existing = selectOldest.get(now, ...keys);
+      if (!existing) return undefined;
+      const result = this.claimTrustedInboundMessage.run(now, existing.message_key);
+      return Number(result.changes) === 1 ? existing.payload_json : undefined;
+    });
+    return claimed === undefined ? undefined : JSON.parse(claimed);
+  }
+
+  #deleteExpiredTrustedInbound(now) {
+    this.deleteExpiredTrustedInboundLookups.run(now);
+    this.deleteExpiredTrustedInboundMessages.run(now);
+  }
+
+  #withImmediateTransaction(action) {
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const result = action();
+      this.database.exec('COMMIT');
+      return result;
+    } catch (error) {
+      try {
+        this.database.exec('ROLLBACK');
+      } catch {
+        // Preserve the original storage failure.
+      }
+      throw error;
     }
-    return undefined;
   }
 
   #update(key, status, payload) {

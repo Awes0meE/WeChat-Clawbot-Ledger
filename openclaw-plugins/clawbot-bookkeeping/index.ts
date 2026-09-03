@@ -39,6 +39,10 @@ function trustedInboundLookupKey(kind: 'session' | 'sender', value: string) {
   return createHash('sha256').update(`${kind}\u0000${value}`, 'utf8').digest('hex');
 }
 
+function trustedInboundMessageKey(channel: string, messageId: string) {
+  return createHash('sha256').update(`message\u0000${channel}\u0000${messageId}`, 'utf8').digest('hex');
+}
+
 function trustedInboundLookupKeys({
   sessionKey,
   channel,
@@ -152,7 +156,7 @@ export default definePluginEntry({
       const channel = context.channelId ?? 'unknown';
       const senderId = context.senderId ?? event.senderId ?? event.from;
       api.logger?.info?.(
-        `clawbot-bookkeeping: inbound metadata session=${Boolean(sessionKey)} message=${Boolean(messageId)} sender=${Boolean(senderId)} channel=${channel}`,
+        `clawbot-bookkeeping: inbound metadata session=${Boolean(sessionKey)} message=${Boolean(messageId)} sender=${Boolean(senderId)} channel=${Boolean(channel)}`,
       );
       const hasMessageTimestamp = Number.isFinite(event.timestamp) && Number(event.timestamp) > 0;
       const observedAt = Date.now();
@@ -165,8 +169,9 @@ export default definePluginEntry({
         timeSource: hasMessageTimestamp ? 'message' : 'received',
       } satisfies InboundMessage;
       const lookupKeys = trustedInboundLookupKeys({ sessionKey, channel, senderId });
-      receiptStore.putTrustedInbound(
+      receiptStore.enqueueTrustedInbound(
         lookupKeys,
+        trustedInboundMessageKey(channel, messageId),
         inbound,
         observedAt + TRUSTED_INBOUND_MAX_AGE_MS,
       );
@@ -260,10 +265,10 @@ export default definePluginEntry({
           })
           : [];
         const inbound = lookupKeys.length > 0
-          ? receiptStore.findTrustedInbound(lookupKeys) as InboundMessage | undefined
+          ? receiptStore.claimTrustedInbound(lookupKeys) as InboundMessage | undefined
           : undefined;
         api.logger?.info?.(
-          `clawbot-bookkeeping: tool metadata owner=${toolContext.senderIsOwner === true} session=${Boolean(sessionKey)} requester=${Boolean(toolContext.requesterSenderId)} channel=${toolContext.messageChannel ?? 'none'} durableMatch=${Boolean(inbound)} lookupKeys=${lookupKeys.length}`,
+          `clawbot-bookkeeping: tool metadata owner=${toolContext.senderIsOwner === true} session=${Boolean(sessionKey)} requester=${Boolean(toolContext.requesterSenderId)} channel=${Boolean(toolContext.messageChannel)} durableMatch=${Boolean(inbound)} lookupKeys=${lookupKeys.length}`,
         );
         return {
           name: 'record_expense',

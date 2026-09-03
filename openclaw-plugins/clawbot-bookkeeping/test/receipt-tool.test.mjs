@@ -261,6 +261,110 @@ test('binds a record tool to the trusted message present when the tool is materi
   }
 });
 
+test('binds two queued messages to successive record tool materializations in arrival order', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const addBodies = [];
+  const harness = createPluginHarness(tempDirectory, async (url, options) => {
+    if (url.endsWith('/accounts/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: [
+        { id: 'account-1', name: '日常支出', currency: 'SGD' },
+      ] }), { status: 200 });
+    }
+    if (url.endsWith('/transaction/categories/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: {
+        2: [{ id: 'primary-1', name: '食品酒水', parentId: '0', subCategories: [
+          { id: 'secondary-1', name: '早午晚餐', parentId: 'primary-1' },
+        ] }],
+      } }), { status: 200 });
+    }
+    if (url.endsWith('/transactions/add.json')) {
+      addBodies.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({ success: true, result: { id: `transaction-${addBodies.length}` } }), { status: 200 });
+    }
+    throw new Error('unexpected test request');
+  });
+
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭7.2，备注第一笔', messageId: 'wechat-message-fifo-1', timestamp: 1_788_425_460,
+    });
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '晚饭8.3，备注第二笔', messageId: 'wechat-message-fifo-2', timestamp: 1_788_425_520,
+    });
+    const firstTool = harness.recordExpenseFactory(trustedOwnerContext());
+    const secondTool = harness.recordExpenseFactory(trustedOwnerContext());
+
+    const first = await firstTool.execute('tool-call-fifo-1', {
+      amount: '7.2', primaryCategory: '食品酒水', subcategory: '早午晚餐',
+    });
+    const second = await secondTool.execute('tool-call-fifo-2', {
+      amount: '8.3', primaryCategory: '食品酒水', subcategory: '早午晚餐',
+    });
+
+    assert.equal(first.details.status, 'created');
+    assert.equal(second.details.status, 'created');
+    assert.deepEqual(addBodies.map(({ sourceAmount, comment, time }) => ({ sourceAmount, comment, time })), [
+      { sourceAmount: 720, comment: '第一笔', time: 1_788_425_460 },
+      { sourceAmount: 830, comment: '第二笔', time: 1_788_425_520 },
+    ]);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('advances a queued query even when its record tool is not initially called', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const addBodies = [];
+  const harness = createPluginHarness(tempDirectory, async (url, options) => {
+    if (url.endsWith('/accounts/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: [
+        { id: 'account-1', name: '日常支出', currency: 'SGD' },
+      ] }), { status: 200 });
+    }
+    if (url.endsWith('/transaction/categories/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: {
+        2: [{ id: 'primary-1', name: '食品酒水', parentId: '0', subCategories: [
+          { id: 'secondary-1', name: '早午晚餐', parentId: 'primary-1' },
+        ] }],
+      } }), { status: 200 });
+    }
+    if (url.endsWith('/transactions/add.json')) {
+      addBodies.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({ success: true, result: { id: 'transaction-after-query' } }), { status: 200 });
+    }
+    throw new Error('unexpected test request');
+  });
+
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '这个月我花了多少钱', messageId: 'wechat-message-query-first', timestamp: 1_788_425_460,
+    });
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭7.2', messageId: 'wechat-message-expense-second', timestamp: 1_788_425_520,
+    });
+    const unusedQueryTurnTool = harness.recordExpenseFactory(trustedOwnerContext());
+    const expenseTurnTool = harness.recordExpenseFactory(trustedOwnerContext());
+
+    const delayedQueryCall = await unusedQueryTurnTool.execute('tool-call-query-delayed', {
+      amount: '7.2', primaryCategory: '食品酒水', subcategory: '早午晚餐',
+    });
+    const expense = await expenseTurnTool.execute('tool-call-expense-after-query', {
+      amount: '7.2', primaryCategory: '食品酒水', subcategory: '早午晚餐',
+    });
+
+    assert.equal(delayedQueryCall.details.status, 'rejected');
+    assert.equal(expense.details.status, 'created');
+    assert.equal(addBodies.length, 1);
+    assert.equal(addBodies[0].time, 1_788_425_520);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
 test('keeps a materialized record tool closed when it had no trusted message snapshot', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');

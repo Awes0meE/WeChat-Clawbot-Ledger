@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { Worker } from 'node:worker_threads';
 
 import { EzBookkeepingApi, SqliteReceiptStore } from '../adapter.mjs';
 
@@ -40,6 +41,127 @@ test('SQLite receipt store retains an uncertain write outcome for deduplication'
     assert.deepEqual(store.claim('ilink:message-uncertain'), {
       status: 'unknown',
       clientSessionId: 'session-1',
+    });
+  } finally {
+    store?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('trusted inbound queue atomically claims FIFO messages across stores and ignores replay', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-inbound-queue-'));
+  const path = join(dir, 'receipts.sqlite');
+  let firstStore;
+  let secondStore;
+  try {
+    firstStore = new SqliteReceiptStore(path);
+    secondStore = new SqliteReceiptStore(path);
+    const sessionKey = '5d6f5c9f-session-hash';
+    const senderKey = '117a4742-sender-hash';
+    const firstMessageKey = '19dfd42b-first-message-hash';
+    const secondMessageKey = 'ecf7425e-second-message-hash';
+    const now = Date.now();
+    const firstPayload = { messageId: 'message-1', content: 'first' };
+    const secondPayload = { messageId: 'message-2', content: 'second' };
+
+    firstStore.enqueueTrustedInbound(
+      [sessionKey, senderKey],
+      firstMessageKey,
+      firstPayload,
+      now + 10_000,
+    );
+    firstStore.enqueueTrustedInbound(
+      [sessionKey, senderKey],
+      secondMessageKey,
+      secondPayload,
+      now + 10_000,
+    );
+
+    assert.deepEqual(firstStore.claimTrustedInbound([sessionKey], now), firstPayload);
+    firstStore.enqueueTrustedInbound(
+      [sessionKey, senderKey],
+      firstMessageKey,
+      { messageId: 'message-1', content: 'replayed and replaced' },
+      now + 20_000,
+    );
+    assert.deepEqual(secondStore.claimTrustedInbound([senderKey], now), secondPayload);
+    assert.equal(firstStore.claimTrustedInbound([sessionKey, senderKey], now), undefined);
+  } finally {
+    firstStore?.close();
+    secondStore?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('trusted inbound queue lets only one concurrent store claim a message', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-inbound-queue-'));
+  const path = join(dir, 'receipts.sqlite');
+  let store;
+  const workers = [];
+  try {
+    store = new SqliteReceiptStore(path);
+    const now = Date.now();
+    const payload = { messageId: 'message-concurrent', content: '午饭7.2' };
+    store.enqueueTrustedInbound(
+      ['concurrent-lookup-hash'],
+      'concurrent-message-hash',
+      payload,
+      now + 10_000,
+    );
+    store.close();
+    store = undefined;
+
+    const barrier = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+    for (let index = 0; index < 2; index += 1) {
+      workers.push(new Worker(new URL('./fixtures/claim-trusted-inbound-worker.mjs', import.meta.url), {
+        workerData: { path, lookupKey: 'concurrent-lookup-hash', now, barrier },
+      }));
+    }
+    await Promise.all(workers.map((worker) => new Promise((resolve, reject) => {
+      worker.once('message', (message) => message.ready ? resolve() : reject(new Error('worker was not ready')));
+      worker.once('error', reject);
+    })));
+    const results = workers.map((worker) => new Promise((resolve, reject) => {
+      worker.once('message', (message) => resolve(message.result));
+      worker.once('error', reject);
+    }));
+    Atomics.store(new Int32Array(barrier), 0, 1);
+    Atomics.notify(new Int32Array(barrier), 0, workers.length);
+
+    assert.deepEqual((await Promise.all(results)).filter(Boolean), [payload]);
+  } finally {
+    await Promise.all(workers.map((worker) => worker.terminate()));
+    store?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('trusted inbound queue discards expired entries without disturbing receipt history', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-inbound-queue-'));
+  const path = join(dir, 'receipts.sqlite');
+  let store;
+  try {
+    store = new SqliteReceiptStore(path);
+    const now = Date.now();
+    store.enqueueTrustedInbound(
+      ['lookup-hash'],
+      'expired-message-hash',
+      { messageId: 'expired' },
+      now - 1,
+    );
+    store.enqueueTrustedInbound(
+      ['lookup-hash'],
+      'valid-message-hash',
+      { messageId: 'valid' },
+      now + 10_000,
+    );
+    assert.equal(store.claim('receipt-history'), null);
+    store.complete('receipt-history', { status: 'created', transactionId: 'transaction-history' });
+
+    assert.deepEqual(store.claimTrustedInbound(['lookup-hash'], now), { messageId: 'valid' });
+    assert.deepEqual(store.claim('receipt-history'), {
+      status: 'created',
+      transactionId: 'transaction-history',
     });
   } finally {
     store?.close();
