@@ -1,11 +1,11 @@
-# Windows 运行与交接：微信本地账本助理
+# Windows 运行与交接：微信账本助理
 
 整理于 2026-09-04，时区 `Asia/Singapore`。这是 Windows 接手、恢复和验收的第一入口。仓库描述发布契约；任何“正在运行”结论都必须在当前主机重新探测。
 
 ## 不变边界
 
 - Windows 是唯一在线接收端，原 Mac 接收端已停止。不要让两台 iLink Gateway 同时轮询。
-- 微信消息经腾讯 iLink 进入 Windows OpenClaw；专用 `bookkeeper` 使用本地 Qwen，账本数据不得交给云端模型。
+- 微信消息经腾讯 iLink 进入 Windows OpenClaw；专用 `bookkeeper` 使用 OpenAI GPT-5.6 Sol，并强制走官方 Codex harness。该云端处理已获用户明确授权。
 - OpenClaw Gateway 固定绑定 `127.0.0.1:18789`，ezBookkeeping 固定绑定 `127.0.0.1:8180`。
 - 本轮不部署 Vercel，不开放公网端口，不实现家庭网页登录。
 - 不提交或转发密码、API token、MCP token、微信账户 ID、发送者 ID、二维码、会话正文、SQLite 文件或 OpenClaw 状态。
@@ -13,7 +13,7 @@
 ## 发布架构
 
 ```text
-WeChat -> OpenClaw owner-bound local Qwen
+WeChat -> OpenClaw owner-bound OpenAI GPT-5.6 Sol (official Codex harness)
   -> record_expense | prepare_expense | resolve_expense_confirmation
      -> trusted write/confirmation adapter -> ezBookkeeping HTTP API
   -> summarize_expenses -> deterministic read adapter -> ezBookkeeping HTTP API
@@ -26,11 +26,11 @@ WeChat -> OpenClaw owner-bound local Qwen
 | --- | --- |
 | 腾讯 iLink / stable-ID 插件 | 保留可信消息 ID、发送者、会话和消息时间 |
 | OpenClaw `bookkeeper` | 判断记账、汇总、历史查询或需要澄清；只发送最终回复 |
-| 本地 Qwen | 理解金额、分类、语义备注和查询意图，不负责精确求和或服务恢复 |
+| OpenAI GPT-5.6 Sol / Codex | 理解金额、分类、语义备注和查询意图，不负责精确求和或服务恢复 |
 | `clawbot-bookkeeping` | 可信消息关联、字段校验、去重、安全写入、确定性汇总、owner-only MCP resolver |
 | ezBookkeeping | Windows 本地 SQLite、账户/分类、交易 HTTP API、只读 MCP 查询 |
 
-当前兼容基线为 OpenClaw 2026.8.2、ezBookkeeping 1.6.1、Ollama `qwen3:8b`（8192-token context、thinking off）。配置账户固定为唯一可见 SGD 账户 `日常支出`，回执账本名固定为 `日常账本`。
+当前兼容基线为 OpenClaw 2026.8.2、官方 `@openclaw/codex` 2026.8.2、OpenAI `gpt-5.6-sol`（ChatGPT OAuth、thinking low）和 ezBookkeeping 1.6.1。配置账户固定为唯一可见 SGD 账户 `日常支出`，回执账本名固定为 `日常账本`。专用模型以 `agentRuntime.id: codex` fail closed，不配置 Qwen 或其他模型后备。
 
 专用代理的最终 allowlist 恰好是：
 
@@ -66,7 +66,7 @@ ezbookkeeping__query_transactions
 
 ## 写入路径
 
-本地 Qwen 负责判断语义。明确表达已发生消费且包含明确金额时调用一次 `record_expense`；候选信息完整但仍带疑问或不确定语气时调用一次 `prepare_expense`。每条消息最多写一笔；`6.5+2.5` 是一笔合计 9，不是两笔。
+Codex 负责判断语义。明确表达已发生消费且包含明确金额时调用一次 `record_expense`；候选信息完整但仍带疑问或不确定语气时调用一次 `prepare_expense`。每条消息最多写一笔；`6.5+2.5` 是一笔合计 9，不是两笔。
 
 1. OpenClaw 将所有者微信消息路由给专用代理。
 2. 插件按 session 或 `channel + sender` 找到十分钟内的可信原始消息。
@@ -81,7 +81,7 @@ ezbookkeeping__query_transactions
 
 用户随后单独回复“是”“对”“确认”等简短确认词时，`resolve_expense_confirmation` 原子取出提案并走同一套账户、分类、去重、API 写入和终态处理；单独回复“不是”“取消”等则只删除提案。确认写入始终使用原候选消息的时间。重复确认、过期确认和没有待确认提案的确认都不会写入。
 
-如果等待期间收到其他实质新消息，插件会先废弃旧提案，再让 Qwen 正常处理新请求；`不是，是8.2` 因此按新消息处理，而不是误用旧提案。确认词与工具参数不一致时不会消费提案。
+如果等待期间收到其他实质新消息，插件会先废弃旧提案，再让 Codex 正常处理新请求；`不是，是8.2` 因此按新消息处理，而不是误用旧提案。确认词与工具参数不一致时不会消费提案。
 
 原生 MCP 的 `add_transaction` 永不暴露给模型。它不具有本项目的可信消息关联和消息 ID 去重，超时重试可能创建重复交易。
 
@@ -256,6 +256,16 @@ Assert-NoStaticEzBookkeepingMcpFallback -ConfigPath $openclawConfigPath
 
 ## Windows 安装
 
+### 0. 安装并登录官方 Codex harness
+
+```powershell
+openclaw plugins install codex --accept-capabilities
+openclaw plugins enable codex --accept-capabilities
+openclaw models auth login --provider openai --agent bookkeeper
+```
+
+安装器会选择与当前 OpenClaw 兼容的最新 `@openclaw/codex` 版本。专用代理配置必须使用规范模型名 `openai/gpt-5.6-sol`，并在该模型条目上设置 `agentRuntime.id: codex`；不要添加 Qwen 或其他 fallback。OAuth 凭据只保存在本机 OpenClaw 凭据存储中，不进入仓库。
+
 默认安装目录是 `D:\Clawbot\ezbookkeeping`，实际配置文件位于嵌套目录 `D:\Clawbot\ezbookkeeping\conf\ezbookkeeping.ini`。
 
 ### 1. 安装可恢复计划任务
@@ -308,6 +318,8 @@ Invoke-RestMethod http://127.0.0.1:8180/healthz.json
 openclaw gateway status
 openclaw channels status --probe
 openclaw plugins info clawbot-bookkeeping
+openclaw plugins inspect codex
+openclaw models status --agent bookkeeper --json
 ```
 
 验收条件：
@@ -315,6 +327,7 @@ openclaw plugins info clawbot-bookkeeping
 - 健康端点返回 `success=true`；
 - Gateway 只监听 loopback，微信通道正常；
 - 插件加载成功；
+- Codex 插件状态为 loaded，`bookkeeper` 的 `openai/gpt-5.6-sol` 条目显式显示 `agentRuntime.id: codex`；
 - 自动化测试确认 manifest、requester-scoped resolver 和代理 allowlist 允许 `query_transactions`，且源码和测试明确排除 `add_transaction`；
 - 所有者从微信发起的历史查询实际返回账本记录，证明 `query_transactions` 在可信发送者上下文中可用。
 
@@ -348,7 +361,7 @@ npm.cmd run build
 node --test test\inbound-message-id.test.mjs
 ```
 
-当前基线应为账本插件 81 项测试全部通过，stable-ID 插件 3 项测试全部通过；不要只依赖数量，任何失败都必须处理。
+当前基线应为账本插件 193 项测试全部通过，stable-ID 插件 3 项测试全部通过；不要只依赖数量，任何失败都必须处理。
 
 仓库秘密扫描：
 

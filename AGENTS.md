@@ -6,7 +6,7 @@ This repository contains the reproducible source, tests, documentation, and sani
 
 ## Current architecture
 
-`WeChat iLink -> Windows OpenClaw -> dedicated local Qwen bookkeeper -> clawbot-bookkeeping -> ezBookkeeping`
+`WeChat iLink -> Windows OpenClaw -> OpenAI GPT-5.6 Sol via official Codex harness -> clawbot-bookkeeping -> ezBookkeeping`
 
 - Windows is the active always-on host; the former Mac receiver is stopped.
 - `openclaw-plugins/clawbot-bookkeeping` owns trusted-message correlation, category validation, deduplication, and local API writes.
@@ -19,7 +19,7 @@ This repository contains the reproducible source, tests, documentation, and sani
 - Keep ezBookkeeping bound to `127.0.0.1:8180` and OpenClaw Gateway bound to loopback.
 - A successful WeChat reply may only be produced after the bookkeeping API confirms the write.
 - One inbound message creates at most one expense; deduplicate by trusted channel plus message ID, not by message text.
-- Do not route bookkeeping through a cloud model unless the user explicitly changes the local-only policy.
+- The user explicitly changed the former local-only policy on 2026-09-04. Keep the dedicated bookkeeper pinned to the official Codex harness; do not add other cloud providers or fallbacks without fresh approval.
 
 ## Checks
 

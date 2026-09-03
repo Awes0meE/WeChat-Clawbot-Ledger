@@ -1,9 +1,9 @@
 # Clawbot
 
-Clawbot 是一个私有、本地优先的微信个人账本助理。当前发布只运行在 Windows：
+Clawbot 是一个私有、Windows 托管的微信个人账本助理。当前发布只运行在 Windows：
 
 ```text
-WeChat -> OpenClaw owner-bound local Qwen
+WeChat -> OpenClaw owner-bound OpenAI GPT-5.6 Sol (official Codex harness)
   -> record_expense | prepare_expense | resolve_expense_confirmation
      -> trusted write/confirmation adapter -> ezBookkeeping HTTP API
   -> summarize_expenses -> deterministic read adapter -> ezBookkeeping HTTP API
@@ -20,7 +20,7 @@ WeChat -> OpenClaw owner-bound local Qwen
 | --- | --- |
 | OpenClaw | 2026.8.2；Gateway 只绑定 `127.0.0.1:18789` |
 | 微信入口 | 腾讯 iLink；只路由已绑定的所有者账号到专用 `bookkeeper` |
-| 本地模型 | Ollama `qwen3:8b`；8192-token context；thinking off |
+| 助理模型 | OpenAI `gpt-5.6-sol`；官方 `@openclaw/codex` 2026.8.2 harness；ChatGPT OAuth；thinking low |
 | 账本 | ezBookkeeping 1.6.1；只绑定 `127.0.0.1:8180` |
 | 账户与币种 | 唯一可见 SGD 账户 `日常支出`；回执显示 `日常账本` |
 | 分类 | 运行时以 `openclaw-plugins/clawbot-bookkeeping/categories.mjs` 的不可变 `CATEGORY_DEFINITIONS` 为权威契约，固定为 11 个一级、45 个二级分类 |
@@ -30,12 +30,12 @@ WeChat -> OpenClaw owner-bound local Qwen
 
 ### 写入支出
 
-本地模型理解金额、正式分类和语义备注；程序负责可信微信消息关联、字段校验、写入和去重。一条入站消息最多新增一笔支出，去重键为可信 `channel + messageId`，而不是消息正文。
+Codex 理解金额、正式分类和语义备注；程序负责可信微信消息关联、字段校验、写入和去重。一条入站消息最多新增一笔支出，去重键为可信 `channel + messageId`，而不是消息正文。
 
 - 默认 SGD、`Asia/Singapore`。
 - 微信时间戳被规范为 Unix 秒后提交给 ezBookkeeping；毫秒输入会先除以 1000。
 - 显式“备注”后的原文优先；否则模型只可提炼消息中明确出现的商家、商品或用途，不得补充事实。
-- 本地 Qwen 判断是否为本人已发生支出；插件不再用商户白名单或大量中文句式取代模型。插件仍硬性要求当前可信消息中只有一个相关金额、金额与工具参数一致，并拦截明显疑问的直接写入。
+- Codex 判断是否为本人已发生支出；插件不再用商户白名单或大量中文句式取代模型。插件仍硬性要求当前可信消息中只有一个相关金额、金额与工具参数一致，并拦截明显疑问的直接写入。
 - `午饭7.2吗` 这类信息先由 `prepare_expense` 保存十分钟待确认提案并返回完整表单，绝不访问账本。用户单独回复“是”才由 `resolve_expense_confirmation` 使用原消息的金额、分类、备注和时间入账；回复“不是”则取消。
 - 每个所有者会话最多一张待确认单。新的实质消息会替换旧上下文并使旧确认单失效；重复确认不会产生第二笔。状态保存在本地 SQLite，Gateway 重启或上下文压缩不会丢失。
 - 写入成功后返回固定六行回执；例如：
@@ -81,7 +81,7 @@ HTTP API token 与原生 MCP token 是两份不同的本机秘密：前者供定
 | `openclaw-plugins/clawbot-bookkeeping/` | 可信写入、确定性汇总、owner-only MCP resolver 及测试 |
 | `openclaw-plugins/clawbot-bookkeeping/categories.mjs` | 运行时权威分类契约 `CATEGORY_DEFINITIONS` |
 | `openclaw-plugins/openclaw-weixin-stable-id/` | 保留腾讯消息 ID 和发送者元数据的本地微信插件变体 |
-| `openclaw-workspace/AGENTS.md` | 专用本地记账代理的运行提示 |
+| `openclaw-workspace/AGENTS.md` | 专用 Codex 记账代理的运行提示 |
 | `config/expense-categories.json` | 脱敏的 11/45 分类导入与部署快照，不是运行时真源 |
 | `config/*.example.json` | 不含真实身份和凭据的 OpenClaw 配置模板 |
 | `scripts/install-ezbookkeeping-task.ps1` | 安装使用固定 Windows PowerShell 5.1 隐藏启动器的登录任务 |
@@ -89,6 +89,16 @@ HTTP API token 与原生 MCP token 是两份不同的本机秘密：前者供定
 | `WINDOWS-HANDOFF.md` | 详细部署、验证、恢复和交接说明 |
 
 ## 本机安装与验证
+
+先安装与当前 OpenClaw 版本兼容的官方 Codex harness，并为专用代理完成 OpenAI 登录：
+
+```powershell
+openclaw plugins install codex --accept-capabilities
+openclaw plugins enable codex --accept-capabilities
+openclaw models auth login --provider openai --agent bookkeeper
+```
+
+`config/weixin-bookkeeper-agent.example.json` 将 `openai/gpt-5.6-sol` 显式绑定到 `agentRuntime.id: codex`。这是 fail-closed 配置：Codex harness 不可用时该轮失败，不自动退回本地 Qwen 或其他模型。
 
 两个安装脚本都支持 `-WhatIf`。先预演，再实际执行；MCP 配置脚本只在实际执行时交互读取密码。
 
@@ -115,6 +125,8 @@ node --test test\inbound-message-id.test.mjs
 openclaw gateway status
 openclaw channels status --probe
 openclaw plugins info clawbot-bookkeeping
+openclaw plugins inspect codex
+openclaw models status --agent bookkeeper --json
 ```
 
 动态 MCP 由插件 manifest 和 requester-scoped resolver 声明，不应为了 CLI 诊断另加顶层 `mcp.servers` 静态连接。任何本机配置或部署变更前，必须执行 `WINDOWS-HANDOFF.md` 中只检查属性名的只读断言；若顶层 `mcp.servers` 下存在 `ezbookkeeping`，立即停止部署，另行审核后再移除，不能由部署步骤自动删除。该断言不显示配置对象、header 或值。它与账本插件自动化测试（manifest、resolver、allowlist 允许 `query_transactions`，源码和测试明确排除 `add_transaction`）及所有者微信历史查询共同闭合“无静态后备连接”的证据链；stable-ID 插件另有独立测试。
@@ -123,6 +135,6 @@ openclaw plugins info clawbot-bookkeeping
 
 ## 当前不做的事
 
-本轮不部署 Vercel、不开放公网端口、不实现家庭网页登录，也不把账本内容交给云端模型。未来的家庭网页入口必须另行设计同步、登录、授权、备份和审计边界，不能直接暴露 Windows 本地账本。
+本轮不部署 Vercel、不开放公网端口、不实现家庭网页登录。经用户明确授权，账本请求与必要查询结果会发送到当前 ChatGPT OAuth 下的 Codex 会话；本机 token、微信身份、消息 ID、SQLite 和 OpenClaw 状态仍不得上传。未来的家庭网页入口必须另行设计同步、登录、授权、备份和审计边界，不能直接暴露 Windows 本地账本。
 
 详见 [WINDOWS-HANDOFF.md](WINDOWS-HANDOFF.md)。
