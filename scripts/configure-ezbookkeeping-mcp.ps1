@@ -52,17 +52,55 @@ function Get-UpdatedMcpConfiguration {
     return $updated
 }
 
-function Get-BackupPath {
-    param([Parameter(Mandatory = $true)][string]$Path)
+if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) {
+    throw 'The ezBookkeeping configuration file was not found.'
+}
+
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$configText = [IO.File]::ReadAllText($ConfigPath, $utf8NoBom)
+$updatedConfig = Get-UpdatedMcpConfiguration -Text $configText
+
+if (-not $PSCmdlet.ShouldProcess($ConfigPath, 'Enable MCP, restart ezBookkeeping, and create a protected token')) {
+    return
+}
+
+function Copy-ConfigToUniqueBackup {
+    param([Parameter(Mandatory = $true)][string]$ConfigPath)
 
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $candidate = "$Path.before-mcp-$stamp"
-    $suffix = 0
-    while (Test-Path -LiteralPath $candidate) {
-        $suffix++
-        $candidate = "$Path.before-mcp-$stamp-$suffix"
+    for ($suffix = 0; $suffix -lt 100; $suffix++) {
+        $backupPath = if ($suffix -eq 0) { "$ConfigPath.before-mcp-$stamp" } else { "$ConfigPath.before-mcp-$stamp-$suffix" }
+        try {
+            [IO.File]::Copy($ConfigPath, $backupPath, $false)
+            return $backupPath
+        } catch [System.IO.IOException] {
+            if ([IO.File]::Exists($backupPath)) {
+                continue
+            }
+            throw
+        }
     }
-    return $candidate
+    throw 'Could not create a unique ezBookkeeping configuration backup.'
+}
+
+function Get-NormalizedPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $value = [Environment]::ExpandEnvironmentVariables($Path.Trim())
+    if ($value.Length -ge 2 -and $value[0] -eq [char]34 -and $value[$value.Length - 1] -eq [char]34) {
+        $value = $value.Substring(1, $value.Length - 2)
+    }
+    $fullPath = [IO.Path]::GetFullPath($value)
+    if ($fullPath.Length -gt 3) {
+        $fullPath = $fullPath.TrimEnd([char[]]@('\', '/'))
+    }
+    return $fullPath
+}
+
+function Get-NormalizedArguments {
+    param([AllowNull()][string]$Arguments)
+
+    return [regex]::Replace(([string]$Arguments).Trim(), '\s+', ' ')
 }
 
 function Set-OwnerOnlyTokenFile {
@@ -90,18 +128,6 @@ function Set-OwnerOnlyTokenFile {
     [IO.File]::WriteAllText($Path, $Token, $Encoding)
 }
 
-if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) {
-    throw 'The ezBookkeeping configuration file was not found.'
-}
-
-$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-$configText = [IO.File]::ReadAllText($ConfigPath, $utf8NoBom)
-$updatedConfig = Get-UpdatedMcpConfiguration -Text $configText
-
-if (-not $PSCmdlet.ShouldProcess($ConfigPath, 'Enable MCP, restart ezBookkeeping, and create a protected token')) {
-    return
-}
-
 $passwordPointer = [IntPtr]::Zero
 $securePassword = $null
 $plainPassword = $null
@@ -111,17 +137,31 @@ $headers = $null
 $body = $null
 
 try {
-    $backupPath = Get-BackupPath -Path $ConfigPath
-    Copy-Item -LiteralPath $ConfigPath -Destination $backupPath -ErrorAction Stop
+    $backupPath = Copy-ConfigToUniqueBackup -ConfigPath $ConfigPath
     [IO.File]::WriteAllText($ConfigPath, $updatedConfig, $utf8NoBom)
 
-    $installDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($ConfigPath))
-    $expectedExecutable = [IO.Path]::GetFullPath((Join-Path $installDirectory 'ezbookkeeping.exe'))
+    $installDirectory = Get-NormalizedPath -Path (Split-Path -Parent ([IO.Path]::GetFullPath($ConfigPath)))
+    $expectedExecutable = Get-NormalizedPath -Path (Join-Path $installDirectory 'ezbookkeeping.exe')
     if (-not (Test-Path -LiteralPath $expectedExecutable -PathType Leaf)) {
         throw 'The expected ezBookkeeping executable was not found.'
     }
-    Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null
-    Stop-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+    $tasks = @(Get-ScheduledTask -ErrorAction Stop | Where-Object {
+        $_.TaskName -eq $TaskName -and $_.TaskPath -eq '\'
+    })
+    if ($tasks.Count -ne 1) {
+        throw 'The expected root ezBookkeeping scheduled task was not found exactly once.'
+    }
+    $task = $tasks[0]
+    $taskActions = @($task.Actions)
+    $matchingActions = @($taskActions | Where-Object {
+        ([string]::Equals((Get-NormalizedPath -Path ([string]$_.Execute)), $expectedExecutable, [StringComparison]::OrdinalIgnoreCase)) -and
+        ((Get-NormalizedArguments -Arguments ([string]$_.Arguments)) -ceq 'server run') -and
+        ([string]::Equals((Get-NormalizedPath -Path ([string]$_.WorkingDirectory)), $installDirectory, [StringComparison]::OrdinalIgnoreCase))
+    })
+    if ($taskActions.Count -ne 1 -or $matchingActions.Count -ne 1) {
+        throw 'The ezBookkeeping scheduled task action does not match the expected local service command.'
+    }
+    Stop-ScheduledTask -InputObject $task -ErrorAction Stop
 
     $ownedProcesses = Get-CimInstance Win32_Process -Filter "Name='ezbookkeeping.exe'" -ErrorAction Stop | Where-Object {
         $_.ExecutablePath -and ([string]::Equals([IO.Path]::GetFullPath($_.ExecutablePath), $expectedExecutable, [StringComparison]::OrdinalIgnoreCase))
@@ -129,7 +169,7 @@ try {
     foreach ($process in $ownedProcesses) {
         Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
     }
-    Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+    Start-ScheduledTask -InputObject $task -ErrorAction Stop
 
     $healthy = $false
     $healthDeadline = (Get-Date).AddSeconds(15)
@@ -161,10 +201,10 @@ try {
     $headers = @{ Authorization = "Bearer $apiToken" }
     $body = @{ expiresInSeconds = $ExpiresInSeconds; password = $plainPassword } | ConvertTo-Json -Compress
     $response = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8180/api/v1/tokens/generate/mcp.json' -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $body -ErrorAction Stop
-    if ($response.success -ne $true -or [string]::IsNullOrWhiteSpace([string]$response.result.token)) {
+    $mcpToken = ([string]$response.result.token).Trim()
+    if ($response.success -ne $true -or [string]::IsNullOrWhiteSpace($mcpToken) -or $mcpToken -match '[\r\n]') {
         throw 'ezBookkeeping did not return an MCP token.'
     }
-    $mcpToken = [string]$response.result.token
     Set-OwnerOnlyTokenFile -Path $McpTokenPath -Token $mcpToken -Encoding $utf8NoBom
     Write-Host 'MCP enabled and token stored securely.'
 } catch {
