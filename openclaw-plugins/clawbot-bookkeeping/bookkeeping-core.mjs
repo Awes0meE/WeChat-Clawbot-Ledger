@@ -146,7 +146,9 @@ export function extractVerbatimComment(content) {
   const delimiterIndex = text.indexOf('备注');
   if (delimiterIndex < 0) return '';
 
-  return validateComment(text.slice(delimiterIndex + '备注'.length));
+  const explicitComment = text.slice(delimiterIndex + '备注'.length)
+    .replace(/^\s*[:：]\s*/u, '');
+  return validateComment(explicitComment);
 }
 
 export function validateComment(value) {
@@ -189,7 +191,7 @@ export function formatExpenseReceipt({
     `分类：${primaryCategory} - ${subcategory}`,
     `备注：${displayComment || '无'}`,
     `时间：${formattedTime}`,
-  ].join('\n');
+  ].join('\n\n');
 }
 
 export function formatExpenseConfirmation({
@@ -207,12 +209,12 @@ export function formatExpenseConfirmation({
     subcategory,
     comment,
     time,
-  }).split('\n').slice(1);
+  }).split('\n\n').slice(1);
   return [
     '你是想记下这笔吗？🤔',
     ...receiptLines,
     '回复“是”确认，回复“不是”取消。',
-  ].join('\n');
+  ].join('\n\n');
 }
 
 export function normalizeMessageTimestamp(timestamp) {

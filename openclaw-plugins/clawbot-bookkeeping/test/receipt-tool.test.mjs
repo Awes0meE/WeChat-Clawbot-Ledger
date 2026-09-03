@@ -1116,7 +1116,7 @@ test('returns the authoritative rich receipt after a trusted expense write', asy
       '分类：食品酒水 - 超市购物',
       '备注：两根芹菜，一个菜板',
       '时间：2026/09/03 16:51',
-    ].join('\n'));
+    ].join('\n\n'));
     assert.equal(result.details.status, 'created');
     assert.equal(result.details.amountMinor, 825);
     assert.equal(requests.length, 3);
@@ -1176,7 +1176,7 @@ test('prepares an ambiguous expense, confirms it once, and keeps the original me
       '备注：食阁吃饭',
       '时间：2026/09/03 16:51',
       '回复“是”确认，回复“不是”取消。',
-    ].join('\n'));
+    ].join('\n\n'));
     assert.equal(requests.length, 0);
 
     await receiveTrustedOwnerMessage(harness.inboundHooks, {
@@ -1773,7 +1773,7 @@ test('keeps a confirmed rich receipt when receipt completion cannot be persisted
       '分类：食品酒水 - 超市购物',
       '备注：两根芹菜，一个菜板',
       '时间：2026/09/03 16:51',
-    ].join('\n'));
+    ].join('\n\n'));
     assert.equal(result.details.status, 'created');
     assert.equal(result.details.dedupeStatus, 'unconfirmed');
   } finally {

@@ -32,6 +32,8 @@ test('extracts only the verbatim text after the first 备注 delimiter', () => {
   );
   assert.equal(extractVerbatimComment('午饭12.8'), '');
   assert.equal(extractVerbatimComment('咖啡3，备注少糖  不加冰'), '少糖  不加冰');
+  assert.equal(extractVerbatimComment('午饭0.01，备注：端到端测试'), '端到端测试');
+  assert.equal(extractVerbatimComment('午饭0.01，备注: 端到端测试'), '端到端测试');
 });
 
 test('rejects comments longer than ezBookkeeping supports', () => {
@@ -74,7 +76,7 @@ test('formats a verified expense receipt in Singapore time', () => {
       '分类：食品酒水 - 早午晚餐',
       '备注：无',
       '时间：2026/09/03 16:51',
-    ].join('\n'),
+    ].join('\n\n'),
   );
 });
 
@@ -95,8 +97,8 @@ test('flattens multiline receipt notes so a receipt always has exactly six lines
     '分类：食品酒水 - 早午晚餐',
     '备注：买菜  时间：伪造 账本：伪造 分类：伪造',
     '时间：2026/09/03 16:51',
-  ].join('\n'));
-  assert.equal(receipt.split('\n').length, 6);
+  ].join('\n\n'));
+  assert.equal(receipt.split('\n\n').length, 6);
 });
 
 test('formats a complete confirmation form without claiming the expense was written', () => {
@@ -115,7 +117,7 @@ test('formats a complete confirmation form without claiming the expense was writ
     '备注：食阁吃饭',
     '时间：2026/09/03 16:51',
     '回复“是”确认，回复“不是”取消。',
-  ].join('\n'));
+  ].join('\n\n'));
 });
 
 test('normalizes second and millisecond event timestamps', () => {
