@@ -57,8 +57,12 @@ test('aggregates integer amounts by primary category and selects the largest thr
   assert.deepEqual(summary.largest.map((item) => item.id), ['3', '2', '1']);
 });
 
-test('rejects negative or fractional transaction amounts', () => {
+test('rejects zero, negative, or fractional transaction amounts', () => {
   const categories = new Map([['meal', '食品酒水']]);
+  assert.throws(
+    () => aggregateExpenseSummary([{ sourceAmount: 0, categoryId: 'meal' }], categories),
+    /transaction amount is invalid/u,
+  );
   assert.throws(
     () => aggregateExpenseSummary([{ sourceAmount: -1, categoryId: 'meal' }], categories),
     /transaction amount is invalid/u,
@@ -67,6 +71,19 @@ test('rejects negative or fractional transaction amounts', () => {
     () => aggregateExpenseSummary([{ sourceAmount: 1.5, categoryId: 'meal' }], categories),
     /transaction amount is invalid/u,
   );
+});
+
+test('keeps transactions unchanged and breaks equal largest amounts by later time', () => {
+  const transactions = [
+    { id: 'older', time: 1_788_100_000, sourceAmount: 500, categoryId: 'meal' },
+    { id: 'newer', time: 1_788_200_000, sourceAmount: 500, categoryId: 'meal' },
+  ];
+  const originalTransactions = structuredClone(transactions);
+
+  const summary = aggregateExpenseSummary(transactions, new Map([['meal', '食品酒水']]));
+
+  assert.deepEqual(summary.largest.map((item) => item.id), ['newer', 'older']);
+  assert.deepEqual(transactions, originalTransactions);
 });
 
 test('rejects transactions whose accumulated summary total is unsafe', () => {
@@ -99,4 +116,15 @@ test('formats a category breakdown and the three largest expenses', () => {
   assert.equal(formatExpenseSummary('这个月', {
     totalAmountMinor: 0, count: 0, categories: [], largest: [],
   }), '这个月还没有支出记录～');
+});
+
+test('formats large safe integer cent amounts exactly', () => {
+  const formatted = formatExpenseSummary('这个月', {
+    totalAmountMinor: 9_007_199_254_740_990,
+    count: 1,
+    categories: [{ name: '食品酒水', amountMinor: 9_007_199_254_740_990 }],
+    largest: [],
+  });
+
+  assert.equal(formatted.split('\n')[0], '这个月一共花了 90071992547409.90 SGD，共 1 笔 📊');
 });

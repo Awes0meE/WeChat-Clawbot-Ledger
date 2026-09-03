@@ -82,7 +82,10 @@ export function resolveExpenseRange(input, nowMs = Date.now()) {
 }
 
 function formatMinor(value) {
-  return `${(value / 100).toFixed(2)} SGD`;
+  const amountMinor = BigInt(value);
+  const whole = amountMinor / 100n;
+  const fractional = (amountMinor % 100n).toString().padStart(2, '0');
+  return `${whole}.${fractional} SGD`;
 }
 
 function formatMonthDay(unixSeconds) {
@@ -96,7 +99,7 @@ export function aggregateExpenseSummary(transactions, primaryByCategoryId) {
 
   for (const transaction of transactions) {
     const amountMinor = Number(transaction.sourceAmount);
-    if (!Number.isSafeInteger(amountMinor) || amountMinor < 0) {
+    if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) {
       throw new Error('transaction amount is invalid');
     }
     const primary = primaryByCategoryId.get(String(transaction.categoryId)) ?? '其他杂项';
