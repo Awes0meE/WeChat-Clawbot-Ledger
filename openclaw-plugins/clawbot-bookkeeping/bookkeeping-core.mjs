@@ -3,10 +3,15 @@ import { createHash } from 'node:crypto';
 const MAX_EZBOOKKEEPING_AMOUNT_MINOR = 9_999_999_999_999;
 const MAX_COMMENT_CHARACTERS = 255;
 const AMOUNT_EXPRESSION = /\d+(?:\.\d{1,2})?(?:\s*[+＋]\s*\d+(?:\.\d{1,2})?)*/gu;
-const QUERY_CONTEXT = /(?:多少|几笔|什么|哪些|哪笔|查(?:询|一下|下|看|账)?|统计|汇总|合计|总计|历史|最近|买过|有没有|是否|吗|嘛|呢|[?？])/u;
-const NON_EXPENSE_CONTEXT = /(?:不要记|不用记|别记|不记账|不要入账|别入账|取消记账|取消入账|撤销|比如|例如|举例|假如|假设|如果|要是|倘若|预计|估计|预算|计划|打算|可能|还没付(?:款)?|尚未付(?:款)?|未付(?:款)?|没付(?:款)?|待付(?:款)?|朋友.{0,4}(?:转|给|付|还)(?:给)?我|别人.{0,4}(?:转|给|付|还)(?:给)?我|收到|收款|收入|工资|奖金)/u;
-const INSTRUCTION_INJECTION = /(?:record_expense|summarize_expenses|query_transactions|(?:忽略|无视|跳过).{0,12}(?:之前|前面|以上|规则|指令)|(?:调用|执行|使用).{0,8}(?:工具|函数))/iu;
+const QUERY_CONTEXT = /(?:多少|几笔|什么|哪些|哪笔|查询|查一下|查下|查看|查账|统计|汇总|合计|总计|历史|最近|买过|有没有|是否)/u;
+const BARE_QUERY_CUE = /(?:^|帮我|请|想|要|麻烦)查(?=本|这|上|最|账|支出|消费|交易|记录|历史)/u;
+const EXPLICIT_WRITE_CUE = /(?:(?:帮我|给我|请|麻烦|能帮我)(?:记(?:账|一笔)?|记录(?:一下)?|入账)|记账|记一笔|入账)/u;
+const NON_EXPENSE_CONTEXT = /(?:不要记|不用记|别记|不记账|不要入账|别入账|取消记账|取消入账|撤销|比如|例如|举例|假如|假设|如果|要是|倘若|预计|估计|预算|计划|打算|可能|明天|后天|下周|下个月|以后再|待会|一会儿|还没付(?:款)?|尚未付(?:款)?|未付(?:款)?|没付(?:款)?|待付(?:款)?|朋友.{0,4}(?:转|给|付|还)(?:给)?我|别人.{0,4}(?:转|给|付|还)(?:给)?我|收到|收款|收入|工资|奖金|退款|退回|返款|别人发我的消息|(?:这|那)是一段引用|引用[：:]|转述|转发的?消息|(?:朋友|同事|家人|他|她|别人).{0,4}(?:说|发来|发给我))/u;
+const INSTRUCTION_INJECTION = /(?:record_expense|summarize_expenses|query_transactions|绕过.{0,8}(?:安全|限制|规则)|(?:忽略|无视|跳过).{0,12}(?:之前|前面|以上|规则|指令)|(?:调用|执行|使用).{0,8}(?:工具|函数))/iu;
 const QUANTITY_OR_TIME_UNIT = /^(?:个|位|人|根|件|张|瓶|杯|盒|包|份|次|天|小时|分钟|秒|公里|千米|米|厘米|毫米|km|kg|公斤|斤|克|年|月|日|号|点)/iu;
+const ADMIN_AMOUNT_CUE = /(?:订单(?:号)?|余额|原价|标价|用券|券|优惠(?:后)?|折扣|编号|单号)\s*$/u;
+const ADMIN_AMOUNT_CLAUSE = /^\s*(?:订单(?:号)?|余额|原价|标价|用券|优惠|折扣|编号|单号)/u;
+const ACTUAL_PAID_CUE = /(?:实付|实际支付|实际付款|已付|支付|付款|花了)\s*$/u;
 
 export class ExpenseRecordingError extends Error {
   constructor(outcome, { dedupeStatus } = {}) {
@@ -54,25 +59,48 @@ function hasExpenseContextText(clause) {
   return /\p{L}/u.test(residue);
 }
 
-function isAuthorizedExpenseMessage(content, requestedAmountMinor) {
-  const text = String(content ?? '').trim();
-  if (!text || INSTRUCTION_INJECTION.test(text)) return false;
+function isQueryClause(clause) {
+  if (QUERY_CONTEXT.test(clause) || BARE_QUERY_CUE.test(clause)) return true;
+  return /[吗嘛呢?？]/u.test(clause) && !EXPLICIT_WRITE_CUE.test(clause);
+}
 
-  let blockedByEarlierClause = false;
-  for (const clause of text.split(/[，,。；;！!\r\n]+/u)) {
-    if (!clause) continue;
-    const disallowedContext = QUERY_CONTEXT.test(clause) || NON_EXPENSE_CONTEXT.test(clause);
-    const matchingAmount = [...clause.matchAll(AMOUNT_EXPRESSION)].some((match) => {
-      const suffix = clause.slice((match.index ?? 0) + match[0].length).trimStart();
-      return !QUANTITY_OR_TIME_UNIT.test(suffix)
-        && expressionAmountToMinorUnits(match[0]) === requestedAmountMinor;
+function eligibleAmountCandidates(clause, clauseIndex) {
+  if (ADMIN_AMOUNT_CLAUSE.test(clause)) return [];
+  const candidates = [];
+  for (const match of clause.matchAll(AMOUNT_EXPRESSION)) {
+    const matchIndex = match.index ?? 0;
+    const prefix = clause.slice(0, matchIndex);
+    const suffix = clause.slice(matchIndex + match[0].length).trimStart();
+    const amountMinor = expressionAmountToMinorUnits(match[0]);
+    if (amountMinor === undefined
+      || QUANTITY_OR_TIME_UNIT.test(suffix)
+      || ADMIN_AMOUNT_CUE.test(prefix)) continue;
+    candidates.push({
+      amountMinor,
+      clause,
+      clauseIndex,
+      explicitPaid: ACTUAL_PAID_CUE.test(prefix),
     });
-    if (matchingAmount) {
-      return !blockedByEarlierClause && !disallowedContext && hasExpenseContextText(clause);
-    }
-    if (disallowedContext) blockedByEarlierClause = true;
   }
-  return false;
+  return candidates;
+}
+
+function isAuthorizedExpenseMessage(content, requestedAmountMinor) {
+  const originalText = String(content ?? '');
+  const commentIndex = originalText.indexOf('备注');
+  const text = (commentIndex < 0 ? originalText : originalText.slice(0, commentIndex)).trim();
+  if (!text || INSTRUCTION_INJECTION.test(text)) return false;
+  if (NON_EXPENSE_CONTEXT.test(text)) return false;
+
+  const clauses = text.split(/[，,。；;！!\r\n]+/u).filter(Boolean);
+  const candidates = clauses.flatMap((clause, clauseIndex) => eligibleAmountCandidates(clause, clauseIndex));
+  const explicitPaid = candidates.filter((candidate) => candidate.explicitPaid);
+  const eligible = explicitPaid.length > 0 ? explicitPaid : candidates;
+  if (eligible.length !== 1) return false;
+
+  const candidate = eligible[0];
+  if (candidate.amountMinor !== requestedAmountMinor || !hasExpenseContextText(candidate.clause)) return false;
+  return !clauses.slice(0, candidate.clauseIndex + 1).some(isQueryClause);
 }
 
 function normalizeTransactionId(value) {
