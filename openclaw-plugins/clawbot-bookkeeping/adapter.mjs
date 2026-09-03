@@ -9,6 +9,10 @@ const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const SQLITE_BUSY_RETRY_MS = 10;
 const SQLITE_BUSY_WAIT = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 
+export function isSqliteBusyError(error) {
+  return Number.isInteger(error?.errcode) && (error.errcode & 0xff) === 5;
+}
+
 function enableWalWithBusyRetry(database) {
   const deadline = Date.now() + SQLITE_BUSY_TIMEOUT_MS;
   while (true) {
@@ -17,7 +21,7 @@ function enableWalWithBusyRetry(database) {
       return;
     } catch (error) {
       const remaining = deadline - Date.now();
-      if (error?.errcode !== 5 || remaining <= 0) throw error;
+      if (!isSqliteBusyError(error) || remaining <= 0) throw error;
       Atomics.wait(
         SQLITE_BUSY_WAIT,
         0,

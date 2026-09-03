@@ -6,7 +6,20 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { Worker } from 'node:worker_threads';
 
-import { EzBookkeepingApi, SqliteReceiptStore } from '../adapter.mjs';
+import {
+  EzBookkeepingApi,
+  isSqliteBusyError,
+  SqliteReceiptStore,
+} from '../adapter.mjs';
+
+test('SQLite busy classifier accepts primary and extended BUSY codes only', () => {
+  assert.equal(isSqliteBusyError({ errcode: 5 }), true);
+  assert.equal(isSqliteBusyError({ errcode: 261 }), true);
+  for (const errcode of [6, 262, '5', 5.1, undefined, null]) {
+    assert.equal(isSqliteBusyError({ errcode }), false);
+  }
+  assert.equal(isSqliteBusyError(undefined), false);
+});
 
 test('SQLite receipt claims are atomic and durable', () => {
   const dir = mkdtempSync(join(tmpdir(), 'clawbot-receipts-'));
