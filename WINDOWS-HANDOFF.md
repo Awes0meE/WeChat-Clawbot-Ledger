@@ -229,7 +229,6 @@ Invoke-RestMethod http://127.0.0.1:8180/healthz.json
 openclaw gateway status
 openclaw channels status --probe
 openclaw plugins info clawbot-bookkeeping
-openclaw mcp doctor ezbookkeeping --json
 ```
 
 验收条件：
@@ -237,11 +236,10 @@ openclaw mcp doctor ezbookkeeping --json
 - 健康端点返回 `success=true`；
 - Gateway 只监听 loopback，微信通道正常；
 - 插件加载成功；
-- `mcp doctor --json` 没有静态配置错误；
 - 自动化测试确认 manifest、requester-scoped resolver 和代理 allowlist 允许 `query_transactions`，且源码和测试明确排除 `add_transaction`；
 - 所有者从微信发起的历史查询实际返回账本记录，证明 `query_transactions` 在可信发送者上下文中可用。
 
-操作员 CLI 没有当前可信微信发送者上下文，因此 `openclaw mcp probe ezbookkeeping --json` 可能被 owner-only resolver 拒绝。它只能辅助诊断连接，不能单独证明或否定所有者会话的有效工具目录。`openclaw mcp tools` 是修改 include/exclude 过滤器的命令，不是只读列表命令，验收时不得调用。
+动态 MCP 由插件 manifest 和 requester-scoped resolver 声明，故意不配置顶层 `mcp.servers` 静态连接。第一版不使用 operator CLI 证明该动态连接；以插件加载结果、自动化策略测试和所有者微信历史查询组成完整证据链。
 
 如 ezBookkeeping 不健康，先用安装脚本修复可能漂移的任务动作，再启动经过精确筛选的根任务；不要由模型启动服务，也不要直接重启未经验证的同名任务：
 

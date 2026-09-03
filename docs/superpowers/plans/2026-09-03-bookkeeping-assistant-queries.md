@@ -1143,12 +1143,12 @@ WeChat -> OpenClaw owner-bound local Qwen
 Replace the old two-tool claim with the exact final allowlist. Add verification commands:
 
 ```powershell
-openclaw mcp doctor ezbookkeeping --json
 openclaw gateway status
 openclaw channels status --probe
+openclaw plugins info clawbot-bookkeeping
 ```
 
-State that `doctor --json` is only a static check. The operator CLI lacks trusted WeChat requester context, so `mcp probe ezbookkeeping --json` may be denied and cannot establish the owner-scoped effective catalog. Use automated manifest/resolver/allowlist tests to prove that source includes `query_transactions` and excludes `add_transaction`, then use an owner WeChat history query as the end-to-end acceptance.
+State that dynamic MCP is declared only through the plugin manifest and requester-scoped resolver; do not add a top-level `mcp.servers` connection for CLI diagnostics. Use plugin info plus automated manifest/resolver/allowlist tests to prove that source includes `query_transactions` and excludes `add_transaction`, then use an owner WeChat history query as the end-to-end acceptance.
 
 - [ ] **Step 3: Update the detailed handoff and deployment brief**
 
@@ -1289,7 +1289,7 @@ openclaw config get plugins.entries.clawbot-bookkeeping.config
 
 Expected: only the displayed non-secret paths, names, and allowlist change; private account and owner values are neither modified nor printed.
 
-- [ ] **Step 6: Restart and probe the complete local chain**
+- [ ] **Step 6: Restart and verify the complete local chain**
 
 Run:
 
@@ -1298,10 +1298,9 @@ openclaw gateway restart --safe
 openclaw gateway status
 openclaw channels status --probe
 openclaw plugins info clawbot-bookkeeping
-openclaw mcp doctor ezbookkeeping --json
 ```
 
-Expected: Gateway and WeChat are healthy; plugin is active; static MCP configuration has no doctor error. The automated manifest/resolver/allowlist tests establish that source includes `query_transactions` and excludes `add_transaction`; the owner WeChat history query in the next step proves requester-scoped connectivity. Do not call `openclaw mcp tools` for verification because it mutates include/exclude filters.
+Expected: Gateway and WeChat are healthy and the plugin is active. No top-level `mcp.servers` connection is added. The automated manifest/resolver/allowlist tests establish that source includes `query_transactions` and excludes `add_transaction`; the owner WeChat history query in the next step proves requester-scoped connectivity.
 
 - [ ] **Step 7: Perform real WeChat acceptance in order**
 

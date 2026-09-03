@@ -108,13 +108,12 @@ Set-Location ..\openclaw-weixin-stable-id
 npm.cmd run build
 node --test test\inbound-message-id.test.mjs
 
-openclaw mcp doctor ezbookkeeping --json
 openclaw gateway status
 openclaw channels status --probe
 openclaw plugins info clawbot-bookkeeping
 ```
 
-`mcp doctor --json` 只检查静态配置。操作员 CLI 没有当前可信微信发送者上下文，因此 `openclaw mcp probe ezbookkeeping --json` 可能被 owner-only resolver 拒绝，也不能证明所有者会话的有效工具目录。第一版的确定性证据是 81 项账本插件测试对 manifest、resolver 和代理 allowlist 的检查：允许 `query_transactions`，源码和测试明确排除 `add_transaction`；最终再由所有者从微信发起一条历史查询，证明 `query_transactions` 在真实可信上下文中可用。stable-ID 插件另有 3 项测试。
+动态 MCP 由插件 manifest 和 requester-scoped resolver 声明，不应为了 CLI 诊断另加顶层 `mcp.servers` 静态连接。第一版的确定性证据是 81 项账本插件测试对 manifest、resolver 和代理 allowlist 的检查：允许 `query_transactions`，源码和测试明确排除 `add_transaction`；最终再由所有者从微信发起一条历史查询，证明 `query_transactions` 在真实可信上下文中可用。stable-ID 插件另有 3 项测试。
 
 秘密扫描从仓库根目录执行时应排除嵌套 `.worktrees` 副本，但不得排除测试或示例目录；每一条命中都必须人工核对，任何无法证明是固定合成数据或占位符的结果都必须按真实泄露处理。详细命令见 `WINDOWS-HANDOFF.md`。
 

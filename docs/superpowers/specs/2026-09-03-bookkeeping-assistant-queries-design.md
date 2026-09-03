@@ -171,7 +171,7 @@ Windows 上的 ezBookkeeping 必须作为可恢复的后台任务运行：
 - 异常退出后重启；
 - 不受电池模式和默认执行时限终止；
 - 启动后验证 `127.0.0.1:8180/healthz.json`；
-- OpenClaw Gateway 启动与 MCP probe 只能在账本健康后判定成功。
+- OpenClaw Gateway 启动与所有者微信历史查询验收只能在账本健康后判定成功。
 
 模型不负责启动服务，也不能获得 shell 权限。服务恢复属于 Windows 部署层。
 
@@ -207,7 +207,7 @@ Windows 上的 ezBookkeeping 必须作为可恢复的后台任务运行：
 - 重发同一条消费消息
 - 暂停 ezBookkeeping 后分别执行查询和写入
 
-验收还包括 `openclaw mcp doctor --probe`、Gateway 状态、微信通道 probe、两个插件的完整测试和干净工作区检查。
+验收还包括 `clawbot-bookkeeping` 插件加载状态、Gateway 状态、微信通道 probe、两个插件的完整测试、所有者微信历史查询和干净工作区检查。动态 MCP 仅由插件 manifest 与 requester-scoped resolver 声明，不增加顶层 `mcp.servers` 静态连接。
 
 ## 11. 文档与部署
 
@@ -217,4 +217,4 @@ Windows 上的 ezBookkeeping 必须作为可恢复的后台任务运行：
 - `WINDOWS-HANDOFF.md`：MCP 开关、token 类型、Windows 服务和现场验证；
 - `config/*.example.json`：仅保存脱敏占位符和最小工具 allowlist。
 
-运行配置和 token 只写入本机 OpenClaw/ezBookkeeping 配置，不进入 Git。上线采用可回滚的小步骤：先只读 MCP probe，再启用统计工具，最后更新运行提示并执行微信验收。
+运行配置和 token 只写入本机 OpenClaw/ezBookkeeping 配置，不进入 Git。上线采用可回滚的小步骤：先确认账本健康和插件加载，再启用统计工具、更新运行提示并跑完整自动化测试，最后由所有者通过微信执行历史查询验收。
