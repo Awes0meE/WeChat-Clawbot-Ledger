@@ -263,6 +263,7 @@ export default definePluginEntry({
     const preparedRuns = new Set<string>();
     const inboundByRun = new Map<string, InboundMessage>();
     const authoritativeRepliesByRun = new Map<string, { text: string; touchedAt: number }>();
+    const promptRoutesByRun = new Map<string, NonNullable<ReturnType<typeof obviousTurnRoute>>>();
     const toolCallSlots = new Map<string, {
       runKey: string;
       conflictingRunKeys?: Set<string>;
@@ -392,7 +393,12 @@ export default definePluginEntry({
       const runId = context.runId;
       const runKey = runId ? transientBindingKey('run', runId) : undefined;
       const inbound = runKey ? inboundByRun.get(runKey) : undefined;
-      const route = obviousTurnRoute(inbound?.content ?? event.prompt);
+      let route = obviousTurnRoute(inbound?.content ?? event.prompt);
+      if (route && runKey) {
+        promptRoutesByRun.set(runKey, route);
+      } else if (!route && runKey) {
+        route = promptRoutesByRun.get(runKey);
+      }
       api.logger?.info?.(
         `clawbot-bookkeeping: prompt routing run=${Boolean(runId)} bound=${Boolean(inbound)} routed=${Boolean(route)}`,
       );
@@ -520,6 +526,7 @@ export default definePluginEntry({
       const runKey = transientBindingKey('run', runId);
       preparedRuns.delete(runKey);
       inboundByRun.delete(runKey);
+      promptRoutesByRun.delete(runKey);
       for (const slot of toolCallSlots.values()) {
         if (slot.runKey === runKey) {
           delete slot.inbound;
@@ -533,6 +540,7 @@ export default definePluginEntry({
       inboundByRun.clear();
       toolCallSlots.clear();
       authoritativeRepliesByRun.clear();
+      promptRoutesByRun.clear();
       receiptStore.close();
     });
 

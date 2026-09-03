@@ -900,8 +900,13 @@ test('narrows obvious confirmation, questioned expense, and summary turns to one
 
     const early = await harness.inboundHooks.get('before_prompt_build')?.({
       prompt: '午饭8.8么？', messages: [],
-    }, { channel: 'openclaw-weixin' });
+    }, { channel: 'openclaw-weixin', runId: 'early-question-route' });
     assert.deepEqual(early.toolsAllow, ['prepare_expense']);
+    const retry = await harness.inboundHooks.get('before_prompt_build')?.({
+      prompt: '请给出可见答案。', messages: [],
+    }, { channel: 'openclaw-weixin', runId: 'early-question-route' });
+    assert.deepEqual(retry.toolsAllow, ['prepare_expense']);
+    assert.match(retry.prependSystemContext, /必须调用 `prepare_expense`/u);
   } finally {
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
