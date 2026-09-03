@@ -1,0 +1,58 @@
+{
+  "name": "@clawbot/openclaw-weixin-stable-id",
+  "version": "2.4.8-clawbot.1",
+  "description": "Tencent OpenClaw Weixin 2.4.8 with stable upstream message IDs for durable deduplication",
+  "license": "MIT",
+  "author": "Tencent",
+  "type": "module",
+  "files": [
+    "src/",
+    "!src/**/*.test.ts",
+    "!src/**/node_modules/",
+    "index.ts",
+    "openclaw.plugin.json",
+    "dist/",
+    "README.md",
+    "README.zh_CN.md",
+    "CHANGELOG.md",
+    "CHANGELOG.zh_CN.md"
+  ],
+  "scripts": {
+    "test": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc",
+    "prepublishOnly": "npm run typecheck && npm run build"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "openclaw": "2026.8.2",
+    "qrcode-terminal": "0.12.0",
+    "zod": "^4.3.6"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "runtimeExtensions": [
+      "./dist/index.js"
+    ],
+    "channel": {
+      "id": "openclaw-weixin",
+      "label": "openclaw-weixin",
+      "selectionLabel": "openclaw-weixin",
+      "docsPath": "/channels/openclaw-weixin",
+      "docsLabel": "openclaw-weixin",
+      "blurb": "Weixin channel",
+      "order": 75
+    },
+    "install": {
+      "npmSpec": "@tencent-weixin/openclaw-weixin",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.5.12"
+    }
+  },
+  "ilink_appid": "bot"
+}

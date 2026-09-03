@@ -1,0 +1,46 @@
+[
+  {
+    "path": "agents.entries.bookkeeper",
+    "value": {
+      "name": "bookkeeper",
+      "description": "微信专用本地记账代理",
+      "workspace": "<ABSOLUTE_PROJECT_PATH>\\openclaw-workspace",
+      "model": {
+        "primary": "ollama/qwen3:8b"
+      },
+      "thinkingDefault": "off",
+      "reasoningDefault": "off",
+      "contextInjection": "continuation-skip",
+      "bootstrapMaxChars": 4000,
+      "bootstrapTotalMaxChars": 8000,
+      "skills": [],
+      "tools": {
+        "profile": "minimal",
+        "allow": [
+          "bookkeeping_health",
+          "record_expense"
+        ],
+        "loopDetection": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  {
+    "path": "bindings",
+    "value": [
+      {
+        "type": "route",
+        "agentId": "bookkeeper",
+        "comment": "Route one Weixin account to the dedicated bookkeeping agent.",
+        "match": {
+          "channel": "openclaw-weixin",
+          "accountId": "<WEIXIN_ACCOUNT_ID>"
+        },
+        "session": {
+          "dmScope": "per-account-channel-peer"
+        }
+      }
+    ]
+  }
+]

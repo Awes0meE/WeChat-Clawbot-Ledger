@@ -1,0 +1,9 @@
+[
+  {
+    "path": "session.resetByChannel.openclaw-weixin",
+    "value": {
+      "mode": "idle",
+      "idleMinutes": 1
+    }
+  }
+]

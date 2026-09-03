@@ -1,0 +1,30 @@
+[
+  {
+    "path": "agents.defaults.workspace",
+    "value": "<ABSOLUTE_PROJECT_PATH>\\openclaw-workspace"
+  },
+  {
+    "path": "skills.limits.maxSkillsInPrompt",
+    "value": 0
+  },
+  {
+    "path": "agents.defaults.compaction",
+    "value": {
+      "enabled": true,
+      "mode": "default",
+      "thinkingLevel": "off",
+      "keepRecentTokens": 256,
+      "recentTurnsPreserve": 1,
+      "qualityGuard": {
+        "enabled": false,
+        "maxRetries": 0
+      },
+      "postIndexSync": "off",
+      "memoryFlush": {
+        "enabled": false
+      },
+      "maxActiveTranscriptBytes": 1,
+      "notifyUser": false
+    }
+  }
+]

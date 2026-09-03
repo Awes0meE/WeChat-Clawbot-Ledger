@@ -1,0 +1,45 @@
+{
+  "id": "clawbot-bookkeeping",
+  "name": "Clawbot Bookkeeping",
+  "description": "Least-privilege local expense recording for the personal WeChat bookkeeping workflow",
+  "version": "0.1.0",
+  "contracts": {
+    "tools": [
+      "bookkeeping_health",
+      "record_expense"
+    ]
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "toolMetadata": {
+    "bookkeeping_health": {
+      "profiles": ["minimal"]
+    },
+    "record_expense": {
+      "profiles": ["minimal"]
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "serverBaseUrl": {
+        "type": "string",
+        "const": "http://127.0.0.1:8180"
+      },
+      "tokenPath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "stateDbPath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "accountName": {
+        "type": "string",
+        "const": "日常支出"
+      }
+    }
+  }
+}

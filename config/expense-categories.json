@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "status": "imported_verified",
+  "importedAt": "2026-09-03T05:33:00+08:00",
+  "target": "http://127.0.0.1:8180",
+  "account": "日常支出",
+  "currency": "SGD",
+  "timezone": "Asia/Singapore",
+  "type": "expense",
+  "source": "User dictated categories and approved additions on 2026-09-03",
+  "labelNormalizations": {
+    "坐机费": "座机费"
+  },
+  "categories": [
+    {
+      "name": "食品酒水",
+      "subcategories": [
+        "早午晚餐",
+        "烟酒茶",
+        "水果零食",
+        "饮料甜品",
+        "超市购物"
+      ]
+    },
+    {
+      "name": "行车交通",
+      "subcategories": [
+        "公共交通",
+        "打车租车",
+        "私家车费用"
+      ]
+    },
+    {
+      "name": "居家物业",
+      "subcategories": [
+        "日常用品",
+        "水电煤气",
+        "房租",
+        "物业管理",
+        "维修保养"
+      ]
+    },
+    {
+      "name": "交流通讯",
+      "subcategories": [
+        "座机费",
+        "手机费",
+        "上网费",
+        "邮寄费"
+      ]
+    },
+    {
+      "name": "衣服饰品",
+      "subcategories": [
+        "衣服裤子",
+        "鞋帽包包",
+        "化妆饰品"
+      ]
+    },
+    {
+      "name": "休闲娱乐",
+      "subcategories": [
+        "运动健身",
+        "交际聚会",
+        "休闲玩乐",
+        "宠物宝贝",
+        "旅游度假"
+      ]
+    },
+    {
+      "name": "医疗保健",
+      "subcategories": [
+        "药品费",
+        "保健费",
+        "美容费",
+        "治疗费"
+      ]
+    },
+    {
+      "name": "学习进修",
+      "subcategories": [
+        "数码装备",
+        "书报杂志",
+        "培训进修"
+      ]
+    },
+    {
+      "name": "人情往来",
+      "subcategories": [
+        "送礼请客",
+        "孝敬长辈",
+        "还人钱物",
+        "慈善捐助"
+      ]
+    },
+    {
+      "name": "金融保险",
+      "subcategories": [
+        "银行手续",
+        "投资亏损",
+        "按揭还款",
+        "消费税收",
+        "利息支出",
+        "赔偿罚款"
+      ]
+    },
+    {
+      "name": "其他杂项",
+      "subcategories": [
+        "其他支出",
+        "意外丢失",
+        "烂账损失"
+      ]
+    }
+  ]
+}
