@@ -9,64 +9,11 @@ import {
   formatExpenseReceipt,
   recordExpense,
 } from './bookkeeping-core.mjs';
-
-const PRIMARY_CATEGORIES = [
-  '食品酒水', '行车交通', '居家物业', '交流通讯', '衣服饰品', '休闲娱乐',
-  '医疗保健', '学习进修', '人情往来', '金融保险', '其他杂项',
-] as const;
-
-const SUBCATEGORIES = [
-  '早午晚餐', '烟酒茶', '水果零食', '饮料甜品', '超市购物',
-  '公共交通', '打车租车', '私家车费用',
-  '日常用品', '水电煤气', '房租', '物业管理', '维修保养',
-  '座机费', '手机费', '上网费', '邮寄费',
-  '衣服裤子', '鞋帽包包', '化妆饰品',
-  '运动健身', '交际聚会', '休闲玩乐', '宠物宝贝', '旅游度假',
-  '药品费', '保健费', '美容费', '治疗费',
-  '数码装备', '书报杂志', '培训进修',
-  '送礼请客', '孝敬长辈', '还人钱物', '慈善捐助',
-  '银行手续', '投资亏损', '按揭还款', '消费税收', '利息支出', '赔偿罚款',
-  '其他支出', '意外丢失', '烂账损失',
-] as const;
-
-const CATEGORY_GUIDE = [
-  '食品酒水: 早午晚餐、烟酒茶、水果零食、饮料甜品、超市购物',
-  '行车交通: 公共交通、打车租车、私家车费用',
-  '居家物业: 日常用品、水电煤气、房租、物业管理、维修保养',
-  '交流通讯: 座机费、手机费、上网费、邮寄费',
-  '衣服饰品: 衣服裤子、鞋帽包包、化妆饰品',
-  '休闲娱乐: 运动健身、交际聚会、休闲玩乐、宠物宝贝、旅游度假',
-  '医疗保健: 药品费、保健费、美容费、治疗费',
-  '学习进修: 数码装备、书报杂志、培训进修',
-  '人情往来: 送礼请客、孝敬长辈、还人钱物、慈善捐助',
-  '金融保险: 银行手续、投资亏损、按揭还款、消费税收、利息支出、赔偿罚款',
-  '其他杂项: 其他支出、意外丢失、烂账损失',
-].join('\n');
-
-const SUBCATEGORY_ALIASES = new Map<string, typeof SUBCATEGORIES[number]>([
-  ['餐饮', '早午晚餐'],
-  ['早餐', '早午晚餐'],
-  ['午餐', '早午晚餐'],
-  ['晚餐', '早午晚餐'],
-  ['早饭', '早午晚餐'],
-  ['午饭', '早午晚餐'],
-  ['晚饭', '早午晚餐'],
-  ['正餐', '早午晚餐'],
-]);
-
-function normalizeSubcategory(primaryCategory: string, value: string) {
-  const normalized = SUBCATEGORY_ALIASES.get(value) ?? value;
-  const guideLine = CATEGORY_GUIDE
-    .split('\n')
-    .find((line) => line.startsWith(`${primaryCategory}: `));
-  const allowed = guideLine
-    ?.slice(guideLine.indexOf(': ') + 2)
-    .split('、') ?? [];
-  if (!allowed.includes(normalized)) {
-    throw new Error(`二级分类必须是“${primaryCategory}”下的正式分类名称。`);
-  }
-  return normalized;
-}
+import {
+  CATEGORY_GUIDE,
+  PRIMARY_CATEGORIES,
+  normalizeSubcategory,
+} from './categories.mjs';
 
 type InboundMessage = {
   channel: string;
