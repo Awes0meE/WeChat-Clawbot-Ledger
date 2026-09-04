@@ -199,10 +199,11 @@ if ($actualCloudflaredSha256 -cne $approvedCloudflaredSha256) { throw 'Downloade
 .\scripts\install-ledger-tunnel-task.ps1 `
   -CredentialPath 'D:\Clawbot\cloudflared\<LOCAL_TUNNEL_UUID>.json' `
   -ExpectedCloudflaredSha256 $approvedCloudflaredSha256 `
+  -StartAfterInstall `
   -WhatIf
 ```
 
-预演结果精确无误后，用同样参数去掉 `-WhatIf` 执行。安装器在最后写入前再次检查同名任务；新建任务不使用 `-Force`，若检查后发生竞态则安全失败，绝不覆盖。
+预演结果精确无误后，用同样参数去掉 `-WhatIf` 执行。安装器在最后写入前再次检查同名任务；新建任务不使用 `-Force`，若检查后发生竞态则安全失败，绝不覆盖。`-StartAfterInstall` 只在注册完成后再次完整核对任务身份、环境、二进制和进程冲突，再以该已核对的任务对象首次启动；不得改用只按名称的盲启命令。
 
 Supervisor 只有在两次连续检查均证明 `8888` 的 PID、创建时间、程序路径、显式 production config、health 和登录页指纹一致后，才以本地 config 启动子进程。它不接收 tunnel token 参数。运行期间任何 origin 退化都会只停止自己创建且路径仍匹配的 cloudflared 子进程，公网 fail closed；它从不停止、重启或修改 ezBookkeeping，也不采用或终止未知 cloudflared。
 

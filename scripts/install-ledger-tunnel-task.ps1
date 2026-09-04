@@ -13,6 +13,7 @@ param(
     [string]$LogPath = 'D:\Clawbot\cloudflared\logs\ledger-tunnel-supervisor.log',
     [ValidateSet('Clawbot Ledger Tunnel')]
     [string]$TaskName = 'Clawbot Ledger Tunnel',
+    [switch]$StartAfterInstall,
     [string]$SupervisorSourcePath,
     [string]$CommonSourcePath
 )
@@ -667,6 +668,21 @@ try {
         Write-Output 'LEDGER_TUNNEL_TASK_INSTALLED'
     } else {
         Write-Output 'LEDGER_TUNNEL_TASK_ALREADY_INSTALLED'
+    }
+
+    if ($StartAfterInstall) {
+        $script:InstallFailureStage = 'TASK_START_PREFLIGHT'
+        Assert-NoCloudflaredEnvironmentOverrides
+        Assert-CloudflaredBinaryIdentity -Path $cloudflared -ExpectedSha256 $ExpectedCloudflaredSha256
+        Assert-NoTunnelServiceOrProcess
+        $script:InstallFailureStage = 'TASK_START_REVALIDATION'
+        $taskToStart = Assert-NoForeignTunnelTask -TaskName $TaskName -ExpectedLauncher $launcher -ExpectedArguments $taskArguments -ExpectedWorkingDirectory $runtime -ExpectedUser $currentUser
+        if ($null -eq $taskToStart) {
+            throw 'The exact Tunnel task disappeared before its initial start.'
+        }
+        $script:InstallFailureStage = 'TASK_START'
+        Start-ScheduledTask -InputObject $taskToStart -ErrorAction Stop
+        Write-Output 'LEDGER_TUNNEL_TASK_STARTED'
     }
 } catch {
     throw ('Ledger Tunnel task installation refused an unsafe or conflicting state at stage {0}.' -f $script:InstallFailureStage)

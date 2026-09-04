@@ -464,6 +464,7 @@ $ErrorActionPreference = 'Stop'
 $global:scenario = $Scenario
 $global:trace = $env:CLAWBOT_TUNNEL_TEST_TRACE
 $global:taskChecks = 0
+$global:registered = $false
 function Add-Trace([string]$Line) { [IO.File]::AppendAllText($global:trace, $Line + [Environment]::NewLine) }
 ${protectedAclPowerShell()}
 if ($Scenario -eq 'unsafe-acl') {
@@ -526,6 +527,13 @@ function Get-ScheduledTask {
   }
   if ($global:scenario -eq 'task-principal-conflict') { return ,(New-ExactInstallerTask -WrongPrincipal) }
   if ($global:scenario -eq 'exact-task') { return ,(New-ExactInstallerTask) }
+  if ($global:registered) {
+    Add-Trace 'TASK_REVALIDATE'
+    if ($global:scenario -eq 'post-register-task-race') {
+      return ,([pscustomobject]@{ TaskName = 'Clawbot Ledger Tunnel'; TaskPath = '\\'; Actions = @([pscustomobject]@{ Execute = 'foreign.exe'; Arguments = 'foreign'; WorkingDirectory = $env:CLAWBOT_TUNNEL_TEST_RUNTIME }) })
+    }
+    return ,(New-ExactInstallerTask)
+  }
   @()
 }
 function Get-AuthenticodeSignature {
@@ -549,7 +557,8 @@ function New-ScheduledTaskAction {
 function New-ScheduledTaskTrigger { [CmdletBinding()] param([switch]$AtLogOn, [string]$User) Add-Trace ('TRIGGER ' + $AtLogOn + ' ' + $User); [pscustomobject]@{} }
 function New-ScheduledTaskSettingsSet { [CmdletBinding()] param([int]$RestartCount, [TimeSpan]$RestartInterval, [TimeSpan]$ExecutionTimeLimit, [string]$MultipleInstances, [switch]$StartWhenAvailable, [switch]$AllowStartIfOnBatteries, [switch]$DontStopIfGoingOnBatteries) Add-Trace ('SETTINGS ' + $RestartCount + ' ' + $MultipleInstances); [pscustomobject]@{} }
 function New-ScheduledTaskPrincipal { [CmdletBinding()] param([string]$UserId, [string]$LogonType, [string]$RunLevel) Add-Trace ('PRINCIPAL ' + $LogonType + ' ' + $RunLevel); [pscustomobject]@{} }
-function Register-ScheduledTask { [CmdletBinding()] param([string]$TaskName, [object]$Action, [object]$Trigger, [object]$Settings, [object]$Principal, [switch]$Force) Add-Trace ('REGISTER ' + $TaskName + ' FORCE=' + [bool]$Force) }
+function Register-ScheduledTask { [CmdletBinding()] param([string]$TaskName, [object]$Action, [object]$Trigger, [object]$Settings, [object]$Principal, [switch]$Force) Add-Trace ('REGISTER ' + $TaskName + ' FORCE=' + [bool]$Force); $global:registered = $true }
+function Start-ScheduledTask { [CmdletBinding()] param([object]$InputObject) Add-Trace ('START_TASK ' + $InputObject.TaskName) }
 function Set-Acl { [CmdletBinding()] param([string]$LiteralPath, [object]$AclObject) Add-Trace ('ACL ' + [IO.Path]::GetFileName($LiteralPath)) }
 if ($Scenario -eq 'whatif') {
   function Start-Process { throw 'WhatIf launched cloudflared.' }
@@ -558,6 +567,7 @@ if ($Scenario -eq 'whatif') {
   function New-ScheduledTaskSettingsSet { throw 'WhatIf constructed a task.' }
   function New-ScheduledTaskPrincipal { throw 'WhatIf constructed a task.' }
   function Register-ScheduledTask { throw 'WhatIf registered a task.' }
+  function Start-ScheduledTask { throw 'WhatIf started a task.' }
   function Set-Acl { throw 'WhatIf changed an ACL.' }
 }
 $requestedTaskName = if ($Scenario -eq 'bad-task-name') { 'Other Tunnel Task' } else { 'Clawbot Ledger Tunnel' }
@@ -575,6 +585,7 @@ $arguments = @{
   Confirm = $false
 }
 if ($Scenario -eq 'whatif') { $arguments.WhatIf = $true }
+if ($Scenario -in @('whatif', 'install-start', 'post-register-task-race')) { $arguments.StartAfterInstall = $true }
 & $env:CLAWBOT_TUNNEL_TEST_INSTALLER @arguments
 `);
   return path;
@@ -1230,6 +1241,38 @@ test('installer validates ingress then creates an exact supervisor-only least-pr
     assert.doesNotMatch(action, /--token|service\s+install/iu);
     assert.ok(trace.some((line) => line === 'PRINCIPAL Interactive Limited'));
     assert.ok(trace.some((line) => line === 'REGISTER Clawbot Ledger Tunnel FORCE=False'));
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('installer starts only the exact task after a post-registration identity recheck', () => {
+  const fixture = createFixture();
+  try {
+    const wrapper = createInstallerWrapper(fixture);
+    const result = runPowerShell(wrapper, ['install-start'], fixtureEnv(fixture));
+    assertSucceeded(result);
+    assert.match(result.stdout, /LEDGER_TUNNEL_TASK_STARTED/u);
+    const trace = readFileSync(fixture.tracePath, 'utf8').trim().split(/\r?\n/u);
+    const registered = trace.indexOf('REGISTER Clawbot Ledger Tunnel FORCE=False');
+    const revalidated = trace.indexOf('TASK_REVALIDATE');
+    const started = trace.indexOf('START_TASK Clawbot Ledger Tunnel');
+    assert.ok(registered >= 0 && revalidated > registered && started > revalidated, trace.join('\n'));
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('installer refuses to start a task replaced after registration', () => {
+  const fixture = createFixture();
+  try {
+    const wrapper = createInstallerWrapper(fixture);
+    const result = runPowerShell(wrapper, ['post-register-task-race'], fixtureEnv(fixture));
+    assertFailed(result, /refus|unsafe|conflict/iu);
+    const trace = readFileSync(fixture.tracePath, 'utf8');
+    assert.match(trace, /REGISTER Clawbot Ledger Tunnel FORCE=False/u);
+    assert.match(trace, /TASK_REVALIDATE/u);
+    assert.equal(trace.includes('START_TASK '), false);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

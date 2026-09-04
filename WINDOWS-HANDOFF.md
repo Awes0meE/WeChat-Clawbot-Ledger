@@ -478,7 +478,7 @@ rg -n --hidden --glob '!**/node_modules/**' --glob '!**/.git/**' --glob '!**/.wo
 | `scripts/install-ledger-test-instance.ps1` | `18888` 隔离测试实例安装 |
 | `scripts/migrate-ledger-production.ps1` | 经备份验证的 `8888` 正式迁移 |
 | `scripts/publish-openclaw-release.ps1` | immutable release 发布与 OpenClaw 切换/回滚 |
-| `scripts/install-ledger-tunnel-task.ps1` | fail-closed Tunnel supervisor task 安装 |
+| `scripts/install-ledger-tunnel-task.ps1` | fail-closed Tunnel supervisor task 安装与复核后首次启动 |
 | `scripts/test-ledger-local.ps1` | 本机隔离与安全检查 |
 | `scripts/test-ledger-public.ps1` | 公网、token 边界与作品集检查 |
 | `scripts/test-ledger-restart.ps1` | 精确任务重启和 fail-closed 检查 |

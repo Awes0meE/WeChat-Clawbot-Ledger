@@ -102,7 +102,7 @@ HTTP API token 与原生 MCP token 是两份不同的本机秘密：前者供定
 | `scripts/migrate-ledger-production.ps1` | 备份并验证后把已识别正式实例从旧端口迁移到 `8888` |
 | `scripts/install-ledger-test-instance.ps1` | 安装 `18888` 独立测试实例，不复制正式数据 |
 | `scripts/publish-openclaw-release.ps1` | 发布、校验并可回滚切换 immutable OpenClaw release |
-| `scripts/install-ledger-tunnel-task.ps1` | 安装 health-gated、fail-closed Tunnel supervisor task |
+| `scripts/install-ledger-tunnel-task.ps1` | 安装并可在完整身份复核后首次启动 health-gated、fail-closed Tunnel supervisor task |
 | `scripts/test-ledger-local.ps1` | 脱敏本机配置、端口、release 与 Tunnel 验收 |
 | `scripts/test-ledger-public.ps1` | 公网安全、token 边界与作品集回归验收 |
 | `scripts/test-ledger-restart.ps1` | 精确任务重启、错误 owner 与 fail-closed 恢复验收 |
@@ -159,6 +159,7 @@ if ($actualCloudflaredSha256 -cne $approvedCloudflaredSha256) { throw 'cloudflar
   -CredentialPath $credentialPath `
   -TunnelConfigPath $tunnelConfigPath `
   -ExpectedCloudflaredSha256 $approvedCloudflaredSha256 `
+  -StartAfterInstall `
   -WhatIf
 
 # 只在 release 已切换且 Tunnel task 已安装/启动后运行完整本机验收
