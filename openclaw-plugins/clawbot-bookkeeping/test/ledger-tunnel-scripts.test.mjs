@@ -358,6 +358,7 @@ function Get-CimInstance {
     return @()
   }
   if ($Filter -like '*700*') {
+    if ($global:scenario -eq 'startup-identity-mismatch') { return @() }
     $path = if ($global:scenario -eq 'child-identity-change' -and $global:healthChecks -ge 3) { Join-Path ([IO.Path]::GetDirectoryName($env:CLAWBOT_TUNNEL_TEST_CLOUDFLARED)) 'other.exe' } else { $env:CLAWBOT_TUNNEL_TEST_CLOUDFLARED }
     $creation = if ($global:scenario -eq 'pid-reused' -and $global:healthChecks -ge 3) { '20260905090909.000000+000' } else { $global:childCreation }
     return ,([pscustomobject]@{ ProcessId = 700; CreationDate = $creation; ExecutablePath = $path; CommandLine = ('"' + $path + '" tunnel --config "' + $env:CLAWBOT_TUNNEL_TEST_CONFIG + '" run') })
@@ -388,10 +389,7 @@ function Invoke-WebRequest {
 function Start-Process {
   [CmdletBinding()]
   param([string]$FilePath, [object[]]$ArgumentList, [string]$RedirectStandardOutput, [string]$RedirectStandardError, [switch]$PassThru, [string]$WindowStyle)
-  $global:childStarted = $true
-  Add-Trace ('START ' + $FilePath + ' ' + ([string[]]$ArgumentList -join '|'))
-  Add-Trace ('STREAMS ' + $RedirectStandardOutput + ' ' + $RedirectStandardError)
-  [pscustomobject]@{ Id = 700; HasExited = $false; ExitCode = 0 }
+  throw 'The supervisor must not use Start-Process for a Tunnel child.'
 }
 function Get-AuthenticodeSignature {
   [CmdletBinding()]
@@ -431,11 +429,27 @@ $supervisorArguments = @{
   StabilityDelayMilliseconds = 1
   MaxLogBytes = $MaxBytes
   MaxCycles = $Cycles
-  ContainmentBinder = { param($Process) Add-Trace ('CONTAIN ' + $Process.Id) }
-  ContainmentStopper = { param($Process) if ($Process.Id -ne 700) { throw 'Attempted to stop an unknown process.' }; Add-Trace ('STOP ' + $Process.Id); $global:childStarted = $false }
+  ContainedProcessLauncher = {
+    param($Executable, $CommandLine)
+    Add-Trace 'CREATE_SUSPENDED 700'
+    if ($global:scenario -eq 'containment-assign-failure') {
+      Add-Trace 'TERMINATE 700'
+      throw 'Injected containment failure.'
+    }
+    Add-Trace 'CONTAIN 700'
+    if ($global:scenario -eq 'containment-resume-failure') {
+      Add-Trace 'TERMINATE 700'
+      throw 'Injected resume failure.'
+    }
+    Add-Trace 'RESUME 700'
+    $global:childStarted = $true
+    Add-Trace ('START ' + $CommandLine)
+    [pscustomobject]@{ Id = 700; HasExited = $false; ExitCode = 0 }
+  }
+  ContainedProcessStopper = { param($Process) if ($Process.Id -ne 700) { throw 'Attempted to stop an unknown process.' }; Add-Trace ('STOP ' + $Process.Id); $global:childStarted = $false }
 }
 if ($Scenario -eq 'default-common') { $supervisorArguments.Remove('CommonScriptPath') }
-if ($Scenario -eq 'native-containment') { $supervisorArguments.Remove('ContainmentBinder'); $supervisorArguments.Remove('ContainmentStopper') }
+if ($Scenario -eq 'native-containment') { $supervisorArguments.Remove('ContainedProcessLauncher'); $supervisorArguments.Remove('ContainedProcessStopper') }
 & $env:CLAWBOT_TUNNEL_TEST_SUPERVISOR @supervisorArguments
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 `);
@@ -761,8 +775,9 @@ test('all tunnel scripts parse in Windows PowerShell 5.1 and retain narrow sourc
   assert.match(supervisor, /JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE/);
   assert.match(supervisor, /ClawbotLedgerTunnelSupervisor/);
   assert.match(supervisor, /tunnel.+--config.+run/su);
-  assert.match(supervisor, /RedirectStandardOutput\s+'NUL'/u);
-  assert.match(supervisor, /RedirectStandardError\s+'\\\\\.\\NUL'/u);
+  assert.match(supervisor, /CREATE_SUSPENDED\s*\|\s*CREATE_NO_WINDOW/u);
+  assert.match(supervisor, /CreateProcessW\([\s\S]*?false,[\s\S]*?CREATE_SUSPENDED\s*\|\s*CREATE_NO_WINDOW/u);
+  assert.doesNotMatch(supervisor, /CREATE_BREAKAWAY_FROM_JOB/u);
   assert.doesNotMatch(supervisor, /--token|service\s+install/iu);
   assert.doesNotMatch(supervisor, /Stop-(?:Service|ScheduledTask)/u);
   assert.match(installer, /CmdletBinding\s*\(\s*SupportsShouldProcess/iu);
@@ -858,19 +873,67 @@ test('supervisor double-checks before and after start and passes no credential a
     const trace = readFileSync(fixture.tracePath, 'utf8').trim().split(/\r?\n/u);
     assert.equal(trace.filter((line) => line.startsWith('OWNER ')).length >= 4, true);
     assert.equal(trace.filter((line) => line.startsWith('HEALTH ')).length >= 4, true);
+    const createIndex = trace.indexOf('CREATE_SUSPENDED 700');
+    const containIndex = trace.indexOf('CONTAIN 700');
+    const resumeIndex = trace.indexOf('RESUME 700');
     const start = trace.find((line) => line.startsWith('START '));
     assert.ok(start);
+    assert.ok(createIndex >= 0);
+    assert.ok(containIndex > createIndex);
+    assert.ok(resumeIndex > containIndex);
+    assert.ok(trace.indexOf(start) > resumeIndex);
     assert.ok(trace.some((line) => line === 'CONTAIN 700'));
-    assert.match(start, /tunnel\|--config\|.*ledger\.yml\|run$/u);
+    assert.match(start, /" tunnel --config ".*ledger\.yml" run$/u);
     assert.equal(start.includes(fixture.credentialPath), false);
     assert.doesNotMatch(start, /token/iu);
-    assert.ok(trace.some((line) => line === 'STREAMS NUL \\\\.\\NUL'));
     assert.deepEqual(trace.filter((line) => line.startsWith('STOP ')), ['STOP 700']);
     for (const line of readFileSync(fixture.logPath, 'utf8').trim().split(/\r?\n/u)) {
       assert.match(line, /^timestamp=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z event=[A-Z][A-Z0-9_]{2,40}(?: pid=\d+)?(?: exit=[A-Za-z0-9_-]{1,24})?$/u);
     }
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('production launches cloudflared suspended into containment and cleans every startup failure', () => {
+  const supervisor = readFileSync(supervisorScript, 'utf8');
+  const nativeStart = supervisor.indexOf('CreateProcessW(');
+  const nativeAssign = supervisor.indexOf('AssignProcessToJobObject(', nativeStart);
+  const nativeResume = supervisor.indexOf('ResumeThread(', nativeAssign);
+  assert.ok(nativeStart >= 0);
+  assert.ok(nativeAssign > nativeStart);
+  assert.ok(nativeResume > nativeAssign);
+  assert.match(supervisor, /CREATE_SUSPENDED/u);
+  assert.match(supervisor, /CREATE_NO_WINDOW/u);
+  assert.match(supervisor, /CreateProcessW\([\s\S]*?false,[\s\S]*?CREATE_SUSPENDED\s*\|\s*CREATE_NO_WINDOW/u);
+  assert.match(supervisor, /StartContained\(\$script:TunnelJobHandle/u);
+
+  for (const scenario of ['containment-assign-failure', 'containment-resume-failure']) {
+    const fixture = createFixture();
+    try {
+      const wrapper = createSupervisorWrapper(fixture);
+      const result = runPowerShell(wrapper, [scenario, '1'], fixtureEnv(fixture));
+      assertFailed(result, /failed safely/iu);
+      const trace = readFileSync(fixture.tracePath, 'utf8').trim().split(/\r?\n/u);
+      assert.deepEqual(trace.filter((line) => line === 'CREATE_SUSPENDED 700'), ['CREATE_SUSPENDED 700']);
+      assert.deepEqual(trace.filter((line) => line === 'TERMINATE 700'), ['TERMINATE 700']);
+      assert.equal(trace.includes('RESUME 700'), false);
+      assert.equal(trace.some((line) => /(?:STOP|TERMINATE) 900$/u.test(line)), false);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }
+
+  const identityFixture = createFixture();
+  try {
+    const wrapper = createSupervisorWrapper(identityFixture);
+    const result = runPowerShell(wrapper, ['startup-identity-mismatch', '1'], fixtureEnv(identityFixture));
+    assertFailed(result, /failed safely/iu);
+    const trace = readFileSync(identityFixture.tracePath, 'utf8').trim().split(/\r?\n/u);
+    assert.deepEqual(trace.filter((line) => line === 'RESUME 700'), ['RESUME 700']);
+    assert.deepEqual(trace.filter((line) => line === 'STOP 700'), ['STOP 700']);
+  } finally {
+    rmSync(identityFixture.root, { recursive: true, force: true });
   }
 });
 
@@ -890,6 +953,26 @@ test('supervisor accepts either preserved MCP enable state while keeping its all
   }
 });
 
+test('supervisor rejects a placeholder production signing secret before spawning cloudflared', () => {
+  const fixture = createFixture();
+  try {
+    write(
+      fixture.productionConfigPath,
+      readFileSync(fixture.productionConfigPath, 'utf8')
+        .replace('SENSITIVE-PRODUCTION-SECRET', '__PRESERVE_EXISTING_LOCAL_SECRET__'),
+    );
+    const wrapper = createSupervisorWrapper(fixture);
+    const result = runPowerShell(wrapper, ['healthy', '1'], fixtureEnv(fixture));
+    assertFailed(result, /failed safely/iu);
+    assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /PRESERVE_EXISTING_LOCAL_SECRET/iu);
+    const trace = existsSync(fixture.tracePath) ? readFileSync(fixture.tracePath, 'utf8') : '';
+    assert.equal(trace.includes('START '), false);
+    assert.equal(trace.includes('STOP '), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test('native kill-on-close containment initializes in Windows PowerShell 5.1 without starting a tunnel', () => {
   const fixture = createFixture();
   try {
@@ -901,6 +984,37 @@ test('native kill-on-close containment initializes in Windows PowerShell 5.1 wit
     assert.match(readFileSync(fixture.logPath, 'utf8'), /ORIGIN_INVALID/u);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('native contained launcher assigns a suspended child before it can run', () => {
+  const source = readFileSync(supervisorScript, 'utf8');
+  const typeDefinition = source.match(/Add-Type -TypeDefinition @'\r?\n([\s\S]*?)\r?\n'@/u)?.[1];
+  assert.ok(typeDefinition);
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'clawbot-native-containment-'));
+  try {
+    const smokeScript = join(temporaryDirectory, 'native-containment-smoke.ps1');
+    write(smokeScript, `
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+${typeDefinition}
+'@
+$job = $null
+$process = $null
+try {
+  $job = [Clawbot.LedgerTunnelJob]::CreateKillOnClose()
+  $commandLine = '"' + $env:ComSpec + '" /d /c exit 0'
+  $process = [Clawbot.LedgerTunnelJob]::StartContained($job, $env:ComSpec, $commandLine, $env:TEMP)
+  if (-not $process.WaitForExit(5000)) { throw 'Contained smoke child did not exit.' }
+  if ($process.ExitCode -ne 0) { throw 'Contained smoke child returned a nonzero status.' }
+} finally {
+  if ($null -ne $process) { $process.Dispose() }
+  if ($null -ne $job) { $job.Dispose() }
+}
+`);
+    assertSucceeded(runPowerShell(smokeScript));
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
   }
 });
 

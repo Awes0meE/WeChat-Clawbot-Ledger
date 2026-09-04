@@ -18,8 +18,8 @@ param(
     [int]$MaxLogBytes = 1048576,
     [ValidateRange(0, 2147483647)]
     [int]$MaxCycles = 0,
-    [scriptblock]$ContainmentBinder,
-    [scriptblock]$ContainmentStopper
+    [scriptblock]$ContainedProcessLauncher,
+    [scriptblock]$ContainedProcessStopper
 )
 
 if ([string]::IsNullOrWhiteSpace($CommonScriptPath)) {
@@ -65,7 +65,7 @@ function Exit-TunnelSupervisorMutex {
 }
 
 function Initialize-TunnelContainment {
-    if ($null -ne $ContainmentBinder) { return }
+    if ($null -ne $ContainedProcessLauncher) { return }
     if ($null -ne $script:TunnelJobHandle) { return }
     if (-not ('Clawbot.LedgerTunnelJob' -as [type])) {
         Add-Type -TypeDefinition @'
@@ -73,6 +73,7 @@ using System;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Win32.SafeHandles;
 
 namespace Clawbot {
@@ -109,9 +110,42 @@ namespace Clawbot {
         public UIntPtr PeakJobMemoryUsed;
     }
 
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    internal struct StartupInfo {
+        public UInt32 cb;
+        public string lpReserved;
+        public string lpDesktop;
+        public string lpTitle;
+        public UInt32 dwX;
+        public UInt32 dwY;
+        public UInt32 dwXSize;
+        public UInt32 dwYSize;
+        public UInt32 dwXCountChars;
+        public UInt32 dwYCountChars;
+        public UInt32 dwFillAttribute;
+        public UInt32 dwFlags;
+        public UInt16 wShowWindow;
+        public UInt16 cbReserved2;
+        public IntPtr lpReserved2;
+        public IntPtr hStdInput;
+        public IntPtr hStdOutput;
+        public IntPtr hStdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct ProcessInformation {
+        public IntPtr ProcessHandle;
+        public IntPtr ThreadHandle;
+        public UInt32 ProcessId;
+        public UInt32 ThreadId;
+    }
+
     public static class LedgerTunnelJob {
         private const UInt32 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
         private const Int32 JobObjectExtendedLimitInformation = 9;
+        private const UInt32 CREATE_SUSPENDED = 0x00000004;
+        private const UInt32 CREATE_NO_WINDOW = 0x08000000;
+        private const UInt32 WAIT_OBJECT_0 = 0x00000000;
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern SafeFileHandle CreateJobObject(IntPtr securityAttributes, string name);
@@ -124,6 +158,28 @@ namespace Clawbot {
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool TerminateProcess(IntPtr process, UInt32 exitCode);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool CreateProcessW(
+            string applicationName,
+            StringBuilder commandLine,
+            IntPtr processAttributes,
+            IntPtr threadAttributes,
+            bool inheritHandles,
+            UInt32 creationFlags,
+            IntPtr environment,
+            string currentDirectory,
+            ref StartupInfo startupInfo,
+            out ProcessInformation processInformation);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern UInt32 ResumeThread(IntPtr thread);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern UInt32 WaitForSingleObject(IntPtr handle, UInt32 milliseconds);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr handle);
 
         public static SafeFileHandle CreateKillOnClose() {
             SafeFileHandle job = CreateJobObject(IntPtr.Zero, null);
@@ -147,12 +203,69 @@ namespace Clawbot {
             }
         }
 
-        public static void AssignOrTerminate(SafeFileHandle job, Process process) {
-            IntPtr processHandle = process.Handle;
-            if (!AssignProcessToJobObject(job, processHandle)) {
-                Int32 error = Marshal.GetLastWin32Error();
-                TerminateProcess(processHandle, 1);
-                throw new Win32Exception(error, "Could not contain the Tunnel child process.");
+        private static void TerminateCreatedProcessAndWait(IntPtr processHandle) {
+            bool terminated = TerminateProcess(processHandle, 1);
+            Int32 terminateError = terminated ? 0 : Marshal.GetLastWin32Error();
+            UInt32 waitResult = WaitForSingleObject(processHandle, 5000);
+            if (waitResult != WAIT_OBJECT_0) {
+                Int32 error = terminateError != 0 ? terminateError : Marshal.GetLastWin32Error();
+                throw new Win32Exception(error, "Could not confirm cleanup of the suspended Tunnel child.");
+            }
+        }
+
+        public static Process StartContained(
+            SafeFileHandle job,
+            string executable,
+            string commandLine,
+            string workingDirectory) {
+            StartupInfo startup = new StartupInfo();
+            startup.cb = (UInt32)Marshal.SizeOf(typeof(StartupInfo));
+            ProcessInformation created;
+            if (!CreateProcessW(
+                    executable,
+                    new StringBuilder(commandLine),
+                    IntPtr.Zero,
+                    IntPtr.Zero,
+                    false,
+                    CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                    IntPtr.Zero,
+                    workingDirectory,
+                    ref startup,
+                    out created)) {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not create the suspended Tunnel child.");
+            }
+
+            Process process = null;
+            bool resumed = false;
+            try {
+                if (!AssignProcessToJobObject(job, created.ProcessHandle)) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not contain the suspended Tunnel child.");
+                }
+                process = Process.GetProcessById((Int32)created.ProcessId);
+                IntPtr retainedHandle = process.Handle;
+                UInt32 previousSuspendCount = ResumeThread(created.ThreadHandle);
+                if (previousSuspendCount != 1) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not resume the contained Tunnel child.");
+                }
+                resumed = true;
+                return process;
+            } catch (Exception startupFailure) {
+                if (!resumed) {
+                    try {
+                        TerminateCreatedProcessAndWait(created.ProcessHandle);
+                    } catch (Exception cleanupFailure) {
+                        if (process != null) { process.Dispose(); }
+                        throw new AggregateException(
+                            "The suspended Tunnel child could not be cleaned up.",
+                            startupFailure,
+                            cleanupFailure);
+                    }
+                }
+                if (process != null) { process.Dispose(); }
+                throw;
+            } finally {
+                CloseHandle(created.ThreadHandle);
+                CloseHandle(created.ProcessHandle);
             }
         }
     }
@@ -160,16 +273,6 @@ namespace Clawbot {
 '@
     }
     $script:TunnelJobHandle = [Clawbot.LedgerTunnelJob]::CreateKillOnClose()
-}
-
-function Add-TunnelChildToContainment {
-    param([Parameter(Mandatory = $true)][object]$Process)
-
-    if ($null -ne $ContainmentBinder) {
-        $null = & $ContainmentBinder $Process
-        return
-    }
-    [Clawbot.LedgerTunnelJob]::AssignOrTerminate($script:TunnelJobHandle, $Process)
 }
 
 function Close-TunnelContainment {
@@ -503,6 +606,10 @@ function Assert-TunnelProductionConfiguration {
     if ($mcpEnabled -notin @('true', 'false')) {
         throw 'The production MCP enable state is invalid.'
     }
+    $secretKey = Get-LedgerIniValue -Document $document -Section 'security' -Name 'secret_key'
+    if ([string]::IsNullOrWhiteSpace($secretKey) -or $secretKey.StartsWith('__')) {
+        throw 'The production ezBookkeeping signing secret is not ready for publication.'
+    }
     if ($document.Text -notmatch '(?m)^; CLAWBOT_LEDGER_PROFILE=production\s*$') {
         throw 'The production ezBookkeeping profile marker is missing.'
     }
@@ -647,30 +754,60 @@ function Get-AllCloudflaredProcesses {
     return @(Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'" -ErrorAction Stop)
 }
 
+function Stop-UnverifiedContainedCloudflared {
+    param([Parameter(Mandatory = $true)][object]$Process)
+
+    if ($null -ne $ContainedProcessLauncher) {
+        if ($null -eq $ContainedProcessStopper) {
+            throw 'The injected contained-process launcher has no exact-child stopper.'
+        }
+        $null = & $ContainedProcessStopper $Process
+        return
+    }
+    Close-TunnelContainment
+    try {
+        if (-not [bool]$Process.WaitForExit(5000)) {
+            throw 'The unverified contained Tunnel child did not exit.'
+        }
+    } catch {
+        throw 'The unverified contained Tunnel child could not be confirmed stopped.'
+    }
+}
+
 function Start-OwnedCloudflared {
     if (@(Get-AllCloudflaredProcesses).Count -ne 0) {
         Write-TunnelEvent -EventCode 'TUNNEL_CONFLICT'
         return $null
     }
     Initialize-TunnelContainment
-    $process = Start-Process -FilePath $script:ExpectedCloudflared -ArgumentList @('tunnel', '--config', $script:ExpectedTunnelConfig, 'run') -RedirectStandardOutput 'NUL' -RedirectStandardError '\\.\NUL' -WindowStyle Hidden -PassThru -ErrorAction Stop
-    if ($null -eq $process -or [int]$process.Id -le 0) {
-        throw 'Tunnel child startup did not return a process identity.'
-    }
+    $commandLine = '"' + $script:ExpectedCloudflared + '" tunnel --config "' + $script:ExpectedTunnelConfig + '" run'
+    $process = $null
     try {
-        Add-TunnelChildToContainment -Process $process
+        if ($null -ne $ContainedProcessLauncher) {
+            $process = & $ContainedProcessLauncher $script:ExpectedCloudflared $commandLine
+        } else {
+            $process = [Clawbot.LedgerTunnelJob]::StartContained($script:TunnelJobHandle, $script:ExpectedCloudflared, $commandLine, $script:ExpectedRuntime)
+        }
+        if ($null -eq $process -or [int]$process.Id -le 0) {
+            throw 'Tunnel child startup did not return a process identity.'
+        }
     } catch {
         Write-TunnelEvent -EventCode 'CHILD_CONTAINMENT_FAILED'
+        if ($null -ne $process) {
+            try { Stop-UnverifiedContainedCloudflared -Process $process } catch { throw 'The failed Tunnel child launch could not be cleaned up.' }
+        }
         throw
     }
     try {
         $identity = Get-CloudflaredIdentityByPid -ChildProcessId ([int]$process.Id)
     } catch {
         Write-TunnelEvent -EventCode 'CHILD_VERIFY_ERROR'
+        try { Stop-UnverifiedContainedCloudflared -Process $process } catch { throw 'The unverified Tunnel child could not be cleaned up.' }
         throw
     }
     if ($null -eq $identity) {
         Write-TunnelEvent -EventCode 'CHILD_VERIFY_FAILED'
+        try { Stop-UnverifiedContainedCloudflared -Process $process } catch { throw 'The unverified Tunnel child could not be cleaned up.' }
         throw 'Tunnel child identity could not be verified after startup.'
     }
     Write-TunnelEvent -EventCode 'TUNNEL_STARTED' -ChildProcessId $identity.ProcessId
@@ -694,11 +831,11 @@ function Stop-OwnedCloudflared {
         Write-TunnelEvent -EventCode 'CHILD_IDENTITY_CHANGED' -ChildProcessId ([int]$Child.Identity.ProcessId)
         throw 'The tracked Tunnel child identity changed.'
     }
-    if ($null -ne $ContainmentBinder) {
-        if ($null -eq $ContainmentStopper) {
+    if ($null -ne $ContainedProcessLauncher) {
+        if ($null -eq $ContainedProcessStopper) {
             throw 'The injected Tunnel containment has no exact-child stopper.'
         }
-        $null = & $ContainmentStopper $Child.Process
+        $null = & $ContainedProcessStopper $Child.Process
     } else {
         Close-TunnelContainment
         try {
@@ -743,8 +880,11 @@ function Assert-NoAdditionalCloudflared {
 }
 
 try {
-    if (($null -eq $ContainmentBinder) -ne ($null -eq $ContainmentStopper)) {
-        throw 'Injected Tunnel containment requires matching bind and stop operations.'
+    if (($null -eq $ContainedProcessLauncher) -ne ($null -eq $ContainedProcessStopper)) {
+        throw 'Injected Tunnel containment requires matching launch and stop operations.'
+    }
+    if ($null -ne $ContainedProcessLauncher -and $MaxCycles -eq 0) {
+        throw 'Injected Tunnel containment is allowed only for a bounded validation run.'
     }
     if (-not (Test-Path -LiteralPath $CommonScriptPath -PathType Leaf)) {
         throw 'The Ledger runtime helper is missing.'
