@@ -10,8 +10,10 @@ This repository contains the reproducible source, tests, documentation, and sani
 
 - Windows is the active always-on host; the former Mac receiver is stopped.
 - `openclaw-plugins/clawbot-bookkeeping` owns trusted-message correlation, category validation, deduplication, and local API writes.
+- Its local SQLite state also carries pending confirmations, trusted tool bindings, and authoritative replies across Codex/OpenClaw instance boundaries.
 - `openclaw-plugins/openclaw-weixin-stable-id` preserves Tencent message IDs and sender metadata.
 - `openclaw-workspace/AGENTS.md` is the runtime prompt for the dedicated bookkeeper, not this repository guide.
+- Deterministic HTTP summaries are live. Native MCP history queries are implemented but remain unavailable until the local MCP service and its separate token are enabled through the documented interactive setup.
 
 ## Safety boundaries
 

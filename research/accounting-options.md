@@ -1,10 +1,10 @@
 # 微信记账候选项目调研
 
-更新：用户随后明确改为每笔消费都由模型理解，并提供完整两级分类及 Windows 硬件。当前已部署 ezBookkeeping 与 Windows 本地 Qwen 链路；详见 `../WINDOWS-HANDOFF.md` 和 `../docs/bookkeeping-deployment-brief.md`。当前分类为 11/45，超市消费整笔归“超市购物”。下一阶段将由模型从原消息提炼短备注并返回结构化微信回执。下文仅保留首轮历史调研，不作为当前部署指令。
+更新：当前发布链路已改为 Windows OpenClaw + OpenAI GPT-5.6 Sol 官方 Codex harness + 定制安全插件 + ezBookkeeping，不再使用本地 Qwen；详见 `../WINDOWS-HANDOFF.md` 和 `../docs/bookkeeping-deployment-brief.md`。当前分类为 11/45，超市消费整笔归“超市购物”，结构化回执、对话确认和确定性汇总已上线。下文仅保留 2026-09-03 首轮历史调研，不作为当前部署指令。
 
 核验日期：2026-09-03。仅检索公开仓库、下载并阅读关键源码，未安装插件、未运行候选服务、未更改 OpenClaw 权限。不是完整安全审计或兼容性验收。
 
-## 本机与推理关系
+## 首轮调研时的本机与推理关系（历史）
 
 当前 OpenClaw 在 Mac 上以 LaunchAgent 常驻；微信渠道为腾讯官方 openclaw-weixin。模型为 openai/gpt-5.6-sol，通过已有 OpenAI OAuth 登录访问云端；agentRuntime 为 openclaw，Codex 插件禁用。没有调用本地 Qwen。
 

@@ -8,6 +8,7 @@ WeChat -> OpenClaw owner-bound OpenAI GPT-5.6 Sol (official Codex harness)
      -> trusted write/confirmation adapter -> ezBookkeeping HTTP API
   -> summarize_expenses -> deterministic read adapter -> ezBookkeeping HTTP API
   -> ezbookkeeping__query_transactions -> requester-scoped read-only MCP
+     (code-ready; local MCP activation still pending)
 ```
 
 仓库保存可复现源码、测试、文档和脱敏配置模板。真实凭据、微信身份、消息正文、OpenClaw 状态和账本数据只留在 Windows 主机。原 Mac 接收端已停止，不应与 Windows iLink 接收端同时运行。
@@ -25,6 +26,7 @@ WeChat -> OpenClaw owner-bound OpenAI GPT-5.6 Sol (official Codex harness)
 | 账户与币种 | 唯一可见 SGD 账户 `日常支出`；回执显示 `日常账本` |
 | 分类 | 运行时以 `openclaw-plugins/clawbot-bookkeeping/categories.mjs` 的不可变 `CATEGORY_DEFINITIONS` 为权威契约，固定为 11 个一级、45 个二级分类 |
 | 专用代理 allowlist | `record_expense`、`prepare_expense`、`resolve_expense_confirmation`、`summarize_expenses`、`ezbookkeeping__query_transactions` |
+| 灵活历史查询 | 代码与最小权限契约已就绪；截至 2026-09-04，本机 `enable_mcp=false` 且独立 MCP token 尚未生成，因此尚未上线 |
 
 ## 助理行为
 
@@ -60,6 +62,7 @@ Codex 理解金额、正式分类和语义备注；程序负责可信微信消�
 
 - `summarize_expenses` 处理今天、本周、本月、上月、今年或自定义日期范围的精确汇总，可再按正式分类或备注关键词筛选。金额以整数分累加，返回总额、笔数、所有非零一级分类和最大三笔。
 - `ezbookkeeping__query_transactions` 处理“最近三笔是什么”“上月在某商家买过什么”等灵活历史查询。默认 3 条、最多 10 条是专用代理的回复策略，不是原生 MCP 上由项目包装器强制执行的安全上限；安全边界仍是 owner-only resolver 和工具 allowlist。
+- 上述灵活历史查询是已实现但未激活的能力。在用户于可见终端运行 `scripts/configure-ezbookkeeping-mcp.ps1` 并完成密码输入前，不得宣称“最近几笔/商家明细”查询已可用；当前已上线的查账能力是 `summarize_expenses` 确定性汇总。
 - 查询意图优先于数字识别；问题中的日期或数量不能触发记账。写入与查询同时出现时，本轮只处理一次明确写入，查询须另发消息。
 - 所有回复只展示最终结果，不展示思考过程、工具名、JSON、参数、候选分类或重试过程。
 
@@ -98,7 +101,9 @@ openclaw plugins enable codex --accept-capabilities
 openclaw models auth login --provider openai --agent bookkeeper
 ```
 
-`config/weixin-bookkeeper-agent.example.json` 将 `openai/gpt-5.6-sol` 显式绑定到 `agentRuntime.id: codex`。这是 fail-closed 配置：Codex harness 不可用时该轮失败，不自动退回本地 Qwen 或其他模型。
+`config/weixin-bookkeeper-agent.example.json` 将 `openai/gpt-5.6-sol` 显式绑定到 `agentRuntime.id: codex`，并把 Codex 动态工具加载设为 `direct`。专用代理只有五个经过 allowlist 的账本工具；直接加载让 Code Mode 可通过 `exec` 中现成的 `tools.<账本工具>` 调用，而不先搜索工具目录。包装返回字符串时必须原样输出完整字符串。这是 fail-closed 配置：Codex harness 不可用时该轮失败，不自动退回本地 Qwen 或其他模型。
+
+账本插件还会把当前可信微信接收者的哈希身份绑定到工具回执，并把短期工具绑定、待确认项与权威回执交接保存到本地 SQLite。即使 Codex 内层工具轮次和微信外层发送轮次落在不同插件实例、使用不同运行编号，最后一跳也只会在接收者唯一匹配时预留并替换为工具生成的权威文本。发送成功后才消费回执，发送失败则释放预留；接收者不同或候选不唯一时拒绝猜测。原始微信身份不会写入日志或仓库。
 
 两个安装脚本都支持 `-WhatIf`。先预演，再实际执行；MCP 配置脚本只在实际执行时交互读取密码。
 

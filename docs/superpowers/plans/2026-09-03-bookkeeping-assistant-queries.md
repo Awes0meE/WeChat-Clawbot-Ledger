@@ -1,5 +1,7 @@
 # Local Bookkeeping Assistant Queries Implementation Plan
 
+> **Historical record (2026-09-04):** This plan has been implemented in later commits and must not be executed verbatim. The runtime moved from local Qwen to the official Codex harness, deterministic summaries are live, and native MCP activation is still pending. Use `README.md` and `WINDOWS-HANDOFF.md` for current operations.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn the local WeChat bookkeeper into an owner-only assistant that records one expense safely, returns a rich receipt, and answers historical and aggregate expense questions accurately.
