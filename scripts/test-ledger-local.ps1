@@ -278,6 +278,9 @@ Invoke-LocalLedgerCheck -Name 'production_configuration' -Check {
         'global.mode' = 'production'
         'uuid.generator_type' = 'internal'
         'uuid.server_id' = '0'
+        'duplicate_checker.checker_type' = 'in_memory'
+        'duplicate_checker.cleanup_interval' = '60'
+        'duplicate_checker.duplicate_submissions_interval' = '300'
         'server.protocol' = 'http'
         'server.http_addr' = '127.0.0.1'
         'server.http_port' = '8888'
@@ -296,7 +299,10 @@ Invoke-LocalLedgerCheck -Name 'production_configuration' -Check {
         'auth.enable_oauth2_auth' = 'false'
         'auth.enable_two_factor' = 'true'
         'auth.enable_forget_password' = 'false'
+        'auth.oauth2_user_identifier' = 'email'
         'user.enable_register' = 'false'
+        'map.amap_security_verification_method' = 'internal_proxy'
+        'exchange_rates.data_source' = 'euro_central_bank'
     }
     foreach ($key in $required.Keys) {
         $separator = $key.IndexOf('.')

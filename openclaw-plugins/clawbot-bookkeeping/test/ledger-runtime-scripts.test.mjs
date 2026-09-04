@@ -147,6 +147,10 @@ mode = production
 [uuid]
 generator_type = internal
 server_id = 0
+[duplicate_checker]
+checker_type = in_memory
+cleanup_interval = 60
+duplicate_submissions_interval = 300
 [server]
 protocol = http
 http_addr = ${address}
@@ -173,8 +177,13 @@ enable_internal_auth = true
 enable_oauth2_auth = false
 enable_two_factor = true
 enable_forget_password = true
+oauth2_user_identifier = email
 [user]
 enable_register = true
+[map]
+amap_security_verification_method = internal_proxy
+[exchange_rates]
+data_source = euro_central_bank
 `;
 }
 
@@ -598,6 +607,10 @@ mode = production
 [uuid]
 generator_type = internal
 server_id = 1
+[duplicate_checker]
+checker_type = in_memory
+cleanup_interval = 60
+duplicate_submissions_interval = 300
 [server]
 protocol = http
 http_addr = 127.0.0.1
@@ -629,8 +642,13 @@ enable_internal_auth = true
 enable_oauth2_auth = false
 enable_two_factor = true
 enable_forget_password = false
+oauth2_user_identifier = email
 [user]
 enable_register = false
+[map]
+amap_security_verification_method = internal_proxy
+[exchange_rates]
+data_source = euro_central_bank
 `, 'utf8');
     writeFileSync(wrapperPath, `
 $global:httpCalled = $false
@@ -781,6 +799,10 @@ test('sanitized production and test templates encode the complete runtime bounda
     assert.match(source, /enable_two_factor\s*=\s*true/u);
     assert.match(source, /enable_forget_password\s*=\s*false/u);
     assert.match(source, /enable_register\s*=\s*false/u);
+    assert.match(source, /checker_type\s*=\s*in_memory/u);
+    assert.match(source, /oauth2_user_identifier\s*=\s*email/u);
+    assert.match(source, /amap_security_verification_method\s*=\s*internal_proxy/u);
+    assert.match(source, /data_source\s*=\s*euro_central_bank/u);
     assert.doesNotMatch(source, /^(?:password|passwd|api_token|mcp_token|secret_key)\s*=\s*(?!__)[^\s;]/imu);
   }
   assert.match(production, /db_path\s*=\s*D:\\Clawbot\\ezbookkeeping\\data\\ezbookkeeping\.db/u);
@@ -819,6 +841,10 @@ root_url = http://127.0.0.1:18888/
 [mcp]
 enable_mcp = false
 mcp_allowed_remote_ips = 127.0.0.1
+[duplicate_checker]
+checker_type = in_memory
+cleanup_interval = 60
+duplicate_submissions_interval = 300
 [database]
 type = sqlite3
 db_path = ${join(installDirectory, 'data', 'ezbookkeeping-test.db')}
@@ -840,8 +866,13 @@ enable_internal_auth = true
 enable_oauth2_auth = false
 enable_two_factor = true
 enable_forget_password = false
+oauth2_user_identifier = email
 [user]
 enable_register = false
+[map]
+amap_security_verification_method = internal_proxy
+[exchange_rates]
+data_source = euro_central_bank
 `;
 
     for (const [uuidBlock, expected] of [
@@ -856,6 +887,23 @@ enable_register = false
       ]);
       assert.equal(result.status, 0, result.stderr || result.stdout);
       assert.equal(result.stdout.trim(), expected, uuidBlock || 'missing UUID block');
+    }
+
+    const valid = `${base}[uuid]\ngenerator_type = internal\nserver_id = 1\n`;
+    for (const [setting, invalid] of [
+      ['checker_type = in_memory', 'checker_type = unsupported'],
+      ['cleanup_interval = 60', 'cleanup_interval = 61'],
+      ['duplicate_submissions_interval = 300', 'duplicate_submissions_interval = 0'],
+      ['oauth2_user_identifier = email', 'oauth2_user_identifier = unsupported'],
+      ['amap_security_verification_method = internal_proxy', 'amap_security_verification_method = unsupported'],
+      ['data_source = euro_central_bank', 'data_source = unsupported'],
+    ]) {
+      writeFileSync(configPath, valid.replace(setting, invalid), 'utf8');
+      const result = runPowerShell([
+        '-File', wrapperPath, join(scriptsDirectory, 'ledger-runtime-common.ps1'), installDirectory, configPath,
+      ]);
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(result.stdout.trim(), 'rejected', setting);
     }
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -1166,6 +1214,10 @@ test('production migration makes a verified SQLite backup and installs the exact
     for (const expected of [
       'generator_type = internal',
       'server_id = 0',
+      'checker_type = in_memory',
+      'oauth2_user_identifier = email',
+      'amap_security_verification_method = internal_proxy',
+      'data_source = euro_central_bank',
       'http_addr = 127.0.0.1',
       'http_port = 8888',
       'domain = ledger.66ccff-labs.com',

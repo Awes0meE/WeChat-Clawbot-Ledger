@@ -22,6 +22,9 @@ if ([string]::IsNullOrWhiteSpace($SqliteVerifierPath)) {
 $migratedSettingNames = @(
     'UUID_GENERATOR_TYPE',
     'UUID_SERVER_ID',
+    'DUPLICATE_CHECKER_CHECKER_TYPE',
+    'DUPLICATE_CHECKER_CLEANUP_INTERVAL',
+    'DUPLICATE_CHECKER_DUPLICATE_SUBMISSIONS_INTERVAL',
     'SERVER_PROTOCOL',
     'SERVER_HTTP_ADDR',
     'SERVER_HTTP_PORT',
@@ -42,7 +45,10 @@ $migratedSettingNames = @(
     'AUTH_ENABLE_OAUTH2_AUTH',
     'AUTH_ENABLE_TWO_FACTOR',
     'AUTH_ENABLE_FORGET_PASSWORD',
-    'USER_ENABLE_REGISTER'
+    'AUTH_OAUTH2_USER_IDENTIFIER',
+    'USER_ENABLE_REGISTER',
+    'MAP_AMAP_SECURITY_VERIFICATION_METHOD',
+    'EXCHANGE_RATES_DATA_SOURCE'
 )
 
 $install = Get-LedgerNormalizedPath -Path $InstallDirectory
@@ -75,6 +81,11 @@ if ($profileMarkers.Count -gt 1 -or
 }
 $currentRequirements = @{
     'global.mode' = 'production'
+    'uuid.generator_type' = 'internal'
+    'uuid.server_id' = '0'
+    'duplicate_checker.checker_type' = 'in_memory'
+    'duplicate_checker.cleanup_interval' = '60'
+    'duplicate_checker.duplicate_submissions_interval' = '300'
     'server.protocol' = 'http'
     'server.http_addr' = '127.0.0.1'
     'server.http_port' = '8180'
@@ -255,6 +266,9 @@ try {
     $updatedText = Set-LedgerIniValues -Document $document -Settings @{
         'uuid.generator_type' = 'internal'
         'uuid.server_id' = '0'
+        'duplicate_checker.checker_type' = 'in_memory'
+        'duplicate_checker.cleanup_interval' = '60'
+        'duplicate_checker.duplicate_submissions_interval' = '300'
         'server.protocol' = 'http'
         'server.http_addr' = '127.0.0.1'
         'server.http_port' = '8888'
@@ -272,7 +286,10 @@ try {
         'auth.enable_oauth2_auth' = 'false'
         'auth.enable_two_factor' = 'true'
         'auth.enable_forget_password' = 'false'
+        'auth.oauth2_user_identifier' = 'email'
         'user.enable_register' = 'false'
+        'map.amap_security_verification_method' = 'internal_proxy'
+        'exchange_rates.data_source' = 'euro_central_bank'
     }
     if ($updatedText -notmatch '(?m)^; CLAWBOT_LEDGER_PROFILE=production\s*$') {
         $updatedText = '; CLAWBOT_LEDGER_PROFILE=production' + $document.LineEnding + $updatedText

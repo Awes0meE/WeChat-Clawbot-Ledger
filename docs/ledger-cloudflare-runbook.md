@@ -89,6 +89,7 @@ git diff --check
 - 只白名单复制程序资产，不复制正式 `conf`、`data`、`storage` 或日志；
 - 创建独立配置、随机 secret、数据库、token 和任务；
 - 固定 `generator_type = internal`，并使用与正式实例 `0` 不同的 UUID `server_id = 1`；
+- 显式保留 v1.6.1 启动必需的 `in_memory` duplicate checker、OAuth2 identifier、Amap verification method 与汇率源，即使相应可选功能当前关闭；
 - 固定 `127.0.0.1:18888`，禁止回退到 `8888`；
 - 拒绝缺少受控 marker 的已有目录或同名任务；
 - 在安全的 visible terminal 中使用 `Read-Host -AsSecureString` 创建测试账户，不把密码放进参数或进程列表；

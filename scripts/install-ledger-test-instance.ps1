@@ -129,6 +129,9 @@ function Assert-LedgerTestTemplate {
         'global.mode' = 'production'
         'uuid.generator_type' = 'internal'
         'uuid.server_id' = '1'
+        'duplicate_checker.checker_type' = 'in_memory'
+        'duplicate_checker.cleanup_interval' = '60'
+        'duplicate_checker.duplicate_submissions_interval' = '300'
         'server.protocol' = 'http'
         'server.http_addr' = '127.0.0.1'
         'server.http_port' = '18888'
@@ -148,7 +151,10 @@ function Assert-LedgerTestTemplate {
         'auth.enable_oauth2_auth' = 'false'
         'auth.enable_two_factor' = 'true'
         'auth.enable_forget_password' = 'false'
+        'auth.oauth2_user_identifier' = 'email'
         'user.enable_register' = 'false'
+        'map.amap_security_verification_method' = 'internal_proxy'
+        'exchange_rates.data_source' = 'euro_central_bank'
     }
     foreach ($key in $required.Keys) {
         $separator = $key.IndexOf('.')
@@ -285,6 +291,7 @@ Assert-LedgerTestTemplate -Document $templateDocument
 Assert-LedgerNoConfigurationOverrides -SettingNames @(
     'GLOBAL_MODE',
     'UUID_GENERATOR_TYPE', 'UUID_SERVER_ID',
+    'DUPLICATE_CHECKER_CHECKER_TYPE', 'DUPLICATE_CHECKER_CLEANUP_INTERVAL', 'DUPLICATE_CHECKER_DUPLICATE_SUBMISSIONS_INTERVAL',
     'SERVER_PROTOCOL', 'SERVER_HTTP_ADDR', 'SERVER_HTTP_PORT', 'SERVER_DOMAIN', 'SERVER_ROOT_URL',
     'MCP_ENABLE_MCP', 'MCP_MCP_ALLOWED_REMOTE_IPS',
     'DATABASE_TYPE', 'DATABASE_DB_PATH',
@@ -294,7 +301,8 @@ Assert-LedgerNoConfigurationOverrides -SettingNames @(
     'SECURITY_TOKEN_MIN_REFRESH_INTERVAL', 'SECURITY_ENABLE_API_TOKEN', 'SECURITY_API_TOKEN_ALLOWED_REMOTE_IPS',
     'SECURITY_MAX_FAILURES_PER_IP_PER_MINUTE', 'SECURITY_MAX_FAILURES_PER_USER_PER_MINUTE',
     'AUTH_ENABLE_INTERNAL_AUTH', 'AUTH_ENABLE_OAUTH2_AUTH', 'AUTH_ENABLE_TWO_FACTOR', 'AUTH_ENABLE_FORGET_PASSWORD',
-    'USER_ENABLE_REGISTER'
+    'AUTH_OAUTH2_USER_IDENTIFIER', 'USER_ENABLE_REGISTER', 'MAP_AMAP_SECURITY_VERIFICATION_METHOD',
+    'EXCHANGE_RATES_DATA_SOURCE'
 )
 
 $allTasks = @(Get-ScheduledTask -ErrorAction Stop | Where-Object {
