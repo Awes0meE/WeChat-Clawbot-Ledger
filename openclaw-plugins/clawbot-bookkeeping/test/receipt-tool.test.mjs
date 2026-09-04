@@ -219,6 +219,8 @@ function successfulExpenseFetch(requests) {
       return new Response(JSON.stringify({ success: true, result: {
         2: [{ id: 'primary-1', name: '食品酒水', parentId: '0', subCategories: [
           { id: 'secondary-1', name: '早午晚餐', parentId: 'primary-1' },
+        ] }, { id: 'primary-learning', name: '学习进修', parentId: '0', subCategories: [
+          { id: 'secondary-equipment', name: '数码装备', parentId: 'primary-learning' },
         ] }],
       } }), { status: 200 });
     }
@@ -1695,6 +1697,71 @@ test('binds cached record tool calls to each inbound run without retaining a que
     ]);
   } finally {
     harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('prefers a fresh durable inbound over a cached result from an earlier run', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const fetchImpl = successfulExpenseFetch(requests);
+  const hookHarness = createPluginHarness(tempDirectory, fetchImpl);
+  let toolHarness;
+
+  try {
+    toolHarness = createPluginHarness(tempDirectory, fetchImpl);
+    const cachedTool = toolHarness.rawRecordExpenseFactory(trustedOwnerContext());
+
+    await beginTrustedOwnerTurn(hookHarness.inboundHooks, {
+      content: '午饭7.2',
+      messageId: 'stale-result-first-message',
+      runId: 'stale-result-first-run',
+    });
+    await bindToolCallForTurn(hookHarness.inboundHooks, {
+      runId: 'stale-result-first-run',
+      toolCallId: 'stale-result-first-hook',
+      params: receivedExpenseParams({ amount: '99' }),
+    });
+    const first = await cachedTool.execute(
+      'stale-result-first-execute',
+      receivedExpenseParams({ amount: '99' }),
+    );
+
+    await beginTrustedOwnerTurn(hookHarness.inboundHooks, {
+      content: 'Shopee购物3.36 买了一根HDMI线',
+      messageId: 'fresh-second-message',
+      runId: 'fresh-second-run',
+    });
+    await bindToolCallForTurn(hookHarness.inboundHooks, {
+      runId: 'fresh-second-run',
+      toolCallId: 'fresh-second-hook',
+      params: receivedExpenseParams({
+        amount: '3.36',
+        primaryCategory: '学习进修',
+        subcategory: '数码装备',
+        comment: 'Shopee，一根HDMI线',
+      }),
+    });
+    const second = await cachedTool.execute(
+      'fresh-second-execute',
+      receivedExpenseParams({
+        amount: '3.36',
+        primaryCategory: '学习进修',
+        subcategory: '数码装备',
+        comment: 'Shopee，一根HDMI线',
+      }),
+    );
+
+    assert.equal(first.details.status, 'rejected');
+    assert.equal(second.details.status, 'created');
+    const posted = requests
+      .filter(({ url }) => url.endsWith('/transactions/add.json'))
+      .map(({ options }) => JSON.parse(options.body));
+    assert.deepEqual(posted.map(({ sourceAmount }) => sourceAmount), [336]);
+  } finally {
+    toolHarness?.restore();
+    hookHarness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
   }
 });
