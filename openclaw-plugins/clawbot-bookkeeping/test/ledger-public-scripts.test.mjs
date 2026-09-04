@@ -222,6 +222,17 @@ test('portfolio baseline capture handles a Cloudflare-flattened apex without com
   assert.doesNotMatch(helper, /JSON\.stringify\(matches\[0\]\)\s*!==\s*JSON\.stringify\(actualEntry\)/u);
 });
 
+test('public acceptance has an explicit pre-HSTS gate that requires HSTS to be absent', () => {
+  const wrapper = readRequired(publicTestPath);
+  const helper = readRequired(publicHelperPath);
+
+  assert.match(wrapper, /PreHstsValidation/u);
+  assert.match(helper, /--pre-hsts-validation/u);
+  assert.match(helper, /preHstsValidation/u);
+  assert.match(helper, /preHstsValidation[\s\S]*hsts\s*!==\s*''/u);
+  assert.match(helper, /!preHstsValidation[\s\S]*hstsMatch/u);
+});
+
 test('public acceptance rejects unsafe arguments before any network or credential output', () => {
   const result = runPowerShell([
     '-File',

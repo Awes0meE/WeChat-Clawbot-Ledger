@@ -32,6 +32,7 @@ function parseArguments(values) {
     validateFreeGate: false,
     freeRateLimitEvidencePath: '',
     expectLedgerUnavailable: false,
+    preHstsValidation: false,
   };
   for (let index = 0; index < values.length; index += 1) {
     const name = values[index];
@@ -51,6 +52,7 @@ function parseArguments(values) {
       case '--validate-free-rate-limit-gate': options.validateFreeGate = true; break;
       case '--free-rate-limit-evidence': options.freeRateLimitEvidencePath = nextValue(); break;
       case '--expect-ledger-unavailable': options.expectLedgerUnavailable = true; break;
+      case '--pre-hsts-validation': options.preHstsValidation = true; break;
       default: fail('LEDGER_PUBLIC_ARGUMENT_INVALID');
     }
   }
@@ -69,6 +71,9 @@ function parseArguments(values) {
     fail('LEDGER_PUBLIC_ARGUMENT_INVALID');
   }
   if (!options.validateFreeGate && options.freeRateLimitEvidencePath) fail('LEDGER_PUBLIC_ARGUMENT_INVALID');
+  if (options.preHstsValidation && (options.capture || options.expectLedgerUnavailable || options.validateFreeGate)) {
+    fail('LEDGER_PUBLIC_ARGUMENT_INVALID');
+  }
   if (!options.capture && !options.expectLedgerUnavailable && !options.validateFreeGate && !options.apiTokenPath) {
     fail('LEDGER_PUBLIC_API_TOKEN_REQUIRED');
   }
@@ -313,7 +318,7 @@ function readToken(path) {
   return token;
 }
 
-async function assertLedgerSurface(timeoutMs) {
+async function assertLedgerSurface(timeoutMs, preHstsValidation) {
   const suffix = '/ledger-acceptance/path?probe=1';
   const redirect = await request({ method: 'GET', url: `http://${LEDGER_HOST}${suffix}` }, timeoutMs);
   if (redirect.statusCode !== 301
@@ -339,7 +344,10 @@ async function assertLedgerSurface(timeoutMs) {
   }
   const hsts = headerValue(root.headers, 'strict-transport-security');
   const hstsMatch = /^max-age=([0-9]+)$/iu.exec(hsts);
-  if (!hstsMatch || Number(hstsMatch[1]) < 86400) fail('LEDGER_PUBLIC_HSTS_FAILED');
+  if (preHstsValidation && hsts !== '') fail('LEDGER_PUBLIC_HSTS_PREMATURE');
+  if (!preHstsValidation && (!hstsMatch || Number(hstsMatch[1]) < 86400)) {
+    fail('LEDGER_PUBLIC_HSTS_FAILED');
+  }
   assertNotCached(root);
   root.body = '';
 
@@ -509,7 +517,7 @@ async function main() {
     if (options.expectLedgerUnavailable) {
       await assertLedgerUnavailable(options.timeoutMs);
     } else {
-      await assertLedgerSurface(options.timeoutMs);
+      await assertLedgerSurface(options.timeoutMs, options.preHstsValidation);
       if (options.apiTokenPath) await assertCredentialRejected('api', options.apiTokenPath, options.timeoutMs);
       if (options.mcpTokenPath) await assertCredentialRejected('mcp', options.mcpTokenPath, options.timeoutMs);
       if (options.verifyRateLimit) await assertRateLimit(options.timeoutMs);

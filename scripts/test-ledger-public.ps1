@@ -21,6 +21,8 @@ param(
 
     [switch]$ExpectLedgerUnavailable,
 
+    [switch]$PreHstsValidation,
+
     [string]$NodeExecutable = 'node.exe',
 
     [string]$HelperPath
@@ -91,6 +93,9 @@ if ($ValidateFreePlanRateLimitGate) {
 }
 if ($ExpectLedgerUnavailable) {
     $arguments += '--expect-ledger-unavailable'
+}
+if ($PreHstsValidation) {
+    $arguments += '--pre-hsts-validation'
 }
 
 $global:LASTEXITCODE = 0

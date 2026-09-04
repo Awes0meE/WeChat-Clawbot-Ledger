@@ -244,7 +244,18 @@ Referrer-Policy: no-referrer
 X-Robots-Tag: noindex, nofollow, noarchive
 ```
 
-初次创建的完整 header rule 不带 HSTS。公网 HTTPS、登录和 CRUD 全部验证后，再对 API readback 已确认 ID 的这一条 rule 发送完整 PATCH，仅加入 `Strict-Transport-Security: max-age=86400`。不要设置 `includeSubDomains` 或 `preload`，不要影响 apex/`www`。
+初次创建的完整 header rule 不带 HSTS。DNS 生效后，先用明确要求 HSTS 尚未出现的模式完成 HTTP/HTTPS、登录页、cache、WAF、token 与作品集初验：
+
+```powershell
+.\scripts\test-ledger-public.ps1 `
+  -ComparePortfolioBaseline `
+  -PortfolioBaselinePath 'D:\Clawbot\deployment-evidence\portfolio-before-v2.json' `
+  -ApiTokenPath "$env:USERPROFILE\.openclaw\secrets\ezbookkeeping-token.txt" `
+  -McpTokenPath "$env:USERPROFILE\.openclaw\secrets\ezbookkeeping-mcp-token.txt" `
+  -PreHstsValidation
+```
+
+仅在 MCP 已启用且独立 token 存在时传 `-McpTokenPath`。再用真实浏览器完成登录和 CRUD。初验全部通过后，对 API readback 已确认 ID 的这一条 rule 发送完整 PATCH，仅加入 `Strict-Transport-Security: max-age=86400`。不要设置 `includeSubDomains` 或 `preload`，不要影响 apex/`www`。
 
 ### WAF Custom Rule
 
