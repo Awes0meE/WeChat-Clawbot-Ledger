@@ -35,6 +35,7 @@
 - Modify: `openclaw-plugins/clawbot-bookkeeping/test/*.test.mjs`
 - Modify: `scripts/configure-ezbookkeeping-mcp.ps1`
 - Modify: `scripts/initialize-test-ledger.ps1`
+- Modify: `scripts/install-ezbookkeeping-task.ps1`
 - Create: `config/ezbookkeeping-production.example.ini`
 - Create: `config/ezbookkeeping-test.example.ini`
 - Create: `scripts/ledger-runtime-common.ps1`
@@ -46,8 +47,8 @@
 ### Step 1: Write failing endpoint and isolation tests
 
 - [ ] Add source-level assertions that every production default is exactly `http://127.0.0.1:8888`, never `8180`, `0.0.0.0`, `localhost`, or a public hostname.
-- [ ] Add script tests proving that test initialization accepts only `http://127.0.0.1:18888`, requires an independent test-instance marker, rejects the production token path, and performs no token read or HTTP request under `-WhatIf`.
-- [ ] Add script tests proving that the production migration refuses a non-loopback address, an unknown port owner, a mismatched executable/config path, an unhealthy response, a database with failed `quick_check`, or an active-user count other than one.
+- [ ] Add script tests proving that test initialization accepts only `http://127.0.0.1:18888`, revalidates the expected test executable/config/port owner before reading a token, requires an independent ready marker, rejects the production token path, disables redirects, bounds every request, sanitizes errors, and performs no token read or HTTP request under `-WhatIf`.
+- [ ] Add script tests proving that the production migration refuses a non-loopback address, an unknown port owner, a mismatched executable/config path, an unhealthy response, a database with failed `quick_check`, an active-user count other than one, or any `EBK_*`/`EBKCFP_*` environment override for a migrated key.
 - [ ] Add script tests proving that no failure path stops an unknown PID and that the original INI is restored atomically when a post-edit validation fails.
 - [ ] Run:
 
@@ -60,7 +61,7 @@
 
 ### Step 2: Implement exact production defaults and an isolated test initializer
 
-- [ ] Change all plugin defaults, manifest examples, MCP URLs, category snapshot targets, and test expectations from port `8180` to `8888`.
+- [ ] Change all production plugin defaults, manifest examples, MCP URLs, and test expectations from port `8180` to `8888`. Remove the endpoint from the category catalog so its historical `imported_verified` provenance is not falsely reassigned to a new runtime.
 - [ ] Keep the configured URL override but validate that production bookkeeping and MCP URLs are exact loopback HTTP URLs on port `8888`; reject public, wildcard, hostname-alias, and test-port targets rather than silently falling back.
 - [ ] Update `initialize-test-ledger.ps1` to use only port `18888`, a `%USERPROFILE%\.openclaw\secrets\ezbookkeeping-test-token.txt` token path, and a marker owned by the separately provisioned test instance.
 - [ ] Preserve `SupportsShouldProcess`; evaluate `ShouldProcess` before reading the token or issuing HTTP requests.
@@ -68,8 +69,8 @@
 
 ### Step 3: Add redacted SQLite verification and sanitized INI templates
 
-- [ ] Implement `verify-ledger-sqlite.mjs` as read-only verification that opens the named local database, checks the SQLite header, runs `PRAGMA quick_check`, and returns only status plus active-user count. It must never print usernames, password hashes, tokens, transaction rows, or database paths.
-- [ ] Add tests using generated temporary SQLite fixtures for valid one-user, zero-user, two-user, corrupt, and non-SQLite cases.
+- [ ] Implement `verify-ledger-sqlite.mjs` as read-only/query-only verification that opens the named local database without extensions, checks the SQLite header, runs `PRAGMA quick_check`, verifies the fixed `user` table's `deleted` and `disabled` columns, and returns only status plus enabled, undeleted user count. Add a backup mode using Node 24's `node:sqlite` backup API so a WAL-enabled production database is copied consistently. It must never print raw exceptions, usernames, password hashes, tokens, transaction rows, or database paths.
+- [ ] Add tests using generated temporary SQLite fixtures for valid one-user, zero-user, two-user, disabled-user, corrupt, non-SQLite, missing-table, and bounded-lock-wait cases.
 - [ ] Add production and test INI examples with sanitized local placeholders and the exact required settings:
 
   ```ini
@@ -107,13 +108,14 @@
 ### Step 4: Implement guarded migration and test-instance installation
 
 - [ ] Put reusable strict INI parsing, atomic replacement, file hashing, ACL checking, scheduled-task action validation, listener ownership, health checking, and sanitized status output in `ledger-runtime-common.ps1`.
-- [ ] Make `migrate-ledger-production.ps1` discover the existing config and database from the verified root task whose current action is exactly `D:\Clawbot\ezbookkeeping\ezbookkeeping.exe server run` with working directory `D:\Clawbot\ezbookkeeping`; require that exact executable/config pair to own port `8180`, and reject ambiguity.
+- [ ] Make `migrate-ledger-production.ps1` accept the default config only after recognizing the verified root task whose current action is exactly `D:\Clawbot\ezbookkeeping\ezbookkeeping.exe server run` with working directory `D:\Clawbot\ezbookkeeping`; require that exact executable pair to own port `8180`, and reject ambiguity.
+- [ ] Reject `EBK_CONF_PATH` and every process/user/machine `EBK_*` or `EBKCFP_*` override that can supersede a migrated INI key; do not report the environment-variable value.
 - [ ] Have migration preflight OpenClaw config by key names only and reject any static MCP token fallback before touching production.
-- [ ] Stop only the verified production task/process, create a timestamped backup outside the repository, compare source/backup hashes, verify the backup database, and require exactly one active user.
+- [ ] Immediately before stopping, revalidate PID, creation time, executable, complete command/config, and port ownership to prevent PID-reuse races. Stop only the verified production task/process, persist and verify the exact scheduled-task definition plus a timestamped configuration/database backup outside the repository, compare the configuration source/backup hashes, make a consistent SQLite backup through `node:sqlite` rather than raw-copying a possible WAL database, hash and verify that backup, and require exactly one enabled, undeleted user.
 - [ ] Atomically set the required production INI keys while preserving all unrelated values, including the current `enable_mcp` choice.
-- [ ] Restart the exact task and require only `127.0.0.1:8888` to listen with the expected executable, a successful health JSON response, and the ezBookkeeping page fingerprint. Restore only the INI backup and original service state on failure.
-- [ ] Make `install-ledger-test-instance.ps1` create `D:\Clawbot\ezbookkeeping-test` with owner-only config/secrets, a unique marker, independent SQLite/storage/log locations, and an exact hidden scheduled-task action using port `18888`.
-- [ ] Require local-only bootstrap and then force `enable_register=false` before the test instance can be marked ready. Never copy production account, token, secret key, or database.
+- [ ] Replace only the recognized legacy task action with an exact explicit-config action equivalent to `ezbookkeeping.exe --conf-path D:\Clawbot\ezbookkeeping\conf\ezbookkeeping.ini server run`; never force-replace a mismatched task. Restart it and require only `127.0.0.1:8888` to listen with the expected executable, a successful health JSON response, and the ezBookkeeping page fingerprint. Restore the task definition, INI backup, and original service state on failure.
+- [ ] Make `install-ledger-test-instance.ps1` allowlist-copy only immutable program assets into a new or validly marked `D:\Clawbot\ezbookkeeping-test`; reject an unmarked/non-empty directory or mismatched task. Create owner-only config/secrets, a unique marker, independent SQLite/storage/log locations, and an exact hidden scheduled-task action using port `18888`.
+- [ ] Bootstrap only through a visible local prompt using `Read-Host -AsSecureString` and the loopback registration API—never a password command-line argument—then force `enable_register=false` before the test instance can be marked ready. Any failure must restore registration disabled, stop only the recognized test task, and omit the ready marker. Never copy production account, token, secret key, database, or raw application output.
 - [ ] Run focused script tests and both plugin suites:
 
   ```powershell
@@ -146,7 +148,7 @@
 
 ### Step 1: Write failing release and rollback tests
 
-- [ ] Add PowerShell-shim tests proving that release publication copies only an explicit allowlist, excludes tests, `node_modules`, `.git`, logs, databases, secrets, and state, and aborts on any unsupported source file.
+- [ ] Add PowerShell-shim tests proving that release publication copies only an explicit source allowlist, excludes source tests, source `node_modules`, `.git`, logs, databases, secrets, and state, and aborts on any unsupported source file. Runtime dependencies must instead be installed from committed lockfiles into staging and included in verification.
 - [ ] Prove every release file is hashed in a manifest and that verification fails on a missing, added, or modified file.
 - [ ] Prove `openclaw config patch --dry-run` happens before a live patch, only the two known development plugin paths and the bookkeeper workspace are replaced, unrelated plugin paths/config remain unchanged, and failure restores a hash-verified config backup.
 - [ ] Prove restart happens only after release and config verification, and an invalid release leaves the running Gateway untouched.
@@ -162,15 +164,15 @@
 ### Step 2: Implement immutable release publication
 
 - [ ] Build the stable-ID plugin first, then copy the bookkeeping plugin, compiled stable-ID plugin, and bookkeeper workspace to a sibling staging directory under `D:\Clawbot\releases`.
-- [ ] Derive the release name from the current full Git commit and refuse a dirty source tree during live publication.
-- [ ] Use an explicit file allowlist and reject SQLite, token, credential, identity, transcript, log, cache, dependency, and VCS artifacts.
+- [ ] Derive the release name from the current full Git commit and refuse a dirty source tree both before and after the build, so generated tracked output can never silently diverge from the commit.
+- [ ] Use an explicit source file allowlist and reject SQLite, token, credential, identity, transcript, log, cache, source dependency, and VCS artifacts. Include both plugin lockfiles; install locked runtime dependencies in staging with lifecycle scripts disabled, omit bookkeeping's OpenClaw peer, and validate that all non-host imports resolve from the isolated release.
 - [ ] Generate `release-manifest.json` containing only relative paths, byte lengths, and SHA-256 hashes; atomically rename staging only after verification. Existing release directories are immutable and must never be overwritten.
 - [ ] Implement `verify-openclaw-release.ps1` to reject missing, extra, changed, reparse-point, or out-of-root files.
 
 ### Step 3: Switch OpenClaw with backup and rollback
 
 - [ ] Back up `%USERPROFILE%\.openclaw\openclaw.json` outside the repository and verify its hash before changing it.
-- [ ] Create a temporary patch outside the repository that replaces only matching development paths with release paths, sets the bookkeeper server base URL to `http://127.0.0.1:8888`, and preserves all secret values without printing them.
+- [ ] Create an owner-only minimal temporary patch outside the repository containing only the complete substituted plugin-path array, bookkeeper workspace, and `http://127.0.0.1:8888` base URL. It must not serialize any existing token, owner identity, channel state, or unrelated config; delete it after use.
 - [ ] Run `openclaw config patch --dry-run --file` before the live patch. Validate the result and prove neither plugin load paths nor the bookkeeper workspace points into the Git checkout.
 - [ ] Restart only OpenClaw Gateway, then require Gateway health, channel probe, bookkeeping plugin load, stable-ID plugin load, official Codex harness pinning, and the unchanged owner allowlist.
 - [ ] On any post-patch failure, restore the verified OpenClaw config backup and return the Gateway to its prior state.
@@ -243,6 +245,7 @@
 
 - Create: `config/cloudflare-ledger-rules.example.json`
 - Create: `scripts/test-ledger-public.ps1`
+- Create: `scripts/test-ledger-public.mjs`
 - Create: `scripts/test-ledger-restart.ps1`
 - Create: `openclaw-plugins/clawbot-bookkeeping/test/ledger-public-scripts.test.mjs`
 - Create: `docs/ledger-cloudflare-runbook.md`
@@ -293,8 +296,8 @@
 - [ ] Commit:
 
   ```powershell
-  git add .gitignore AGENTS.md README.md WINDOWS-HANDOFF.md config\cloudflare-ledger-rules.example.json scripts\test-ledger-public.ps1 scripts\test-ledger-restart.ps1 docs\ledger-cloudflare-runbook.md docs\bookkeeping-deployment-brief.md openclaw-plugins\clawbot-bookkeeping\test\ledger-public-scripts.test.mjs
-  git commit -m "docs(ledger): add secure tunnel operations"
+  git add .gitignore AGENTS.md README.md WINDOWS-HANDOFF.md config\cloudflare-ledger-rules.example.json scripts\test-ledger-public.ps1 scripts\test-ledger-public.mjs scripts\test-ledger-restart.ps1 docs\ledger-cloudflare-runbook.md docs\bookkeeping-deployment-brief.md openclaw-plugins\clawbot-bookkeeping\test\ledger-public-scripts.test.mjs
+  git commit -m "feat(ledger): add secure tunnel operations"
   ```
 
 ### Step 5: Deploy local production and test state
