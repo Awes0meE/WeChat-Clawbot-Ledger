@@ -15,7 +15,7 @@ const SINGAPORE_UTC_OFFSET_SECONDS = 8 * 60 * 60;
 const FUTURE_CLOCK_TOLERANCE_SECONDS = 5 * 60;
 const LOCAL_DATE = /^(\d{4})-(\d{2})-(\d{2})$/u;
 const LOCAL_TIME = /^(\d{2}):(\d{2})$/u;
-const EXPLICIT_TIME_CUE = /(?:今天|今日|昨天|昨日|前天|大前天|明天|后天|今晚|昨晚|今早|昨早|凌晨|早上|上午|中午|下午|晚上|周[一二三四五六日天]|星期[一二三四五六日天]|\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*[日号]|\d{1,2}\s*月\s*\d{1,2}\s*[日号]|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|[零〇一二两三四五六七八九十百\d]{1,3}\s*(?:点|时)(?:\s*[零〇一二两三四五六七八九十百\d]{1,3}\s*分)?)/u;
+const EXPLICIT_TIME_CUE = /(?:今天|今日|昨天|昨日|前天|大前天|明天|后天|今晚|昨晚|今早|昨早|凌晨|早上|上午|中午|下午|晚上|周[一二三四五六日天]|星期[一二三四五六日天]|\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*[日号]|\d{1,2}\s*月\s*\d{1,2}\s*[日号]|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|(?:[01]?\d|2[0-3]):[0-5]\d|[零〇一二两三四五六七八九十百\d]{1,3}\s*(?:点|时)(?:\s*[零〇一二两三四五六七八九十百\d]{1,3}\s*分)?)/u;
 
 export class ExpenseRecordingError extends Error {
   constructor(outcome, { dedupeStatus } = {}) {
@@ -278,7 +278,7 @@ export function resolveExpenseTimestamp({ input, inbound }) {
 
   const body = contentBeforeExplicitComment(inbound.content);
   const evidence = String(input.timeEvidence ?? '').trim();
-  if (!evidence || !body.includes(evidence)) {
+  if (!evidence || !body.includes(evidence) || !hasExplicitExpenseTimeCue(evidence)) {
     throw new Error('expense time evidence is not grounded');
   }
 

@@ -175,6 +175,7 @@ test('uses the trusted message timestamp only when no occurrence-time cue exists
   }), 1_788_512_940);
   assert.equal(hasExplicitExpenseTimeCue('晚饭10.5'), false);
   assert.equal(hasExplicitExpenseTimeCue('昨晚六点，晚饭10.5'), true);
+  assert.equal(hasExplicitExpenseTimeCue('18:00晚饭10.5'), true);
   assert.equal(hasExplicitExpenseTimeCue('午饭7.2，顺便查本月支出'), false);
 });
 
@@ -183,6 +184,7 @@ test('rejects ungrounded, invalid, future, and non-SGD time decisions', () => {
   for (const overrides of [
     { timeMode: 'received' },
     { timeMode: 'explicit', localDate: '2026-09-03', localTime: '18:00', timeEvidence: '明天见' },
+    { timeMode: 'explicit', localDate: '2026-09-03', localTime: '18:00', timeEvidence: '晚饭' },
     { timeMode: 'explicit', localDate: '2026-02-30', localTime: '18:00', timeEvidence: '昨天晚上6点' },
     { timeMode: 'explicit', localDate: '2026-09-03', localTime: '25:00', timeEvidence: '昨天晚上6点' },
     { timeMode: 'explicit', localDate: '2026-09-05', localTime: '18:00', timeEvidence: '昨天晚上6点' },
@@ -193,6 +195,19 @@ test('rejects ungrounded, invalid, future, and non-SGD time decisions', () => {
       inbound,
     }));
   }
+});
+
+test('accepts a grounded colon-form clock as explicit time evidence', () => {
+  assert.equal(resolveExpenseTimestamp({
+    input: receivedExpenseInput({
+      amount: '10.5',
+      timeMode: 'explicit',
+      localDate: '2026-09-03',
+      localTime: '18:00',
+      timeEvidence: '昨天18:00',
+    }),
+    inbound: { content: '昨天18:00晚饭10.5', timestamp: 1_788_512_940 },
+  }), 1_788_429_600);
 });
 
 test('allows the five-minute future clock tolerance but rejects the next minute', () => {
