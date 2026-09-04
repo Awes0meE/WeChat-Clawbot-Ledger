@@ -20,6 +20,8 @@ if ([string]::IsNullOrWhiteSpace($SqliteVerifierPath)) {
 }
 
 $migratedSettingNames = @(
+    'UUID_GENERATOR_TYPE',
+    'UUID_SERVER_ID',
     'SERVER_PROTOCOL',
     'SERVER_HTTP_ADDR',
     'SERVER_HTTP_PORT',
@@ -251,6 +253,8 @@ try {
         throw 'The production configuration changed after its verified backup was created.'
     }
     $updatedText = Set-LedgerIniValues -Document $document -Settings @{
+        'uuid.generator_type' = 'internal'
+        'uuid.server_id' = '0'
         'server.protocol' = 'http'
         'server.http_addr' = '127.0.0.1'
         'server.http_port' = '8888'

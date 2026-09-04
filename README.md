@@ -26,7 +26,7 @@ Browser -> https://ledger.66ccff-labs.com -> Cloudflare Tunnel
 | 微信入口 | 腾讯 iLink；只路由已绑定的所有者账号到专用 `bookkeeper` |
 | 助理模型 | OpenAI `gpt-5.6-sol`；官方 `@openclaw/codex` 2026.8.2 harness；ChatGPT OAuth；thinking low |
 | 正式账本 | ezBookkeeping 1.6.1；只绑定 `127.0.0.1:8888`；注册与无效找回密码关闭 |
-| 测试账本 | 独立 `127.0.0.1:18888`、独立配置/token/SQLite；自动化不得回退到正式端口 |
+| 测试账本 | 独立 `127.0.0.1:18888`、独立配置/token/SQLite；UUID server ID 为 `1`（正式为 `0`）；自动化不得回退到正式端口 |
 | 网页入口 | `ledger.66ccff-labs.com` 只经健康门控 Cloudflare Tunnel；无 Cloudflare Access；apex/`www` 作品集路由不变 |
 | 生产代码 | OpenClaw 只加载仓库外、manifest 校验过的 immutable release，不直接加载开发工作区 |
 | 账户与币种 | 唯一可见 SGD 账户 `日常支出`；回执显示 `日常账本` |

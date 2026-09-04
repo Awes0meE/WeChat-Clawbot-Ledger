@@ -127,6 +127,8 @@ function Assert-LedgerTestTemplate {
 
     $required = @{
         'global.mode' = 'production'
+        'uuid.generator_type' = 'internal'
+        'uuid.server_id' = '1'
         'server.protocol' = 'http'
         'server.http_addr' = '127.0.0.1'
         'server.http_port' = '18888'
@@ -282,6 +284,7 @@ $templateDocument = Get-LedgerIniDocument -Path $template
 Assert-LedgerTestTemplate -Document $templateDocument
 Assert-LedgerNoConfigurationOverrides -SettingNames @(
     'GLOBAL_MODE',
+    'UUID_GENERATOR_TYPE', 'UUID_SERVER_ID',
     'SERVER_PROTOCOL', 'SERVER_HTTP_ADDR', 'SERVER_HTTP_PORT', 'SERVER_DOMAIN', 'SERVER_ROOT_URL',
     'MCP_ENABLE_MCP', 'MCP_MCP_ALLOWED_REMOTE_IPS',
     'DATABASE_TYPE', 'DATABASE_DB_PATH',

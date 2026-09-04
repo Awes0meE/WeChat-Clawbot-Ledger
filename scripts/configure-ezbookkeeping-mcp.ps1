@@ -265,6 +265,7 @@ $configWritten = $false
 $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $configurationSettingNames = @(
+    'UUID_GENERATOR_TYPE', 'UUID_SERVER_ID',
     'SERVER_PROTOCOL', 'SERVER_HTTP_ADDR', 'SERVER_HTTP_PORT', 'SERVER_DOMAIN', 'SERVER_ROOT_URL',
     'MCP_ENABLE_MCP', 'MCP_MCP_ALLOWED_REMOTE_IPS',
     'SECURITY_TRUSTED_PROXY_IPS', 'SECURITY_ENABLE_API_TOKEN', 'SECURITY_API_TOKEN_ALLOWED_REMOTE_IPS',

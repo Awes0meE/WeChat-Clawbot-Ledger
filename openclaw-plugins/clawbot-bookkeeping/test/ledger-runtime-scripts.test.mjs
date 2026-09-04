@@ -144,6 +144,9 @@ function writeLedgerFixture(databasePath, activeUsers) {
 function productionIni(port = '8180', address = '127.0.0.1', databaseEntry = 'data/ezbookkeeping.db') {
   return `[global]
 mode = production
+[uuid]
+generator_type = internal
+server_id = 0
 [server]
 protocol = http
 http_addr = ${address}
@@ -592,6 +595,9 @@ test('test-ledger initialization is dry-run safe and exact to the isolated 18888
     writeFileSync(configPath, `; CLAWBOT_LEDGER_PROFILE=test
 [global]
 mode = production
+[uuid]
+generator_type = internal
+server_id = 1
 [server]
 protocol = http
 http_addr = 127.0.0.1
@@ -747,6 +753,12 @@ test('sanitized production and test templates encode the complete runtime bounda
   assert.match(isolatedTest, /^; CLAWBOT_LEDGER_PROFILE=test$/mu);
   assert.match(production, /^mode\s*=\s*production$/mu);
   assert.match(isolatedTest, /^mode\s*=\s*production$/mu);
+  assert.match(production, /^\[uuid\]$/mu);
+  assert.match(production, /^generator_type\s*=\s*internal$/mu);
+  assert.match(production, /^server_id\s*=\s*0$/mu);
+  assert.match(isolatedTest, /^\[uuid\]$/mu);
+  assert.match(isolatedTest, /^generator_type\s*=\s*internal$/mu);
+  assert.match(isolatedTest, /^server_id\s*=\s*1$/mu);
 
   for (const [source, port, domain, rootUrl] of [
     [production, '8888', 'ledger.66ccff-labs.com', 'https://ledger.66ccff-labs.com/'],
@@ -776,6 +788,78 @@ test('sanitized production and test templates encode the complete runtime bounda
   assert.match(isolatedTest, /log_path\s*=\s*D:\\Clawbot\\ezbookkeeping-test\\log\\ezbookkeeping-test\.log/u);
   assert.match(isolatedTest, /local_filesystem_path\s*=\s*D:\\Clawbot\\ezbookkeeping-test\\storage/u);
   assert.doesNotMatch(isolatedTest, /ledger\.66ccff-labs\.com|ezbookkeeping\\data\\ezbookkeeping\.db/u);
+});
+
+test('isolated test runtime validation requires its unique UUID generator identity', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'clawbot-ledger-test-uuid-'));
+  try {
+    const installDirectory = join(directory, 'ezbookkeeping-test');
+    const configPath = join(installDirectory, 'conf', 'ezbookkeeping-test.ini');
+    const wrapperPath = join(directory, 'validate-test-config.ps1');
+    mkdirSync(join(installDirectory, 'conf'), { recursive: true });
+    writeFileSync(wrapperPath, `
+. $args[0]
+try {
+    $null = Assert-LedgerTestConfiguration -InstallDirectory $args[1] -ConfigPath $args[2]
+    'accepted'
+} catch {
+    'rejected'
+}
+`, 'utf8');
+
+    const base = `; CLAWBOT_LEDGER_PROFILE=test
+[global]
+mode = production
+[server]
+protocol = http
+http_addr = 127.0.0.1
+http_port = 18888
+domain = 127.0.0.1
+root_url = http://127.0.0.1:18888/
+[mcp]
+enable_mcp = false
+mcp_allowed_remote_ips = 127.0.0.1
+[database]
+type = sqlite3
+db_path = ${join(installDirectory, 'data', 'ezbookkeeping-test.db')}
+[log]
+log_path = ${join(installDirectory, 'log', 'ezbookkeeping-test.log')}
+[storage]
+local_filesystem_path = ${join(installDirectory, 'storage')}
+[security]
+secret_key = generated-test-secret
+trusted_proxy_ips = 127.0.0.1
+token_expired_time = 604800
+token_min_refresh_interval = 86400
+enable_api_token = true
+api_token_allowed_remote_ips = 127.0.0.1
+max_failures_per_ip_per_minute = 5
+max_failures_per_user_per_minute = 5
+[auth]
+enable_internal_auth = true
+enable_oauth2_auth = false
+enable_two_factor = true
+enable_forget_password = false
+[user]
+enable_register = false
+`;
+
+    for (const [uuidBlock, expected] of [
+      ['', 'rejected'],
+      ['[uuid]\ngenerator_type = external\nserver_id = 1\n', 'rejected'],
+      ['[uuid]\ngenerator_type = internal\nserver_id = 0\n', 'rejected'],
+      ['[uuid]\ngenerator_type = internal\nserver_id = 1\n', 'accepted'],
+    ]) {
+      writeFileSync(configPath, `${base}${uuidBlock}`, 'utf8');
+      const result = runPowerShell([
+        '-File', wrapperPath, join(scriptsDirectory, 'ledger-runtime-common.ps1'), installDirectory, configPath,
+      ]);
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(result.stdout.trim(), expected, uuidBlock || 'missing UUID block');
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('SQLite verifier reports only integrity state and active-user count', () => {
@@ -1080,6 +1164,8 @@ test('production migration makes a verified SQLite backup and installs the exact
 
     const migrated = readFileSync(fixture.configPath, 'utf8');
     for (const expected of [
+      'generator_type = internal',
+      'server_id = 0',
       'http_addr = 127.0.0.1',
       'http_port = 8888',
       'domain = ledger.66ccff-labs.com',
@@ -1345,6 +1431,8 @@ test('test-instance installer allowlist-copies assets, bootstraps locally, and l
     const configPath = join(fixture.installDirectory, 'conf', 'ezbookkeeping-test.ini');
     const config = readFileSync(configPath, 'utf8');
     assert.match(config, /^; CLAWBOT_LEDGER_PROFILE=test$/mu);
+    assert.match(config, /^generator_type = internal$/mu);
+    assert.match(config, /^server_id = 1$/mu);
     assert.match(config, /http_port = 18888/u);
     assert.match(config, /enable_register = false/u);
     assert.match(config, /secret_key = [0-9a-f]{128}/u);

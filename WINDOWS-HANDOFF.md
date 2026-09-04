@@ -6,7 +6,7 @@
 
 - Windows 是唯一在线接收端，原 Mac 接收端已停止。不要让两台 iLink Gateway 同时轮询。
 - 微信消息经腾讯 iLink 进入 Windows OpenClaw；专用 `bookkeeper` 使用 OpenAI GPT-5.6 Sol，并强制走官方 Codex harness。该云端处理已获用户明确授权。
-- OpenClaw Gateway 固定绑定 `127.0.0.1:18789`；正式 ezBookkeeping 固定 `127.0.0.1:8888`，隔离测试实例固定 `127.0.0.1:18888`。
+- OpenClaw Gateway 固定绑定 `127.0.0.1:18789`；正式 ezBookkeeping 固定 `127.0.0.1:8888` 且 UUID server ID 为 `0`，隔离测试实例固定 `127.0.0.1:18888` 且 UUID server ID 为 `1`。
 - 网页只通过 `ledger.66ccff-labs.com -> Cloudflare Tunnel -> 127.0.0.1:8888`；不开放公网/LAN origin 端口，不部署到账本 Vercel，不启用 Cloudflare Access。
 - `66ccff-labs.com` 和 `www.66ccff-labs.com` 继续进入原作品集，Ledger 上线不得改写其 DNS、路由、redirect、cache、HSTS 或部署。
 - 不提交或转发密码、API token、MCP token、Cloudflare 身份/凭据、微信账户 ID、发送者 ID、二维码、会话正文、SQLite、交易、日志或 OpenClaw 状态。

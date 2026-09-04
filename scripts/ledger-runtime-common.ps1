@@ -369,6 +369,8 @@ function Assert-LedgerTestConfiguration {
     $document = Get-LedgerIniDocument -Path $ConfigPath
     $required = @{
         'global.mode' = 'production'
+        'uuid.generator_type' = 'internal'
+        'uuid.server_id' = '1'
         'server.protocol' = 'http'
         'server.http_addr' = '127.0.0.1'
         'server.http_port' = '18888'

@@ -79,6 +79,9 @@ function productionIni(databasePath) {
   return `; CLAWBOT_LEDGER_PROFILE=production
 [global]
 mode = production
+[uuid]
+generator_type = internal
+server_id = 0
 [server]
 protocol = http
 http_addr = 127.0.0.1
@@ -118,6 +121,9 @@ function testIni(root) {
   return `; CLAWBOT_LEDGER_PROFILE=test
 [global]
 mode = production
+[uuid]
+generator_type = internal
+server_id = 1
 [server]
 protocol = http
 http_addr = 127.0.0.1
@@ -1470,6 +1476,18 @@ test('local acceptance emits only fixed pass/fail evidence and rejects a mismatc
     const wrongProductionTask = runPowerShell(wrapper, ['wrong-production-task'], fixtureEnv(fixture));
     assert.notEqual(wrongProductionTask.status, 0);
     assert.equal(JSON.parse(wrongProductionTask.stdout.trim()).production_task, 'fail');
+
+    write(
+      fixture.productionConfigPath,
+      readFileSync(fixture.productionConfigPath, 'utf8').replace('server_id = 0', 'server_id = 1'),
+    );
+    const duplicateUuidIdentity = runPowerShell(wrapper, ['healthy'], fixtureEnv(fixture));
+    assert.notEqual(duplicateUuidIdentity.status, 0);
+    assert.equal(JSON.parse(duplicateUuidIdentity.stdout.trim()).production_configuration, 'fail');
+    write(
+      fixture.productionConfigPath,
+      readFileSync(fixture.productionConfigPath, 'utf8').replace('server_id = 1', 'server_id = 0'),
+    );
 
     write(
       fixture.productionConfigPath,
