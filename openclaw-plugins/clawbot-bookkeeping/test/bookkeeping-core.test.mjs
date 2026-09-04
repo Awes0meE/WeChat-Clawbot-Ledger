@@ -7,6 +7,8 @@ import {
   extractVerbatimComment,
   formatExpenseConfirmation,
   formatExpenseReceipt,
+  formatTrustedExpenseTimeContext,
+  hasExplicitExpenseTimeCue,
   messageSupportsExpenseAmount,
   normalizeMessageTimestamp,
   parseAmountToMinorUnits,
@@ -15,7 +17,19 @@ import {
   recordExpense,
   requiresExpenseConfirmation,
   resolveExpenseComment,
+  resolveExpenseTimestamp,
 } from '../bookkeeping-core.mjs';
+
+function receivedExpenseInput(overrides = {}) {
+  return {
+    amount: '7.2',
+    currency: 'SGD',
+    timeMode: 'received',
+    primaryCategory: '食品酒水',
+    subcategory: '早午晚餐',
+    ...overrides,
+  };
+}
 
 test('parses SGD amounts into integer minor units', () => {
   assert.equal(parseAmountToMinorUnits('12.8'), 1280);
@@ -125,6 +139,96 @@ test('normalizes second and millisecond event timestamps', () => {
   assert.equal(normalizeMessageTimestamp(1_788_425_460_000), 1_788_425_460);
 });
 
+test('resolves the reported relative date and exact clock into Singapore time', () => {
+  const time = resolveExpenseTimestamp({
+    input: receivedExpenseInput({
+      amount: '10.5',
+      timeMode: 'explicit',
+      localDate: '2026-09-03',
+      localTime: '18:00',
+      timeEvidence: '昨天晚上6点钟',
+    }),
+    inbound: {
+      content: '记账昨天晚上6点钟，晚餐10.5 备注麦当劳5卤肉饭5.5',
+      timestamp: 1_788_512_940,
+    },
+  });
+  assert.equal(time, 1_788_429_600);
+});
+
+test('preserves trusted message clock time for an explicit date without a clock', () => {
+  assert.equal(resolveExpenseTimestamp({
+    input: receivedExpenseInput({
+      amount: '10.5',
+      timeMode: 'explicit',
+      localDate: '2026-09-03',
+      timeEvidence: '昨天',
+    }),
+    inbound: { content: '昨天晚饭10.5', timestamp: 1_788_512_940 },
+  }), 1_788_426_540);
+});
+
+test('uses the trusted message timestamp only when no occurrence-time cue exists', () => {
+  assert.equal(resolveExpenseTimestamp({
+    input: receivedExpenseInput({ amount: '10.5' }),
+    inbound: { content: '晚饭10.5', timestamp: 1_788_512_940_000 },
+  }), 1_788_512_940);
+  assert.equal(hasExplicitExpenseTimeCue('晚饭10.5'), false);
+  assert.equal(hasExplicitExpenseTimeCue('昨晚六点，晚饭10.5'), true);
+  assert.equal(hasExplicitExpenseTimeCue('午饭7.2，顺便查本月支出'), false);
+});
+
+test('rejects ungrounded, invalid, future, and non-SGD time decisions', () => {
+  const inbound = { content: '昨天晚上6点，晚饭10.5 备注明天见', timestamp: 1_788_512_940 };
+  for (const overrides of [
+    { timeMode: 'received' },
+    { timeMode: 'explicit', localDate: '2026-09-03', localTime: '18:00', timeEvidence: '明天见' },
+    { timeMode: 'explicit', localDate: '2026-02-30', localTime: '18:00', timeEvidence: '昨天晚上6点' },
+    { timeMode: 'explicit', localDate: '2026-09-03', localTime: '25:00', timeEvidence: '昨天晚上6点' },
+    { timeMode: 'explicit', localDate: '2026-09-05', localTime: '18:00', timeEvidence: '昨天晚上6点' },
+    { currency: 'USD', timeMode: 'received' },
+  ]) {
+    assert.throws(() => resolveExpenseTimestamp({
+      input: receivedExpenseInput({ amount: '10.5', ...overrides }),
+      inbound,
+    }));
+  }
+});
+
+test('allows the five-minute future clock tolerance but rejects the next minute', () => {
+  const inbound = { content: '今天17点14分，晚饭10.5', timestamp: 1_788_512_940 };
+  assert.equal(resolveExpenseTimestamp({
+    input: receivedExpenseInput({
+      amount: '10.5',
+      timeMode: 'explicit',
+      localDate: '2026-09-04',
+      localTime: '17:14',
+      timeEvidence: '今天17点14分',
+    }),
+    inbound,
+  }), 1_788_513_240);
+  assert.throws(() => resolveExpenseTimestamp({
+    input: receivedExpenseInput({
+      amount: '10.5',
+      timeMode: 'explicit',
+      localDate: '2026-09-04',
+      localTime: '17:15',
+      timeEvidence: '今天17点14分',
+    }),
+    inbound,
+  }));
+});
+
+test('formats trusted prompt context without transport identifiers', () => {
+  const context = formatTrustedExpenseTimeContext(1_788_512_940);
+  assert.equal(context, [
+    '[可信记账时间上下文]',
+    '当前微信消息发送时间（Asia/Singapore）：2026-09-04 17:09',
+    '只用它解析当前消息中的相对消费时间；不得把它当作用户声明的消费时间证据。',
+  ].join('\n'));
+  assert.equal(/sender|messageId|token|owner/u.test(context), false);
+});
+
 test('records one expense and preserves trusted message metadata', async () => {
   const calls = [];
   const receipts = new Map();
@@ -161,11 +265,7 @@ test('records one expense and preserves trusted message metadata', async () => {
   const result = await recordExpense({
     api,
     store,
-    input: {
-      amount: '8.25',
-      primaryCategory: '食品酒水',
-      subcategory: '超市购物',
-    },
+    input: receivedExpenseInput({ amount: '8.25', subcategory: '超市购物' }),
     inbound: {
       channel: 'ilink',
       messageId: 'wechat-message-1',
@@ -217,7 +317,7 @@ test('deduplicates the same message id but not identical text from a new message
       return { id: `transaction-${addCount}` };
     },
   };
-  const input = { amount: '12.8', primaryCategory: '食品酒水', subcategory: '早午晚餐' };
+  const input = receivedExpenseInput({ amount: '12.8' });
   const baseInbound = {
     channel: 'ilink',
     content: '午饭12.8',
@@ -273,7 +373,7 @@ for (const [label, addResult] of [
     const request = {
       api,
       store,
-      input: { amount: '7.2', primaryCategory: '食品酒水', subcategory: '早午晚餐' },
+      input: receivedExpenseInput(),
       inbound: {
         channel: 'ilink',
         messageId: `invalid-transaction-id-${label}`,
@@ -310,7 +410,7 @@ test('stores the normalized authoritative transaction id', async () => {
       claim() { return null; },
       complete(_key, value) { stored = value; },
     },
-    input: { amount: '7.2', primaryCategory: '食品酒水', subcategory: '早午晚餐' },
+    input: receivedExpenseInput(),
     inbound: {
       channel: 'ilink',
       messageId: 'normalized-transaction-id',
@@ -366,7 +466,14 @@ for (const [label, content, amount] of [
         },
         complete() {},
       },
-      input: { amount, primaryCategory: '食品酒水', subcategory: '早午晚餐' },
+      input: receivedExpenseInput({
+        amount,
+        ...(content.includes('昨天中午') ? {
+          timeMode: 'explicit',
+          localDate: '2026-09-02',
+          timeEvidence: '昨天中午',
+        } : {}),
+      }),
       inbound: {
         channel: 'ilink',
         messageId: `authorized-${label}`,
@@ -417,7 +524,7 @@ for (const [label, content, amount, comment = ''] of [
             return null;
           },
         },
-        input: { amount, primaryCategory: '食品酒水', subcategory: '早午晚餐', comment },
+        input: receivedExpenseInput({ amount, comment }),
         inbound: {
           channel: 'ilink',
           messageId: `rejected-${label}`,
@@ -445,12 +552,7 @@ test('keeps semantic interpretation in the model while enforcing amount evidence
 
 test('prepares a grounded proposal without claiming or contacting the ledger', () => {
   const candidate = prepareExpenseConfirmation({
-    input: {
-      amount: '7.2',
-      primaryCategory: '食品酒水',
-      subcategory: '早午晚餐',
-      comment: '食阁吃饭',
-    },
+    input: receivedExpenseInput({ comment: '食阁吃饭' }),
     inbound: {
       channel: 'ilink',
       messageId: 'proposal-1',
@@ -476,12 +578,7 @@ test('records a confirmed stored proposal using the original questioned message 
       claim() { return null; },
       complete() {},
     },
-    input: {
-      amount: '7.2',
-      primaryCategory: '食品酒水',
-      subcategory: '早午晚餐',
-      comment: '食阁吃饭',
-    },
+    input: receivedExpenseInput({ comment: '食阁吃饭' }),
     inbound: {
       channel: 'ilink',
       messageId: 'proposal-original',
@@ -498,7 +595,7 @@ test('refuses to write without a trusted inbound message id', async () => {
   await assert.rejects(() => recordExpense({
     api: {},
     store: {},
-    input: { amount: '2', primaryCategory: '食品酒水', subcategory: '饮料甜品' },
+    input: receivedExpenseInput({ amount: '2', subcategory: '饮料甜品' }),
     inbound: { channel: 'ilink', content: '橙汁2', timestamp: Date.now() },
   }), /message id/i);
 });
@@ -524,7 +621,7 @@ test('classifies an account lookup failure as definitely not written after it is
     () => recordExpense({
       api,
       store,
-      input: { amount: '8.25', primaryCategory: '食品酒水', subcategory: '超市购物' },
+      input: receivedExpenseInput({ amount: '8.25', subcategory: '超市购物' }),
       inbound: { channel: 'ilink', messageId: 'not-written-1', content: '买菜8.25', timestamp: 1_788_425_460 },
     }),
     (error) => error instanceof ExpenseRecordingError && error.outcome === 'not_written',
@@ -542,7 +639,7 @@ test('preserves a definite no-write outcome when failed-state persistence throws
         claim() { return null; },
         fail() { throw new Error('receipt state unavailable'); },
       },
-      input: { amount: '7.2', primaryCategory: '食品酒水', subcategory: '早午晚餐' },
+      input: receivedExpenseInput(),
       inbound: {
         channel: 'ilink', messageId: 'failed-persistence', content: '午饭7.2', timestamp: 1_788_425_460,
       },
@@ -569,7 +666,7 @@ for (const [label, addTransaction] of [
           claim() { return null; },
           uncertain() { throw new Error('receipt state unavailable'); },
         },
-        input: { amount: '7.2', primaryCategory: '食品酒水', subcategory: '早午晚餐' },
+        input: receivedExpenseInput(),
         inbound: {
           channel: 'ilink', messageId: `unknown-persistence-${label}`, content: '午饭7.2', timestamp: 1_788_425_460,
         },

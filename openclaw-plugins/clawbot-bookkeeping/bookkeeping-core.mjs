@@ -11,6 +11,11 @@ const QUANTITY_OR_TIME_UNIT = /^(?:个|位|人|根|件|张|瓶|杯|盒|包|份|�
 const ADMIN_AMOUNT_CUE = /(?:订单(?:号)?|余额|原价|标价|用券|券|优惠(?:后)?|折扣|编号|单号)\s*$/u;
 const ADMIN_AMOUNT_CLAUSE = /^\s*(?:订单(?:号)?|余额|原价|标价|用券|优惠|折扣|编号|单号)/u;
 const EXPLICIT_QUESTION = /(?:吗|么|是不是|是否|难道|该不该|要不要)[？?]?\s*$|[？?]\s*$/u;
+const SINGAPORE_UTC_OFFSET_SECONDS = 8 * 60 * 60;
+const FUTURE_CLOCK_TOLERANCE_SECONDS = 5 * 60;
+const LOCAL_DATE = /^(\d{4})-(\d{2})-(\d{2})$/u;
+const LOCAL_TIME = /^(\d{2}):(\d{2})$/u;
+const EXPLICIT_TIME_CUE = /(?:今天|今日|昨天|昨日|前天|大前天|明天|后天|今晚|昨晚|今早|昨早|凌晨|早上|上午|中午|下午|晚上|周[一二三四五六日天]|星期[一二三四五六日天]|\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*[日号]|\d{1,2}\s*月\s*\d{1,2}\s*[日号]|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|[零〇一二两三四五六七八九十百\d]{1,3}\s*(?:点|时)(?:\s*[零〇一二两三四五六七八九十百\d]{1,3}\s*分)?)/u;
 
 export class ExpenseRecordingError extends Error {
   constructor(outcome, { dedupeStatus } = {}) {
@@ -225,6 +230,92 @@ export function normalizeMessageTimestamp(timestamp) {
   return Math.trunc(numeric >= 1_000_000_000_000 ? numeric / 1000 : numeric);
 }
 
+function contentBeforeExplicitComment(content) {
+  const text = String(content ?? '');
+  const commentIndex = text.indexOf('备注');
+  return (commentIndex < 0 ? text : text.slice(0, commentIndex)).trim();
+}
+
+function singaporeParts(timestamp) {
+  const shifted = new Date(
+    (normalizeMessageTimestamp(timestamp) + SINGAPORE_UTC_OFFSET_SECONDS) * 1000,
+  );
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth() + 1,
+    day: shifted.getUTCDate(),
+    hour: shifted.getUTCHours(),
+    minute: shifted.getUTCMinutes(),
+  };
+}
+
+function singaporeTimestamp({ year, month, day, hour, minute }) {
+  const milliseconds = Date.UTC(year, month - 1, day, hour, minute)
+    - SINGAPORE_UTC_OFFSET_SECONDS * 1000;
+  const candidate = Math.trunc(milliseconds / 1000);
+  const roundTrip = singaporeParts(candidate);
+  if (roundTrip.year !== year || roundTrip.month !== month || roundTrip.day !== day
+    || roundTrip.hour !== hour || roundTrip.minute !== minute) {
+    throw new Error('expense occurrence date or time is invalid');
+  }
+  return candidate;
+}
+
+export function hasExplicitExpenseTimeCue(content) {
+  return EXPLICIT_TIME_CUE.test(contentBeforeExplicitComment(content));
+}
+
+export function resolveExpenseTimestamp({ input, inbound }) {
+  if (input.currency !== 'SGD') throw new Error('expense currency must be SGD');
+  const receivedTime = normalizeMessageTimestamp(inbound.timestamp);
+  if (input.timeMode === 'received') {
+    if (hasExplicitExpenseTimeCue(inbound.content)) {
+      throw new Error('expense occurrence time requires semantic resolution');
+    }
+    return receivedTime;
+  }
+  if (input.timeMode !== 'explicit') throw new Error('expense time mode is required');
+
+  const body = contentBeforeExplicitComment(inbound.content);
+  const evidence = String(input.timeEvidence ?? '').trim();
+  if (!evidence || !body.includes(evidence)) {
+    throw new Error('expense time evidence is not grounded');
+  }
+
+  const dateMatch = String(input.localDate ?? '').match(LOCAL_DATE);
+  if (!dateMatch) throw new Error('expense local date is invalid');
+  const received = singaporeParts(receivedTime);
+  let hour = received.hour;
+  let minute = received.minute;
+  if (input.localTime !== undefined) {
+    const timeMatch = String(input.localTime).match(LOCAL_TIME);
+    if (!timeMatch) throw new Error('expense local time is invalid');
+    hour = Number(timeMatch[1]);
+    minute = Number(timeMatch[2]);
+  }
+  const occurrenceTime = singaporeTimestamp({
+    year: Number(dateMatch[1]),
+    month: Number(dateMatch[2]),
+    day: Number(dateMatch[3]),
+    hour,
+    minute,
+  });
+  if (occurrenceTime > receivedTime + FUTURE_CLOCK_TOLERANCE_SECONDS) {
+    throw new Error('expense occurrence time is in the future');
+  }
+  return occurrenceTime;
+}
+
+export function formatTrustedExpenseTimeContext(timestamp) {
+  const { year, month, day, hour, minute } = singaporeParts(timestamp);
+  const twoDigits = (value) => String(value).padStart(2, '0');
+  return [
+    '[可信记账时间上下文]',
+    `当前微信消息发送时间（Asia/Singapore）：${year}-${twoDigits(month)}-${twoDigits(day)} ${twoDigits(hour)}:${twoDigits(minute)}`,
+    '只用它解析当前消息中的相对消费时间；不得把它当作用户声明的消费时间证据。',
+  ].join('\n');
+}
+
 function messageReceiptKey(inbound) {
   if (!inbound?.messageId) {
     throw new Error('trusted inbound message id is unavailable; refusing to write');
@@ -247,11 +338,20 @@ export function duplicateResponseText(result) {
   return '这条消息已经处理过啦，我没有重复入账～';
 }
 
-function validateExpenseInput(input, inbound) {
+function validateExpenseInput(input, inbound, resolvedTime) {
   const receiptKey = messageReceiptKey(inbound);
   const sourceAmount = parseAmountToMinorUnits(input.amount);
   const comment = resolveExpenseComment(inbound.content, input.comment);
-  const time = normalizeMessageTimestamp(inbound.timestamp);
+  let time;
+  try {
+    time = resolveExpenseTimestamp({ input, inbound });
+    if (resolvedTime !== undefined
+      && (!Number.isSafeInteger(resolvedTime) || resolvedTime !== time)) {
+      throw new Error('stored expense occurrence time does not match its source');
+    }
+  } catch {
+    throw new ExpenseRecordingError('rejected');
+  }
   return { receiptKey, sourceAmount, comment, time };
 }
 
@@ -274,8 +374,13 @@ async function writeExpense({
   inbound,
   accountName = '日常支出',
   validateBeforeWrite,
+  resolvedTime,
 }) {
-  const { receiptKey, sourceAmount, comment, time } = validateExpenseInput(input, inbound);
+  const { receiptKey, sourceAmount, comment, time } = validateExpenseInput(
+    input,
+    inbound,
+    resolvedTime,
+  );
   const clientSessionId = clientSessionIdFor(receiptKey);
   const existing = store.claim(receiptKey);
   if (existing) {
