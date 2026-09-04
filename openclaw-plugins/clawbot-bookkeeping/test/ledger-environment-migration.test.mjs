@@ -76,6 +76,7 @@ $global:tracePath = $args[6]
 $global:userReads = 0
 $global:removeCount = 0
 $global:setCount = 0
+$global:configAclHardened = $global:mode -notin @('legacy-acl', 'legacy-acl-whatif')
 function Read-FixtureEnvironment {
     return [IO.File]::ReadAllText($global:environmentPath, [Text.Encoding]::UTF8) | ConvertFrom-Json -ErrorAction Stop
 }
@@ -136,10 +137,27 @@ function Set-ItemProperty {
     Write-FixtureEnvironment -State $state
     Add-Content -LiteralPath $global:tracePath -Value ('set:' + $Name) -Encoding UTF8
 }
-function Set-Acl { [CmdletBinding()] param([string]$LiteralPath, [object]$AclObject) if (-not (Test-Path -LiteralPath $LiteralPath)) { throw 'ACL target missing.' } }
+function Set-Acl {
+    [CmdletBinding()] param([string]$LiteralPath, [object]$AclObject)
+    if (-not (Test-Path -LiteralPath $LiteralPath)) { throw 'ACL target missing.' }
+    if ([string]::Equals([IO.Path]::GetFullPath($LiteralPath), [IO.Path]::GetFullPath($global:configPath), [StringComparison]::OrdinalIgnoreCase)) {
+        $global:configAclHardened = $true
+        if ($global:mode -in @('legacy-acl', 'legacy-acl-whatif')) {
+            Add-Content -LiteralPath $global:tracePath -Value 'acl:config' -Encoding UTF8
+        }
+    }
+}
 function Get-Acl {
     [CmdletBinding()] param([string]$LiteralPath)
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    if ([string]::Equals([IO.Path]::GetFullPath($LiteralPath), [IO.Path]::GetFullPath($global:configPath), [StringComparison]::OrdinalIgnoreCase) -and
+        -not $global:configAclHardened) {
+        return [pscustomobject]@{
+            Owner = 'BUILTIN\Administrators'
+            AreAccessRulesProtected = $false
+            Access = @([pscustomobject]@{ IdentityReference = [pscustomobject]@{ Value = 'NT AUTHORITY\Authenticated Users' }; AccessControlType = 'Allow'; FileSystemRights = 'Modify'; IsInherited = $true })
+        }
+    }
     return [pscustomobject]@{
         Owner = $identity
         AreAccessRulesProtected = $true
@@ -152,7 +170,7 @@ $parameters = @{
     BackupRoot = $global:backupRoot
     Confirm = $false
 }
-if ($global:mode -eq 'whatif') { $parameters.WhatIf = $true }
+if ($global:mode -in @('whatif', 'legacy-acl-whatif')) { $parameters.WhatIf = $true }
 try {
     & $global:scriptPath @parameters
     if ($global:mode -in @('remove-fail', 'rollback-incomplete', 'config-conflict', 'environment-conflict', 'config-change-after-clear', 'mutex-held', 'unsafe', 'concurrent-change')) {
@@ -219,6 +237,42 @@ test('migrates only the exact five User overrides through verified DPAPI and INI
     assert.equal(encrypted.includes(Buffer.from('EBK_SECURITY_SECRET_KEY')), false);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('legacy inherited config ACL is hardened only after a verified config backup', () => {
+  {
+    const fixture = createFixture();
+    try {
+      const result = runFixture(fixture, 'legacy-acl-whatif');
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(existsSync(fixture.backupRoot), false);
+      assert.equal(existsSync(fixture.tracePath), false);
+      assert.deepEqual(readFileSync(fixture.configPath, 'utf8'), fixture.originalConfig);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const fixture = createFixture();
+    try {
+      const result = runFixture(fixture, 'legacy-acl');
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.match(result.stdout, /LEDGER_USER_OVERRIDES_MIGRATED/u);
+      const trace = readFileSync(fixture.tracePath, 'utf8').trim().split(/\r?\n/u);
+      assert.equal(trace[0], 'acl:config');
+      assert.equal(trace.filter((line) => line === 'acl:config').length >= 1, true);
+      assert.equal(trace.filter((line) => line.startsWith('remove:')).length, 5);
+      const backupDirectories = readdirSync(fixture.backupRoot);
+      assert.equal(backupDirectories.length, 1);
+      assert.deepEqual(
+        readFileSync(join(fixture.backupRoot, backupDirectories[0], 'ezbookkeeping.ini'), 'utf8'),
+        fixture.originalConfig,
+      );
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
   }
 });
 
@@ -357,6 +411,11 @@ test('remediation source keeps exact scope and contains no process or task contr
   assert.match(source, /ReleaseMutex/u);
   assert.match(source, /Test-LedgerSameFile/u);
   assert.match(source, /\$updatedConfigHash/u);
+  assert.match(source, /\[IO\.FileShare\]::Read/u);
+  assert.ok(
+    source.indexOf('Copy-LedgerFileBytesIntoExistingFile -SourcePath $configurationPath')
+      < source.indexOf('Protect-LedgerOwnerOnlyFile -Path $configurationPath'),
+  );
   assert.doesNotMatch(source, /Stop-Process|Stop-ScheduledTask|Start-ScheduledTask|Register-ScheduledTask/u);
   const guard = source.indexOf('if (-not $PSCmdlet.ShouldProcess(');
   assert.ok(guard >= 0);

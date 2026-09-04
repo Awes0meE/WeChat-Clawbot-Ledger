@@ -127,6 +127,22 @@ function Assert-LedgerOwnerOnlyPathAcl {
     }
 }
 
+function Assert-LedgerRecognizedLegacyConfigOwner {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+    $currentOwner = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $administratorsOwner = (New-Object Security.Principal.SecurityIdentifier(
+        [Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid,
+        $null
+    )).Translate([Security.Principal.NTAccount]).Value
+    $actualOwner = [string]$acl.Owner
+    if (-not [string]::Equals($actualOwner, $currentOwner, [StringComparison]::OrdinalIgnoreCase) -and
+        -not [string]::Equals($actualOwner, $administratorsOwner, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The production ezBookkeeping configuration has an unrecognized owner.'
+    }
+}
+
 function Write-LedgerProtectedBytes {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -259,7 +275,7 @@ if (-not (Test-Path -LiteralPath $configurationPath -PathType Leaf)) {
     throw 'The production ezBookkeeping configuration was not found.'
 }
 Assert-LedgerNoExistingReparsePath -Path $configurationPath
-Assert-LedgerOwnerOnlyFile -Path $configurationPath
+Assert-LedgerRecognizedLegacyConfigOwner -Path $configurationPath
 
 if (-not $PSCmdlet.ShouldProcess($configurationPath, 'Back up and remove the exact five legacy User environment overrides')) {
     return
@@ -279,6 +295,7 @@ $payloadBytes = $null
 $ciphertextBytes = $null
 $operationMutex = $null
 $operationMutexAcquired = $false
+$configurationReadGuard = $null
 
 try {
     $operationMutex = New-Object Threading.Mutex($false, 'Local\Clawbot.Ledger.UserOverrides')
@@ -293,6 +310,12 @@ try {
 
     $snapshot = Get-LedgerEnvironmentSnapshot
     $secret = [string]$snapshot['EBK_SECURITY_SECRET_KEY']
+    $configurationReadGuard = [IO.File]::Open(
+        $configurationPath,
+        [IO.FileMode]::Open,
+        [IO.FileAccess]::Read,
+        [IO.FileShare]::Read
+    )
     $originalConfigHash = Get-LedgerFileSha256 -Path $configurationPath
     $document = Get-LedgerIniDocument -Path $configurationPath
     if ((Get-LedgerFileSha256 -Path $configurationPath) -cne $originalConfigHash) {
@@ -354,6 +377,17 @@ try {
     } finally {
         if ($manifestBytes.Length -gt 0) { [Array]::Clear($manifestBytes, 0, $manifestBytes.Length) }
     }
+
+    if ((Get-LedgerFileSha256 -Path $configurationPath) -cne $originalConfigHash) {
+        throw 'The production INI changed before its access control list could be hardened.'
+    }
+    Protect-LedgerOwnerOnlyFile -Path $configurationPath
+    Assert-LedgerOwnerOnlyPathAcl -Path $configurationPath
+    if ((Get-LedgerFileSha256 -Path $configurationPath) -cne $originalConfigHash) {
+        throw 'The production INI changed while its access control list was hardened.'
+    }
+    $configurationReadGuard.Dispose()
+    $configurationReadGuard = $null
 
     $currentSnapshot = Get-LedgerEnvironmentSnapshot
     if (-not (Test-LedgerEnvironmentSnapshotEqual -Left $snapshot -Right $currentSnapshot) -or
@@ -441,6 +475,9 @@ try {
     }
     throw 'Legacy ezBookkeeping User environment remediation failed before any production state was changed.'
 } finally {
+    if ($null -ne $configurationReadGuard) {
+        $configurationReadGuard.Dispose()
+    }
     if ($operationMutexAcquired -and $null -ne $operationMutex) {
         try { $operationMutex.ReleaseMutex() } catch { }
     }
