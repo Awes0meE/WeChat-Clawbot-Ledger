@@ -4,12 +4,26 @@ param(
     [string]$InstallDirectory = 'D:\Clawbot\ezbookkeeping',
     [string]$ApiTokenPath = "$env:USERPROFILE\.openclaw\secrets\ezbookkeeping-token.txt",
     [string]$McpTokenPath = "$env:USERPROFILE\.openclaw\secrets\ezbookkeeping-mcp-token.txt",
+    [string]$OpenClawConfigPath = "$env:USERPROFILE\.openclaw\openclaw.json",
+    [string]$BackupRoot = 'D:\Clawbot\backups',
     [string]$TaskName = 'Clawbot ezBookkeeping',
     [ValidateRange(60, 315360000)]
     [int]$ExpiresInSeconds = 31536000
 )
 
 Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+. (Join-Path $PSScriptRoot 'ledger-runtime-common.ps1')
+
+$ConfigPath = Assert-LedgerExternalSecretPath -Path $ConfigPath -Description 'The ezBookkeeping configuration path'
+$ApiTokenPath = Assert-LedgerExternalSecretPath -Path $ApiTokenPath -Description 'The ezBookkeeping API token path'
+$McpTokenPath = Assert-LedgerExternalSecretPath -Path $McpTokenPath -Description 'The ezBookkeeping MCP token path'
+$OpenClawConfigPath = Assert-LedgerExternalSecretPath -Path $OpenClawConfigPath -Description 'The OpenClaw configuration path'
+$BackupRoot = Assert-LedgerExternalSecretPath -Path $BackupRoot -Description 'The protected ledger backup root'
+if (Test-LedgerSamePath -Left $ApiTokenPath -Right $McpTokenPath) {
+    throw 'The API and MCP token paths must be different.'
+}
 
 function Get-UpdatedMcpConfiguration {
     param([Parameter(Mandatory = $true)][string]$Text)
@@ -57,27 +71,42 @@ if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) {
     throw 'The ezBookkeeping configuration file was not found.'
 }
 
-$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-$configText = [IO.File]::ReadAllText($ConfigPath, $utf8NoBom)
-$updatedConfig = Get-UpdatedMcpConfiguration -Text $configText
-
 if (-not $PSCmdlet.ShouldProcess($ConfigPath, 'Enable MCP, restart ezBookkeeping, and create a protected token')) {
     return
 }
 
 function Copy-ConfigToUniqueBackup {
-    param([Parameter(Mandatory = $true)][string]$ConfigPath)
+    param(
+        [Parameter(Mandatory = $true)][string]$ConfigPath,
+        [Parameter(Mandatory = $true)][string]$ExpectedSourceHash
+    )
 
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    if ((Get-LedgerFileSha256 -Path $ConfigPath) -cne $ExpectedSourceHash) {
+        throw 'The ezBookkeeping configuration changed before its backup was created.'
+    }
     for ($suffix = 0; $suffix -lt 100; $suffix++) {
         $backupPath = if ($suffix -eq 0) { "$ConfigPath.before-mcp-$stamp" } else { "$ConfigPath.before-mcp-$stamp-$suffix" }
+        $backupCreated = $false
         try {
-            [IO.File]::Copy($ConfigPath, $backupPath, $false)
+            New-LedgerOwnerOnlyEmptyFile -Path $backupPath
+            $backupCreated = $true
+            Copy-LedgerFileBytesIntoExistingFile -SourcePath $ConfigPath -DestinationPath $backupPath
+            Assert-LedgerOwnerOnlyFile -Path $backupPath
+            if ((Get-LedgerFileSha256 -Path $ConfigPath) -cne $ExpectedSourceHash -or
+                (Get-LedgerFileSha256 -Path $backupPath) -cne $ExpectedSourceHash) {
+                Remove-LedgerOwnedFileIfPresent -Path $backupPath
+                throw 'The ezBookkeeping configuration backup did not pass hash verification.'
+            }
             return $backupPath
         } catch [System.IO.IOException] {
-            if ([IO.File]::Exists($backupPath)) {
+            if (-not $backupCreated -and [IO.File]::Exists($backupPath)) {
                 continue
             }
+            if ($backupCreated) { Remove-LedgerOwnedFileIfPresent -Path $backupPath }
+            throw
+        } catch {
+            if ($backupCreated) { Remove-LedgerOwnedFileIfPresent -Path $backupPath }
             throw
         }
     }
@@ -91,57 +120,50 @@ function Write-ConfigAtomically {
         [Parameter(Mandatory = $true)][System.Text.Encoding]$Encoding
     )
 
-    $directory = Split-Path -Parent $ConfigPath
-    $leafName = Split-Path -Leaf $ConfigPath
-    $temporaryConfigPath = Join-Path $directory ('.' + $leafName + '.mcp-' + [Guid]::NewGuid().ToString('N') + '.tmp')
-    $replacementBackupPath = $temporaryConfigPath + '.replace-backup'
-    try {
-        [IO.File]::WriteAllText($temporaryConfigPath, $Text, $Encoding)
-        [IO.File]::Replace($temporaryConfigPath, $ConfigPath, $replacementBackupPath)
-    } finally {
-        if (Test-Path -LiteralPath $temporaryConfigPath) {
-            Remove-Item -LiteralPath $temporaryConfigPath -Force -ErrorAction SilentlyContinue
+    Write-LedgerTextAtomically -Path $ConfigPath -Text $Text
+    Assert-LedgerOwnerOnlyFile -Path $ConfigPath
+}
+
+function Assert-McpTokenDestination {
+    param(
+        [Parameter(Mandatory = $true)][string]$TokenPath,
+        [Parameter(Mandatory = $true)][string]$ConfigurationPath,
+        [Parameter(Mandatory = $true)][string]$ProductionTokenPath,
+        [Parameter(Mandatory = $true)][string]$OpenClawPath,
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [Parameter(Mandatory = $true)][string]$ProtectedBackupRoot
+    )
+
+    $document = Get-LedgerIniDocument -Path $ConfigurationPath
+    $protectedPaths = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($path in @($ConfigurationPath, $ProductionTokenPath, $OpenClawPath)) {
+        $protectedPaths.Add((Get-LedgerNormalizedPath -Path $path))
+    }
+    $databaseEntry = $document.Values['database.db_path']
+    $databasePath = if ($null -ne $databaseEntry -and -not [string]::IsNullOrWhiteSpace([string]$databaseEntry)) {
+        Resolve-LedgerDataPath -InstallDirectory $InstallRoot -ConfiguredPath ([string]$databaseEntry)
+    } else {
+        Get-LedgerNormalizedPath -Path (Join-Path $InstallRoot 'data\ezbookkeeping.db')
+    }
+    $protectedPaths.Add($databasePath)
+
+    $configurationDirectory = Split-Path -Parent $ConfigurationPath
+    $configurationLeaf = Split-Path -Leaf $ConfigurationPath
+    foreach ($backup in @(Get-ChildItem -LiteralPath $configurationDirectory -Filter ($configurationLeaf + '.before-mcp-*') -Force -File -ErrorAction Stop)) {
+        $protectedPaths.Add((Get-LedgerNormalizedPath -Path $backup.FullName))
+    }
+    if (Test-Path -LiteralPath $ProtectedBackupRoot -PathType Container) {
+        Assert-LedgerNoExistingReparsePath -Path $ProtectedBackupRoot
+        foreach ($backup in @(Get-ChildItem -LiteralPath $ProtectedBackupRoot -Recurse -Force -File -ErrorAction Stop)) {
+            $protectedPaths.Add((Get-LedgerNormalizedPath -Path $backup.FullName))
         }
-        if (Test-Path -LiteralPath $replacementBackupPath) {
-            Remove-Item -LiteralPath $replacementBackupPath -Force -ErrorAction SilentlyContinue
+    }
+
+    foreach ($protectedPath in @($protectedPaths | Select-Object -Unique)) {
+        if (Test-LedgerSameFile -Left $TokenPath -Right $protectedPath) {
+            throw 'The MCP token destination aliases a protected production file.'
         }
     }
-}
-
-function Get-NormalizedPath {
-    param([Parameter(Mandatory = $true)][string]$Path)
-
-    $value = [Environment]::ExpandEnvironmentVariables($Path.Trim())
-    if ($value.Length -ge 2 -and $value[0] -eq [char]34 -and $value[$value.Length - 1] -eq [char]34) {
-        $value = $value.Substring(1, $value.Length - 2)
-    }
-    $fullPath = [IO.Path]::GetFullPath($value)
-    if ($fullPath.Length -gt 3) {
-        $fullPath = $fullPath.TrimEnd([char[]]@('\', '/'))
-    }
-    return $fullPath
-}
-
-function Get-NormalizedArguments {
-    param([AllowNull()][string]$Arguments)
-
-    return [regex]::Replace(([string]$Arguments).Trim(), '\s+', ' ')
-}
-
-function Get-HiddenPowerShellExecutable {
-    $systemRoot = [Environment]::GetEnvironmentVariable('SystemRoot')
-    if ([string]::IsNullOrWhiteSpace($systemRoot)) {
-        throw 'Could not locate the Windows PowerShell executable.'
-    }
-    return Get-NormalizedPath -Path (Join-Path $systemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')
-}
-
-function Get-HiddenPowerShellServiceArguments {
-    param([Parameter(Mandatory = $true)][string]$Executable)
-
-    $escapedExecutable = $Executable.Replace("'", "''")
-    $serviceCommand = '& ' + [char]39 + $escapedExecutable + [char]39 + ' server run'
-    return '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Command "' + $serviceCommand + '"'
 }
 
 function Set-OwnerOnlyTokenFile {
@@ -151,32 +173,28 @@ function Set-OwnerOnlyTokenFile {
         [Parameter(Mandatory = $true)][System.Text.Encoding]$Encoding
     )
 
+    $Path = Assert-LedgerExternalSecretPath -Path $Path -Description 'The MCP token path'
     $directory = Split-Path -Parent $Path
     if ([string]::IsNullOrWhiteSpace($directory)) {
         throw 'The MCP token path must include a directory.'
     }
+    Assert-LedgerNoExistingReparsePath -Path $Path
     New-Item -ItemType Directory -Path $directory -Force -ErrorAction Stop | Out-Null
+    Assert-LedgerNoExistingReparsePath -Path $Path
+    $tokenFileCreated = $false
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        New-Item -ItemType File -Path $Path -ErrorAction Stop | Out-Null
+        New-LedgerOwnerOnlyEmptyFile -Path $Path
+        $tokenFileCreated = $true
+    } else {
+        Protect-LedgerOwnerOnlyFile -Path $Path
     }
-
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $acl = New-Object Security.AccessControl.FileSecurity
-    $acl.SetAccessRuleProtection($true, $false)
-    $rule = New-Object Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', 'Allow')
-    $acl.SetAccessRule($rule)
-    Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
-    [IO.File]::WriteAllText($Path, $Token, $Encoding)
-}
-
-function Stop-ExpectedEzBookkeepingProcesses {
-    param([Parameter(Mandatory = $true)][string]$ExpectedExecutable)
-
-    $ownedProcesses = Get-CimInstance Win32_Process -Filter "Name='ezbookkeeping.exe'" -ErrorAction Stop | Where-Object {
-        $_.ExecutablePath -and ([string]::Equals((Get-NormalizedPath -Path $_.ExecutablePath), $ExpectedExecutable, [StringComparison]::OrdinalIgnoreCase))
-    }
-    foreach ($process in $ownedProcesses) {
-        Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+    try {
+        Write-LedgerTextAtomically -Path $Path -Text $Token
+        Protect-LedgerOwnerOnlyFile -Path $Path
+        Assert-LedgerOwnerOnlyFile -Path $Path
+    } catch {
+        if ($tokenFileCreated) { Remove-LedgerOwnedFileIfPresent -Path $Path }
+        throw
     }
 }
 
@@ -186,16 +204,29 @@ function Restore-ConfigurationAndService {
         [Parameter(Mandatory = $true)][string]$ConfigPath,
         [Parameter(Mandatory = $true)][object]$Task,
         [Parameter(Mandatory = $true)][string]$ExpectedExecutable,
+        [Parameter(Mandatory = $true)][string]$ExpectedInstallDirectory,
+        [Parameter(Mandatory = $true)][string]$ExpectedConfigPath,
         [bool]$TaskWasRunning,
         [bool]$TaskStopped,
         [bool]$TaskStarted
     )
 
-    [IO.File]::Copy($BackupPath, $ConfigPath, $true)
     if ($TaskStarted) {
-        Stop-ScheduledTask -InputObject $Task -ErrorAction Stop
-        Stop-ExpectedEzBookkeepingProcesses -ExpectedExecutable $ExpectedExecutable
+        $verifiedTask = Get-LedgerExpectedTask -TaskName $Task.TaskName -InstallDirectory $ExpectedInstallDirectory -ExpectedExecutable $ExpectedExecutable -ConfigPath $ExpectedConfigPath -Mode Explicit
+        if ([string]$verifiedTask.State -cne 'Running') {
+            throw 'The restarted ezBookkeeping task is not running during rollback.'
+        }
+        $rollbackIdentity = $null
+        if (@(Get-NetTCPConnection -State Listen -LocalPort 8888 -ErrorAction Stop).Count -gt 0) {
+            $rollbackIdentity = Get-LedgerListenerOwner -Port 8888 -ExpectedExecutable $ExpectedExecutable -ExpectedConfigPath $ExpectedConfigPath
+        }
+        Stop-ScheduledTask -InputObject $verifiedTask -ErrorAction Stop
+        Wait-LedgerListenerExit -Identity $rollbackIdentity -Port 8888 -ExpectedExecutable $ExpectedExecutable -ExpectedConfigPath $ExpectedConfigPath
     }
+    $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+    $backupText = [IO.File]::ReadAllText($BackupPath, $strictUtf8)
+    Write-LedgerTextAtomically -Path $ConfigPath -Text $backupText
+    Assert-LedgerOwnerOnlyFile -Path $ConfigPath
     if ($TaskWasRunning -and $TaskStopped) {
         Start-ScheduledTask -InputObject $Task -ErrorAction Stop
     }
@@ -211,48 +242,80 @@ $body = $null
 $backupPath = $null
 $task = $null
 $expectedExecutable = $null
-$expectedLauncher = $null
-$expectedLauncherArguments = $null
+$normalizedInstallDirectory = $null
 $taskWasRunning = $false
 $taskStopped = $false
 $taskStarted = $false
 $configWritten = $false
+$strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$configurationSettingNames = @(
+    'SERVER_PROTOCOL', 'SERVER_HTTP_ADDR', 'SERVER_HTTP_PORT', 'SERVER_DOMAIN', 'SERVER_ROOT_URL',
+    'MCP_ENABLE_MCP', 'MCP_MCP_ALLOWED_REMOTE_IPS',
+    'SECURITY_TRUSTED_PROXY_IPS', 'SECURITY_ENABLE_API_TOKEN', 'SECURITY_API_TOKEN_ALLOWED_REMOTE_IPS',
+    'SECURITY_MAX_FAILURES_PER_IP_PER_MINUTE', 'SECURITY_MAX_FAILURES_PER_USER_PER_MINUTE',
+    'AUTH_ENABLE_FORGET_PASSWORD', 'USER_ENABLE_REGISTER'
+)
 
 try {
-    $installDirectory = Get-NormalizedPath -Path $InstallDirectory
-    $expectedExecutable = Get-NormalizedPath -Path (Join-Path $installDirectory 'ezbookkeeping.exe')
+    $normalizedInstallDirectory = Get-LedgerNormalizedPath -Path $InstallDirectory
+    $ConfigPath = Get-LedgerNormalizedPath -Path $ConfigPath
+    $expectedExecutable = Get-LedgerNormalizedPath -Path (Join-Path $normalizedInstallDirectory 'ezbookkeeping.exe')
     if (-not (Test-Path -LiteralPath $expectedExecutable -PathType Leaf)) {
         throw 'The expected ezBookkeeping executable was not found.'
     }
-    $expectedLauncher = Get-HiddenPowerShellExecutable
-    if (-not (Test-Path -LiteralPath $expectedLauncher -PathType Leaf)) {
-        throw 'Could not locate the Windows PowerShell executable.'
+    if (-not $ConfigPath.StartsWith($normalizedInstallDirectory + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The ezBookkeeping configuration is outside the installation directory.'
     }
-    $expectedLauncherArguments = Get-HiddenPowerShellServiceArguments -Executable $expectedExecutable
-    $tasks = @(Get-ScheduledTask -ErrorAction Stop | Where-Object {
-        $_.TaskName -eq $TaskName -and $_.TaskPath -eq '\'
-    })
-    if ($tasks.Count -ne 1) {
-        throw 'The expected root ezBookkeeping scheduled task was not found exactly once.'
+    Assert-LedgerNoConfigurationOverrides -SettingNames $configurationSettingNames
+    $approvedConfigHash = Get-LedgerFileSha256 -Path $ConfigPath
+    $configText = [IO.File]::ReadAllText($ConfigPath, $strictUtf8)
+    if ((Get-LedgerFileSha256 -Path $ConfigPath) -cne $approvedConfigHash) {
+        throw 'The ezBookkeeping configuration changed while it was read.'
     }
-    $task = $tasks[0]
-    $taskActions = @($task.Actions)
-    $matchingActions = @($taskActions | Where-Object {
-        ([string]::Equals((Get-NormalizedPath -Path ([string]$_.Execute)), $expectedLauncher, [StringComparison]::OrdinalIgnoreCase)) -and
-        ([string]::Equals(([string]$_.Arguments), $expectedLauncherArguments, [StringComparison]::Ordinal)) -and
-        ([string]::Equals((Get-NormalizedPath -Path ([string]$_.WorkingDirectory)), $installDirectory, [StringComparison]::OrdinalIgnoreCase))
-    })
-    if ($taskActions.Count -ne 1 -or $matchingActions.Count -ne 1) {
-        throw 'The ezBookkeeping scheduled task action does not match the expected local service command.'
+    $updatedConfig = Get-UpdatedMcpConfiguration -Text $configText
+    Assert-McpTokenDestination -TokenPath $McpTokenPath -ConfigurationPath $ConfigPath -ProductionTokenPath $ApiTokenPath -OpenClawPath $OpenClawConfigPath -InstallRoot $normalizedInstallDirectory -ProtectedBackupRoot $BackupRoot
+    if ((Get-LedgerFileSha256 -Path $ConfigPath) -cne $approvedConfigHash) {
+        throw 'The ezBookkeeping configuration changed during MCP preflight.'
     }
-    $taskWasRunning = ([string]$task.State -eq 'Running')
+    $task = Get-LedgerExpectedTask -TaskName $TaskName -InstallDirectory $normalizedInstallDirectory -ExpectedExecutable $expectedExecutable -ConfigPath $ConfigPath -Mode Explicit
+    $taskWasRunning = [string]$task.State -ceq 'Running'
+    if (-not $taskWasRunning) {
+        throw 'The exact ezBookkeeping scheduled task is not running.'
+    }
+    $listenerIdentity = Get-LedgerListenerOwner -Port 8888 -ExpectedExecutable $expectedExecutable -ExpectedConfigPath $ConfigPath
+    if (-not (Test-LedgerOrigin -Port 8888)) {
+        throw 'The local ezBookkeeping service did not pass its preflight checks.'
+    }
 
-    $backupPath = Copy-ConfigToUniqueBackup -ConfigPath $ConfigPath
-    Write-ConfigAtomically -ConfigPath $ConfigPath -Text $updatedConfig -Encoding $utf8NoBom
+    Assert-LedgerNoConfigurationOverrides -SettingNames $configurationSettingNames
+    if ((Get-LedgerFileSha256 -Path $ConfigPath) -cne $approvedConfigHash) {
+        throw 'The ezBookkeeping configuration changed after MCP preflight.'
+    }
+    Protect-LedgerOwnerOnlyFile -Path $ConfigPath
+    Assert-LedgerOwnerOnlyFile -Path $ConfigPath
+    $backupPath = Copy-ConfigToUniqueBackup -ConfigPath $ConfigPath -ExpectedSourceHash $approvedConfigHash
+    $backupText = [IO.File]::ReadAllText($backupPath, $strictUtf8)
+    $updatedConfig = Get-UpdatedMcpConfiguration -Text $backupText
+    if ((Get-LedgerFileSha256 -Path $ConfigPath) -cne $approvedConfigHash -or
+        (Get-LedgerFileSha256 -Path $backupPath) -cne $approvedConfigHash) {
+        throw 'The ezBookkeeping configuration changed before the MCP update.'
+    }
     $configWritten = $true
+    Write-ConfigAtomically -ConfigPath $ConfigPath -Text $updatedConfig -Encoding $utf8NoBom
+    $task = Get-LedgerExpectedTask -TaskName $TaskName -InstallDirectory $normalizedInstallDirectory -ExpectedExecutable $expectedExecutable -ConfigPath $ConfigPath -Mode Explicit
+    if ([string]$task.State -cne 'Running') {
+        throw 'The exact ezBookkeeping scheduled task stopped before controlled restart.'
+    }
+    $finalListenerIdentity = Get-LedgerListenerOwner -Port 8888 -ExpectedExecutable $expectedExecutable -ExpectedConfigPath $ConfigPath
+    if ([int]$finalListenerIdentity.ProcessId -ne [int]$listenerIdentity.ProcessId -or
+        [string]$finalListenerIdentity.CreationDate -cne [string]$listenerIdentity.CreationDate) {
+        throw 'The ezBookkeeping listener identity changed before controlled restart.'
+    }
+    Assert-LedgerNoConfigurationOverrides -SettingNames $configurationSettingNames
     Stop-ScheduledTask -InputObject $task -ErrorAction Stop
     $taskStopped = $true
-    Stop-ExpectedEzBookkeepingProcesses -ExpectedExecutable $expectedExecutable
+    Wait-LedgerListenerExit -Identity $listenerIdentity -Port 8888 -ExpectedExecutable $expectedExecutable -ExpectedConfigPath $ConfigPath
     Start-ScheduledTask -InputObject $task -ErrorAction Stop
     $taskStarted = $true
 
@@ -260,8 +323,8 @@ try {
     $healthDeadline = (Get-Date).AddSeconds(15)
     while ((Get-Date) -lt $healthDeadline) {
         try {
-            $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8180/healthz.json' -TimeoutSec 1 -ErrorAction Stop
-            if ($health.success -eq $true) {
+            $null = Get-LedgerListenerOwner -Port 8888 -ExpectedExecutable $expectedExecutable -ExpectedConfigPath $ConfigPath
+            if (Test-LedgerOrigin -Port 8888) {
                 $healthy = $true
                 break
             }
@@ -279,13 +342,18 @@ try {
     $securePassword = Read-Host 'ezBookkeeping password' -AsSecureString
     $passwordPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
     $plainPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPointer)
-    $apiToken = [IO.File]::ReadAllText($ApiTokenPath, $utf8NoBom).Trim()
+    if (-not (Test-Path -LiteralPath $ApiTokenPath -PathType Leaf)) {
+        throw 'The local ezBookkeeping API token was not found.'
+    }
+    Protect-LedgerOwnerOnlyFile -Path $ApiTokenPath
+    Assert-LedgerOwnerOnlyFile -Path $ApiTokenPath
+    $apiToken = [IO.File]::ReadAllText($ApiTokenPath, $strictUtf8).Trim()
     if ([string]::IsNullOrWhiteSpace($apiToken)) {
         throw 'The local ezBookkeeping API token is empty.'
     }
     $headers = @{ Authorization = "Bearer $apiToken" }
     $body = @{ expiresInSeconds = $ExpiresInSeconds; password = $plainPassword } | ConvertTo-Json -Compress
-    $response = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8180/api/v1/tokens/generate/mcp.json' -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $body -TimeoutSec 15 -ErrorAction Stop
+    $response = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8888/api/v1/tokens/generate/mcp.json' -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $body -MaximumRedirection 0 -TimeoutSec 15 -ErrorAction Stop
     $mcpToken = ([string]$response.result.token).Trim()
     if ($response.success -ne $true -or [string]::IsNullOrWhiteSpace($mcpToken) -or $mcpToken -match '[\r\n]') {
         throw 'ezBookkeeping did not return an MCP token.'
@@ -295,10 +363,23 @@ try {
 } catch {
     $rollbackSucceeded = $true
     if ($configWritten) {
+        $configurationNeedsRestore = $true
         try {
-            Restore-ConfigurationAndService -BackupPath $backupPath -ConfigPath $ConfigPath -Task $task -ExpectedExecutable $expectedExecutable -TaskWasRunning $taskWasRunning -TaskStopped $taskStopped -TaskStarted $taskStarted
+            Assert-LedgerOwnerOnlyFile -Path $backupPath
+            if (-not $taskStopped -and -not $taskStarted -and
+                (Get-LedgerFileSha256 -Path $ConfigPath) -ceq (Get-LedgerFileSha256 -Path $backupPath)) {
+                Assert-LedgerOwnerOnlyFile -Path $ConfigPath
+                $configurationNeedsRestore = $false
+            }
         } catch {
-            $rollbackSucceeded = $false
+            $configurationNeedsRestore = $true
+        }
+        if ($configurationNeedsRestore) {
+            try {
+                Restore-ConfigurationAndService -BackupPath $backupPath -ConfigPath $ConfigPath -Task $task -ExpectedExecutable $expectedExecutable -ExpectedInstallDirectory $normalizedInstallDirectory -ExpectedConfigPath $ConfigPath -TaskWasRunning $taskWasRunning -TaskStopped $taskStopped -TaskStarted $taskStarted
+            } catch {
+                $rollbackSucceeded = $false
+            }
         }
     }
     if (-not $rollbackSucceeded) {

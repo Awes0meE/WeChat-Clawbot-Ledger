@@ -13,7 +13,7 @@ test('denies non-owner, wrong-channel, and missing requesters before reading the
   let reads = 0;
   const resolve = createOwnerMcpConnectionResolver({
     config: ownerConfig,
-    serverBaseUrl: 'http://127.0.0.1:8180',
+    serverBaseUrl: 'http://127.0.0.1:8888',
     mcpTokenPath: 'unused-token-path',
     readToken() {
       reads += 1;
@@ -32,7 +32,7 @@ test('returns the SDK streamable-http connection shape only for the configured W
   let reads = 0;
   const resolve = createOwnerMcpConnectionResolver({
     config: ownerConfig,
-    serverBaseUrl: 'http://127.0.0.1:8180',
+    serverBaseUrl: 'http://127.0.0.1:8888',
     mcpTokenPath: 'unused-token-path',
     readToken() {
       reads += 1;
@@ -41,7 +41,7 @@ test('returns the SDK streamable-http connection shape only for the configured W
   });
 
   assert.deepEqual(await resolve({ messageChannel: 'openclaw-weixin', requesterSenderId: 'alice' }), {
-    url: 'http://127.0.0.1:8180/mcp',
+    url: 'http://127.0.0.1:8888/mcp',
     headers: { Authorization: 'Bearer mcp-token' },
   });
   assert.equal(reads, 1);
@@ -50,7 +50,7 @@ test('returns the SDK streamable-http connection shape only for the configured W
 test('fails safely when the configured owner MCP token is empty', async () => {
   const resolve = createOwnerMcpConnectionResolver({
     config: ownerConfig,
-    serverBaseUrl: 'http://127.0.0.1:8180',
+    serverBaseUrl: 'http://127.0.0.1:8888',
     mcpTokenPath: 'unused-token-path',
     readToken() { return '   '; },
   });
@@ -63,19 +63,19 @@ test('fails safely when the configured owner MCP token is empty', async () => {
 
 test('rejects every server base URL except the exact local ezBookkeeping origin', () => {
   for (const serverBaseUrl of [
-    'https://127.0.0.1:8180',
-    'http://localhost:8180',
-    'http://127.0.0.1:8181',
-    'http://127.0.0.1:8180/',
-    'http://user@127.0.0.1:8180',
-    'http://127.0.0.1:8180?token=ignored',
-    'http://127.0.0.1:8180#fragment',
+    'https://127.0.0.1:8888',
+    'http://localhost:8888',
+    'http://127.0.0.1:18888',
+    'http://127.0.0.1:8888/',
+    'http://user@127.0.0.1:8888',
+    'http://127.0.0.1:8888?token=ignored',
+    'http://127.0.0.1:8888#fragment',
   ]) {
     assert.throws(() => createOwnerMcpConnectionResolver({
       config: ownerConfig,
       serverBaseUrl,
       mcpTokenPath: 'unused-token-path',
-    }), { message: 'MCP server base URL must be http://127.0.0.1:8180.' });
+    }), { message: 'MCP server base URL must be http://127.0.0.1:8888.' });
   }
 });
 
@@ -83,7 +83,7 @@ test('does not infer an owner when the owner allow-list is absent', async () => 
   let reads = 0;
   const resolve = createOwnerMcpConnectionResolver({
     config: {},
-    serverBaseUrl: 'http://127.0.0.1:8180',
+    serverBaseUrl: 'http://127.0.0.1:8888',
     mcpTokenPath: 'unused-token-path',
     readToken() {
       reads += 1;

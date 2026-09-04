@@ -309,7 +309,7 @@ export default definePluginEntry({
     const config = api.pluginConfig ?? {};
     const serverBaseUrl = typeof config.serverBaseUrl === 'string'
       ? config.serverBaseUrl
-      : 'http://127.0.0.1:8180';
+      : 'http://127.0.0.1:8888';
     const tokenPath = typeof config.tokenPath === 'string'
       ? config.tokenPath
       : join(homedir(), '.openclaw', 'secrets', 'ezbookkeeping-token.txt');

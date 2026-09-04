@@ -36,7 +36,7 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
   const logs = [];
   const pluginApi = {
     pluginConfig: {
-      serverBaseUrl: 'http://127.0.0.1:8180',
+      serverBaseUrl: 'http://127.0.0.1:8888',
       tokenPath: join(tempDirectory, 'token.txt'),
       stateDbPath: join(tempDirectory, 'receipts.sqlite'),
       accountName: '日常支出',

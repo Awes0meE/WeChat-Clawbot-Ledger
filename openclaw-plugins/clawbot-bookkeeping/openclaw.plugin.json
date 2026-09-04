@@ -18,7 +18,7 @@
   "mcpServers": {
     "ezbookkeeping": {
       "transport": "streamable-http",
-      "url": "http://127.0.0.1:8180/mcp",
+      "url": "http://127.0.0.1:8888/mcp",
       "toolFilter": {
         "include": ["query_transactions"]
       }
@@ -47,7 +47,7 @@
     "properties": {
       "serverBaseUrl": {
         "type": "string",
-        "const": "http://127.0.0.1:8180"
+        "const": "http://127.0.0.1:8888"
       },
       "tokenPath": {
         "type": "string",

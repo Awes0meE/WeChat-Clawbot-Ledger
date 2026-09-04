@@ -576,7 +576,7 @@ test('API client resolves the exact SGD account and category hierarchy', async (
 
   try {
     const api = new EzBookkeepingApi({
-      serverBaseUrl: 'http://127.0.0.1:8180',
+    serverBaseUrl: 'http://127.0.0.1:8888',
       tokenPath,
       fetchImpl: fakeFetch,
     });
@@ -612,7 +612,7 @@ test('API client lists filtered expense transactions through the documented read
 
   try {
     const api = new EzBookkeepingApi({
-      serverBaseUrl: 'http://127.0.0.1:8180',
+    serverBaseUrl: 'http://127.0.0.1:8888',
       tokenPath,
       fetchImpl: fakeFetch,
     });
@@ -652,7 +652,7 @@ test('API client encodes keywords and omits undefined expense filters', async ()
   writeFileSync(tokenPath, 'secret-test-token', 'utf8');
   let requestUrl;
   const api = new EzBookkeepingApi({
-    serverBaseUrl: 'http://127.0.0.1:8180',
+    serverBaseUrl: 'http://127.0.0.1:8888',
     tokenPath,
     fetchImpl: async (url) => {
       requestUrl = new URL(url);
@@ -681,7 +681,7 @@ test('API client normalizes a blank transaction category name to undefined', asy
   const tokenPath = join(dir, 'token.txt');
   writeFileSync(tokenPath, 'secret-test-token', 'utf8');
   const api = new EzBookkeepingApi({
-    serverBaseUrl: 'http://127.0.0.1:8180',
+    serverBaseUrl: 'http://127.0.0.1:8888',
     tokenPath,
     fetchImpl: async () => new Response(JSON.stringify({ success: true, result: [{
       type: 3,
@@ -723,7 +723,7 @@ test('API client rejects malformed expense transaction elements', async () => {
   ];
   let current;
   const api = new EzBookkeepingApi({
-    serverBaseUrl: 'http://127.0.0.1:8180',
+    serverBaseUrl: 'http://127.0.0.1:8888',
     tokenPath,
     fetchImpl: async () => new Response(JSON.stringify({ success: true, result: [current] }), { status: 200 }),
   });
@@ -749,7 +749,7 @@ test('API client resolves visible expense category filters from a preloaded hier
     { id: 'secondary-1', name: '超市购物', parentId: 'primary-1' },
   ] }];
   const api = new EzBookkeepingApi({
-    serverBaseUrl: 'http://127.0.0.1:8180',
+    serverBaseUrl: 'http://127.0.0.1:8888',
     tokenPath,
     fetchImpl: async () => { throw new Error('fetch should not be called'); },
   });
@@ -772,7 +772,7 @@ test('API client preserves hidden categories for historical summary mapping', as
   const tokenPath = join(dir, 'token.txt');
   writeFileSync(tokenPath, 'secret-test-token', 'utf8');
   const api = new EzBookkeepingApi({
-    serverBaseUrl: 'http://127.0.0.1:8180',
+    serverBaseUrl: 'http://127.0.0.1:8888',
     tokenPath,
     fetchImpl: async () => new Response(JSON.stringify({ success: true, result: {
       2: [
@@ -809,7 +809,7 @@ test('API client rejects malformed category and transaction list results', async
   writeFileSync(tokenPath, 'secret-test-token', 'utf8');
   let request = 0;
   const api = new EzBookkeepingApi({
-    serverBaseUrl: 'http://127.0.0.1:8180',
+    serverBaseUrl: 'http://127.0.0.1:8888',
     tokenPath,
     fetchImpl: async () => {
       request += 1;
@@ -826,26 +826,39 @@ test('API client rejects malformed category and transaction list results', async
 });
 
 test('API client refuses non-loopback bookkeeping servers', () => {
-  assert.throws(() => new EzBookkeepingApi({
-    serverBaseUrl: 'https://example.com',
-    tokenPath: 'ignored',
-  }), /loopback/i);
+  for (const serverBaseUrl of [
+    'https://example.com',
+    'https://127.0.0.1:8888',
+    'http://localhost:8888',
+    'http://0.0.0.0:8888',
+    'http://127.0.0.1:18888',
+    'http://127.0.0.1:8888/',
+    'http://127.0.0.1:8888/path',
+    'http://user@127.0.0.1:8888',
+    'http://127.0.0.1:8888?query=1',
+    'http://127.0.0.1:8888#fragment',
+  ]) {
+    assert.throws(() => new EzBookkeepingApi({
+      serverBaseUrl,
+      tokenPath: 'ignored',
+    }), /loopback/i, serverBaseUrl);
+  }
 });
 
 test('API client requires a safe bounded integer request timeout', () => {
   for (const requestTimeoutMs of [0, -1, 1.5, 60_001, Number.POSITIVE_INFINITY, '10']) {
     assert.throws(() => new EzBookkeepingApi({
-      serverBaseUrl: 'http://127.0.0.1:8180',
+    serverBaseUrl: 'http://127.0.0.1:8888',
       tokenPath: 'ignored',
       requestTimeoutMs,
     }), /timeout/i);
   }
   assert.doesNotThrow(() => new EzBookkeepingApi({
-    serverBaseUrl: 'http://127.0.0.1:8180',
+    serverBaseUrl: 'http://127.0.0.1:8888',
     tokenPath: 'ignored',
   }));
   assert.doesNotThrow(() => new EzBookkeepingApi({
-    serverBaseUrl: 'http://127.0.0.1:8180',
+    serverBaseUrl: 'http://127.0.0.1:8888',
     tokenPath: 'ignored',
     requestTimeoutMs: 60_000,
   }));
@@ -857,7 +870,7 @@ test('API client times out when fetch ignores its abort signal', async () => {
   writeFileSync(tokenPath, 'secret-test-token', 'utf8');
   let signal;
   const api = new EzBookkeepingApi({
-    serverBaseUrl: 'http://127.0.0.1:8180',
+    serverBaseUrl: 'http://127.0.0.1:8888',
     tokenPath,
     requestTimeoutMs: 10,
     fetchImpl: async (_url, options) => {
@@ -880,7 +893,7 @@ test('API client keeps abort-aware fetch timeout errors free of request secrets'
   const tokenPath = join(dir, 'private-token-file.txt');
   writeFileSync(tokenPath, 'secret-test-token', 'utf8');
   const api = new EzBookkeepingApi({
-    serverBaseUrl: 'http://127.0.0.1:8180',
+    serverBaseUrl: 'http://127.0.0.1:8888',
     tokenPath,
     requestTimeoutMs: 10,
     fetchImpl: async (url, options) => new Promise((_resolve, reject) => {
@@ -908,7 +921,7 @@ test('API client clears the request timeout after fetch completes', async () => 
   writeFileSync(tokenPath, 'secret-test-token', 'utf8');
   let aborted = false;
   const api = new EzBookkeepingApi({
-    serverBaseUrl: 'http://127.0.0.1:8180',
+    serverBaseUrl: 'http://127.0.0.1:8888',
     tokenPath,
     requestTimeoutMs: 10,
     fetchImpl: async (_url, options) => {
@@ -933,7 +946,7 @@ test('API client sanitizes token-file read failures without contacting the serve
   const tokenPath = join(dir, 'private-token-location.txt');
   let fetchCount = 0;
   const api = new EzBookkeepingApi({
-    serverBaseUrl: 'http://127.0.0.1:8180',
+    serverBaseUrl: 'http://127.0.0.1:8888',
     tokenPath,
     fetchImpl: async () => {
       fetchCount += 1;

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-const EZBOOKKEEPING_ORIGIN = 'http://127.0.0.1:8180';
+const EZBOOKKEEPING_ORIGIN = 'http://127.0.0.1:8888';
 const EZBOOKKEEPING_MCP_URL = `${EZBOOKKEEPING_ORIGIN}/mcp`;
 
 function readMcpToken(path) {
@@ -9,18 +9,18 @@ function readMcpToken(path) {
 
 function assertExactEzBookkeepingOrigin(serverBaseUrl) {
   if (typeof serverBaseUrl !== 'string' || serverBaseUrl !== EZBOOKKEEPING_ORIGIN) {
-    throw new Error('MCP server base URL must be http://127.0.0.1:8180.');
+    throw new Error('MCP server base URL must be http://127.0.0.1:8888.');
   }
   const url = new URL(serverBaseUrl);
   if (url.protocol !== 'http:'
     || url.hostname !== '127.0.0.1'
-    || url.port !== '8180'
+    || url.port !== '8888'
     || url.username
     || url.password
     || url.search
     || url.hash
     || url.pathname !== '/') {
-    throw new Error('MCP server base URL must be http://127.0.0.1:8180.');
+    throw new Error('MCP server base URL must be http://127.0.0.1:8888.');
   }
 }
 

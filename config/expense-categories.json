@@ -2,7 +2,6 @@
   "schemaVersion": 1,
   "status": "imported_verified",
   "importedAt": "2026-09-03T05:33:00+08:00",
-  "target": "http://127.0.0.1:8180",
   "account": "日常支出",
   "currency": "SGD",
   "timezone": "Asia/Singapore",

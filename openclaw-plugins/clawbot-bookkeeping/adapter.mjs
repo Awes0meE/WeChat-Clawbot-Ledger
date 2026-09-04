@@ -624,9 +624,19 @@ export class EzBookkeepingApi {
     fetchImpl = globalThis.fetch,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
   }) {
+    if (serverBaseUrl !== 'http://127.0.0.1:8888') {
+      throw new Error('bookkeeping server must be the fixed loopback endpoint http://127.0.0.1:8888');
+    }
     const parsed = new URL(serverBaseUrl);
-    if (parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1' || parsed.port !== '8180') {
-      throw new Error('bookkeeping server must be the fixed loopback endpoint http://127.0.0.1:8180');
+    if (parsed.protocol !== 'http:'
+      || parsed.hostname !== '127.0.0.1'
+      || parsed.port !== '8888'
+      || parsed.username
+      || parsed.password
+      || parsed.pathname !== '/'
+      || parsed.search
+      || parsed.hash) {
+      throw new Error('bookkeeping server must be the fixed loopback endpoint http://127.0.0.1:8888');
     }
     if (!Number.isSafeInteger(requestTimeoutMs)
       || requestTimeoutMs < 1

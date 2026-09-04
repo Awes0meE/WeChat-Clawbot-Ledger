@@ -10,7 +10,7 @@ test('declares only the read-only ezBookkeeping MCP surface without credentials'
 
   assert.deepEqual(Object.keys(manifest.mcpServers), ['ezbookkeeping']);
   assert.equal(manifest.mcpServers.ezbookkeeping.transport, 'streamable-http');
-  assert.equal(manifest.mcpServers.ezbookkeeping.url, 'http://127.0.0.1:8180/mcp');
+  assert.equal(manifest.mcpServers.ezbookkeeping.url, 'http://127.0.0.1:8888/mcp');
   assert.deepEqual(manifest.mcpServers.ezbookkeeping.toolFilter.include, ['query_transactions']);
   assert.equal(manifest.mcpServers.ezbookkeeping.toolFilter.include.includes('add_transaction'), false);
   assert.equal(manifestText.includes('Authorization'), false);
