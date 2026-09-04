@@ -1,5 +1,7 @@
 # Conversational Expense Confirmation Implementation Plan
 
+> **Historical record (2026-09-04):** The confirmation flow has been implemented. The original local-Qwen runtime assumption is superseded by the official Codex harness, and cross-instance tool/reply handoff is now persisted in local SQLite. Use `README.md` and `WINDOWS-HANDOFF.md` for current operations.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let the local bookkeeper ask for confirmation on ambiguous expenses and write the saved proposal only after the owner replies affirmatively, without turning the plugin into a Chinese-language semantic parser.

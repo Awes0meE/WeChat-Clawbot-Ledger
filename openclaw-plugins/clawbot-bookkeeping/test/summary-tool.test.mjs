@@ -45,6 +45,7 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
   plugin.register(pluginApi);
 
   return {
+    hooks,
     logs,
     summarizeExpensesFactory,
     summarizeExpensesDefinition,
@@ -141,6 +142,66 @@ test('rejects non-owners before reading a token or contacting the ledger', async
     const tool = harness.summarizeExpensesFactory(nonOwnerContext());
     await assert.rejects(() => tool.execute('tool-call-owner', { period: 'this_month' }), /owner/i);
     assert.equal(fetchCount, 0);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('uses the trusted owner query when compacted tool context loses the owner flag', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-summary-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async (url) => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith('/accounts/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: [
+        { id: 'account-1', name: '日常支出', currency: 'SGD' },
+      ] }), { status: 200 });
+    }
+    if (pathname.endsWith('/transaction/categories/list.json')) {
+      return new Response(JSON.stringify({ success: true, result: { 2: [] } }), { status: 200 });
+    }
+    if (pathname.endsWith('/transactions/list/all.json')) {
+      return new Response(JSON.stringify({ success: true, result: [] }), { status: 200 });
+    }
+    throw new Error(`unexpected URL: ${url}`);
+  });
+
+  try {
+    const runId = 'compacted-owner-summary-run';
+    const toolCallId = 'compacted-owner-summary-call';
+    const context = {
+      channelId: 'openclaw-weixin',
+      accountId: 'bot-account',
+      messageId: 'compacted-owner-summary-message',
+      senderId: 'owner-user',
+      sessionKey: 'agent:main:main',
+      runId,
+    };
+    await harness.hooks.get('message_received')({
+      content: '这个月我花了多少钱',
+      timestamp: 1_788_425_460,
+      messageId: context.messageId,
+      senderId: context.senderId,
+      sessionKey: context.sessionKey,
+      runId,
+    }, context);
+    await harness.hooks.get('before_agent_run')({
+      prompt: '这个月我花了多少钱',
+      messages: [],
+      senderIsOwner: true,
+    }, { ...context, trigger: 'user' });
+    await harness.hooks.get('before_tool_call')({
+      toolName: 'summarize_expenses',
+      params: { period: 'this_month' },
+      runId,
+      toolCallId,
+    }, { runId, toolCallId, sessionKey: context.sessionKey });
+
+    const tool = harness.summarizeExpensesFactory(nonOwnerContext());
+    const result = await tool.execute(toolCallId, { period: 'this_month' });
+    assert.equal(result.details.status, 'ok');
+    assert.equal(result.content[0].text, '这个月还没有支出记录哦～');
   } finally {
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
@@ -331,7 +392,7 @@ test('returns a stable failure without sensitive ledger details when a read fail
   try {
     const tool = harness.summarizeExpensesFactory(ownerContext());
     const result = await tool.execute('tool-call-read-failure', { period: 'this_month' });
-    assert.equal(result.content[0].text, '账本暂时连不上，本次没有读取任何数据，请稍后再试。');
+    assert.equal(result.content[0].text, '账本暂时连不上，这次没有读取任何数据～ 稍后再试试吧。');
     assert.deepEqual(result.details, { status: 'failed' });
     assert.equal(harness.logs.some((entry) => /test-token|transaction secret/u.test(entry)), false);
     assert.match(harness.logs[0], /Error/u);
@@ -356,7 +417,7 @@ test('returns the stable no-data failure when an expense summary request times o
       'tool-call-read-timeout',
       { period: 'this_month' },
     );
-    assert.equal(result.content[0].text, '账本暂时连不上，本次没有读取任何数据，请稍后再试。');
+    assert.equal(result.content[0].text, '账本暂时连不上，这次没有读取任何数据～ 稍后再试试吧。');
     assert.deepEqual(result.details, { status: 'failed' });
     assert.equal(requestCount, 1);
     assert.match(harness.logs[0], /Error/u);
@@ -386,7 +447,7 @@ test('turns a malformed transaction response into the same stable read failure',
 
   try {
     const result = await harness.summarizeExpensesFactory(ownerContext()).execute('tool-call-malformed', { period: 'this_month' });
-    assert.equal(result.content[0].text, '账本暂时连不上，本次没有读取任何数据，请稍后再试。');
+    assert.equal(result.content[0].text, '账本暂时连不上，这次没有读取任何数据～ 稍后再试试吧。');
     assert.deepEqual(result.details, { status: 'failed' });
     assert.equal(harness.logs.some((entry) => /sensitive comment/u.test(entry)), false);
   } finally {

@@ -1,31 +1,34 @@
-# 本地账本助理部署方案
+# 微信账本助理部署方案
 
-更新时间：2026-09-04。当前发布是 Windows 本地实现；Mac 接收端已停止，Vercel 和家庭网页登录尚未进入本轮范围。
+更新时间：2026-09-04。当前发布由 Windows 托管；Mac 接收端已停止，Vercel 和家庭网页登录尚未进入本轮范围。
 
 ## 已定方案
 
 ```text
-WeChat -> OpenClaw owner-bound local Qwen
+WeChat -> OpenClaw owner-bound OpenAI GPT-5.6 Sol (official Codex harness)
   -> record_expense | prepare_expense | resolve_expense_confirmation
      -> trusted write/confirmation adapter -> ezBookkeeping HTTP API
   -> summarize_expenses -> deterministic read adapter -> ezBookkeeping HTTP API
   -> ezbookkeeping__query_transactions -> requester-scoped read-only MCP
+     (code-ready; local MCP activation still pending)
 ```
 
-手机微信是输入与回复入口，腾讯 iLink 将消息交给 Windows OpenClaw。专用 `bookkeeper` 使用本地 Ollama `qwen3:8b` 理解账本意图；ezBookkeeping 1.6.1 在 `127.0.0.1:8180` 保存和查询本地 SQLite 数据。Gateway 也只绑定 loopback。
+手机微信是输入与回复入口，腾讯 iLink 将消息交给 Windows OpenClaw。专用 `bookkeeper` 使用 OpenAI `gpt-5.6-sol`，并通过官方 `@openclaw/codex` harness 和 ChatGPT OAuth 理解账本意图；ezBookkeeping 1.6.1 在 `127.0.0.1:8180` 保存和查询本地 SQLite 数据。Gateway 也只绑定 loopback。该云端模型处理已获用户明确授权；账本请求与必要的查询结果只可进入当前已授权的 Codex 会话，本机 token、微信身份、消息 ID、SQLite 和 OpenClaw 状态不得上传。
+
+当前实时状态（2026-09-04）：HTTP 写入、对话确认和确定性汇总已上线；ezBookkeeping 原生 MCP 仍为 `enable_mcp=false`，独立 MCP token 尚未生成。因此 `query_transactions` 是代码就绪、待交互式安全激活的能力，不得当作已通过端到端验收的功能。
 
 配置中的正式账户为唯一可见 SGD 账户 `日常支出`，微信回执显示账本名 `日常账本`。运行时以 `openclaw-plugins/clawbot-bookkeeping/categories.mjs` 中不可变的 `CATEGORY_DEFINITIONS` 为权威分类契约，固定为 11 个一级分类、45 个二级分类；`config/expense-categories.json` 只是脱敏的导入与部署目录快照。
 
 ## 为什么采用混合接入
 
-写入继续使用定制工具。`record_expense` 处理明确支出；`prepare_expense` 将需要澄清的完整候选存为十分钟待确认提案且不访问账本；`resolve_expense_confirmation` 只接受可信当前消息中的简短确认或取消，并在确认后复用原消息时间和同一套写入事务。它们关联可信微信元数据，以 `channel + messageId` 持久去重。原生 MCP 的 `add_transaction` 没有这层消息关联和去重，因此绝不向代理开放。
+写入继续使用定制工具。`record_expense` 处理明确支出；`prepare_expense` 将需要澄清的完整候选存为十分钟待确认提案且不访问账本；`resolve_expense_confirmation` 只接受可信当前消息中的简短确认或取消，并在确认后复用原消息时间和同一套写入事务。它们关联可信微信元数据，以 `channel + messageId` 持久去重。短期工具绑定、待确认提案和权威回执交接均存在本地 SQLite，确认或回执发送跨插件实例时仍可恢复；回执候选不唯一则失败关闭。原生 MCP 的 `add_transaction` 没有这层消息关联和去重，因此绝不向代理开放。
 
 读取分两条路径：
 
 - `summarize_expenses` 通过 HTTP API 读取固定账户的支出，由代码按整数分计算今天、本周、本月、上月、今年或自定义范围内的总额、笔数、一级分类汇总和最大三笔。它可按正式分类或备注关键词过滤，不依赖模型心算。
-- `ezbookkeeping__query_transactions` 使用 ezBookkeeping 原生 MCP 回答最近记录、商家或备注等灵活历史问题。第一版服务级与代理级都只允许 `query_transactions`，不开放余额、分类、标签、汇率和任何写工具。默认 3 条、最多 10 条只是专用代理的回复策略，不是原生 MCP 的项目侧硬限制或安全边界。
+- `ezbookkeeping__query_transactions` 在完成交互式 MCP 激活后，使用 ezBookkeeping 原生 MCP 回答最近记录、商家或备注等灵活历史问题。第一版服务级与代理级都只允许 `query_transactions`，不开放余额、分类、标签、汇率和任何写工具。默认 3 条、最多 10 条只是专用代理的回复策略，不是原生 MCP 的项目侧硬限制或安全边界。
 
-本地 Qwen 按语义区分写入、待确认、取消和查询；插件不使用商户白名单代替语言理解。消息里出现日期、数量或“支出”不等于要写入；只有明确表达已发生消费且金额明确时才调用一次 `record_expense`。`午饭7.2吗` 先返回完整确认单，单独回复“是”才入账；新的实质消息会废弃旧提案并按新请求处理。
+Codex 按语义区分写入、待确认、取消和查询；插件不使用商户白名单代替语言理解。消息里出现日期、数量或“支出”不等于要写入；只有明确表达已发生消费且金额明确时才调用一次 `record_expense`。`午饭7.2吗` 先返回完整确认单，单独回复“是”才入账；新的实质消息会废弃旧提案并按新请求处理。专用模型以 `agentRuntime.id: codex` fail closed，不自动退回 Qwen 或其他模型。
 
 ## 写入与回执契约
 
@@ -80,7 +83,7 @@ WeChat -> OpenClaw owner-bound local Qwen
 - MCP 历史查询失败：使用同一条“没有读取任何数据”文案，不重试，不展示底层错误。
 - 信息不足：只追问缺失金额、日期或意图，不再统一回复“记账失败，请重新发送一条新消息”。
 
-## 所有者限定的 MCP
+## 所有者限定的 MCP（待本机激活）
 
 `clawbot-bookkeeping` 注册 requester-scoped connection resolver。只有当前运行同时满足以下条件，才读取 MCP token 并在内存中构造连接：
 
@@ -148,4 +151,4 @@ openclaw plugins info clawbot-bookkeeping
 
 ## 延后事项
 
-本轮不部署 Vercel、不开放公网端口、不实现家庭网页登录，也不允许云端模型读取账本。家庭查看功能必须另行设计安全同步、认证、授权、备份和审计，不能直接把本地 ezBookkeeping 或 MCP 暴露到公网。
+本轮不部署 Vercel、不开放公网端口、不实现家庭网页登录。经用户明确授权，账本请求与必要查询结果可进入当前 ChatGPT OAuth 下的 Codex 会话；不得发送到其他云端模型或服务。家庭查看功能必须另行设计安全同步、认证、授权、备份和审计，不能直接把本地 ezBookkeeping 或 MCP 暴露到公网。

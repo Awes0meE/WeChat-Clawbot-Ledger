@@ -2,7 +2,10 @@ import { createHash } from 'node:crypto';
 
 const MAX_EZBOOKKEEPING_AMOUNT_MINOR = 9_999_999_999_999;
 const MAX_COMMENT_CHARACTERS = 255;
-const AMOUNT_EXPRESSION = /\d+(?:\.\d{1,2})?(?:\s*[+＋]\s*\d+(?:\.\d{1,2})?)*/gu;
+const DECIMAL_AMOUNT_SOURCE = String.raw`\d+(?:\.\d{1,2})?`;
+const SPOKEN_AMOUNT_SOURCE = String.raw`(?:\d+|[一二两三四五六七八九十]+)块(?:\d{1,2}|[零一二两三四五六七八九]{1,2})?`;
+const AMOUNT_PART_SOURCE = `(?:${SPOKEN_AMOUNT_SOURCE}|${DECIMAL_AMOUNT_SOURCE})`;
+const AMOUNT_EXPRESSION = new RegExp(`${AMOUNT_PART_SOURCE}(?:\\s*(?:[+＋]|加)\\s*${AMOUNT_PART_SOURCE})*`, 'gu');
 const INSTRUCTION_INJECTION = /(?:record_expense|summarize_expenses|query_transactions|绕过.{0,8}(?:安全|限制|规则)|(?:忽略|无视|跳过).{0,12}(?:之前|前面|以上|规则|指令)|(?:调用|执行|使用).{0,8}(?:工具|函数))/iu;
 const QUANTITY_OR_TIME_UNIT = /^(?:个|位|人|根|件|张|瓶|杯|盒|包|份|次|天|小时|分钟|秒|公里|千米|米|厘米|毫米|km|kg|公斤|斤|克|年|月|日|号|点)/iu;
 const ADMIN_AMOUNT_CUE = /(?:订单(?:号)?|余额|原价|标价|用券|券|优惠(?:后)?|折扣|编号|单号)\s*$/u;
@@ -40,11 +43,43 @@ export function parseAmountToMinorUnits(value) {
 function expressionAmountToMinorUnits(expression) {
   try {
     return expression
-      .split(/[+＋]/u)
-      .reduce((sum, part) => sum + parseAmountToMinorUnits(part.trim()), 0);
+      .split(/[+＋加]/u)
+      .reduce((sum, part) => sum + amountPartToMinorUnits(part.trim()), 0);
   } catch {
     return undefined;
   }
+}
+
+function chineseWholeNumberToInteger(value) {
+  const digitValues = new Map([
+    ['一', 1], ['二', 2], ['两', 2], ['三', 3], ['四', 4],
+    ['五', 5], ['六', 6], ['七', 7], ['八', 8], ['九', 9],
+  ]);
+  if (!value.includes('十')) return digitValues.get(value);
+  const match = value.match(/^([一二两三四五六七八九])?十([一二三四五六七八九])?$/u);
+  if (!match) return undefined;
+  return (match[1] ? digitValues.get(match[1]) : 1) * 10
+    + (match[2] ? digitValues.get(match[2]) : 0);
+}
+
+function amountPartToMinorUnits(part) {
+  if (!part.includes('块')) return parseAmountToMinorUnits(part);
+  const match = part.match(/^(\d+|[一二两三四五六七八九十]+)块(\d{1,2}|[零一二两三四五六七八九]{1,2})?$/u);
+  if (!match) throw new Error('unsupported spoken amount');
+
+  const whole = /^\d+$/u.test(match[1])
+    ? Number.parseInt(match[1], 10)
+    : chineseWholeNumberToInteger(match[1]);
+  if (!Number.isInteger(whole)) throw new Error('unsupported spoken whole amount');
+
+  const chineseFractionDigits = new Map([
+    ['零', '0'], ['一', '1'], ['二', '2'], ['两', '2'], ['三', '3'],
+    ['四', '4'], ['五', '5'], ['六', '6'], ['七', '7'], ['八', '8'], ['九', '9'],
+  ]);
+  const fraction = match[2]
+    ? Array.from(match[2], (character) => chineseFractionDigits.get(character) ?? character).join('')
+    : '';
+  return parseAmountToMinorUnits(fraction ? `${whole}.${fraction}` : String(whole));
 }
 
 function eligibleAmountCandidates(clause, clauseIndex) {
@@ -111,7 +146,9 @@ export function extractVerbatimComment(content) {
   const delimiterIndex = text.indexOf('备注');
   if (delimiterIndex < 0) return '';
 
-  return validateComment(text.slice(delimiterIndex + '备注'.length));
+  const explicitComment = text.slice(delimiterIndex + '备注'.length)
+    .replace(/^\s*[:：]\s*/u, '');
+  return validateComment(explicitComment);
 }
 
 export function validateComment(value) {
@@ -149,11 +186,11 @@ export function formatExpenseReceipt({
 
   return [
     '记下来啦！🧾',
-    `账本：[ ${ledgerDisplayName} ]`,
-    `支出：${(Number(amountMinor) / 100).toFixed(2)} SGD`,
-    `分类：${primaryCategory} - ${subcategory}`,
-    `备注：${displayComment || '无'}`,
-    `时间：${formattedTime}`,
+    `- 账本：[ ${ledgerDisplayName} ]`,
+    `- 支出：${(Number(amountMinor) / 100).toFixed(2)} SGD`,
+    `- 分类：${primaryCategory} - ${subcategory}`,
+    `- 备注：${displayComment || '无'}`,
+    `- 时间：${formattedTime}`,
   ].join('\n');
 }
 
@@ -174,9 +211,9 @@ export function formatExpenseConfirmation({
     time,
   }).split('\n').slice(1);
   return [
-    '你是想记下这笔吗？🤔',
+    '帮你核对一下这笔～🤔',
     ...receiptLines,
-    '回复“是”确认，回复“不是”取消。',
+    '- 确认：没问题就回复“是”，不记的话回复“不是”就好～',
   ].join('\n');
 }
 
@@ -202,12 +239,12 @@ function clientSessionIdFor(receiptKey) {
 
 export function duplicateResponseText(result) {
   if (result?.previousStatus === 'failed') {
-    return '上一处理尝试失败，未重复入账；请重新发送一条消息重试。';
+    return '上次没有记成功，我也没有重复入账～ 请重新发一条消息再试吧。';
   }
   if (result?.previousStatus !== 'created') {
-    return '同一条微信消息正在处理或状态未确认，未重复入账。';
+    return '这条消息还在处理，或者结果暂时不确定；我没有重复入账哦。';
   }
-  return '同一条微信消息已处理，未重复入账。';
+  return '这条消息已经处理过啦，我没有重复入账～';
 }
 
 function validateExpenseInput(input, inbound) {

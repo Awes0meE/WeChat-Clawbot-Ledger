@@ -17,6 +17,7 @@ import {
   prepareExpenseConfirmation,
   recordConfirmedExpense,
   recordExpense,
+  requiresExpenseConfirmation,
 } from './bookkeeping-core.mjs';
 import {
   CATEGORY_GUIDE,
@@ -39,6 +40,8 @@ type InboundMessage = {
   observedAt: number;
   timeSource: 'message' | 'received';
   conversationKey: string;
+  deliveryKey: string;
+  recipientKey: string;
 };
 
 type SummaryParams = {
@@ -66,6 +69,19 @@ type ResolveExpenseConfirmationParams = {
   decision: 'confirm' | 'cancel';
 };
 
+type AuthoritativeToolResponse = {
+  content: Array<{ type: 'text'; text: string }>;
+  details: Record<string, unknown>;
+};
+
+type ToolExecutionContext = {
+  senderIsOwner?: boolean;
+  sessionKey?: string;
+  messageChannel?: string;
+  agentAccountId?: string;
+  requesterSenderId?: string;
+};
+
 type RecordExpenseResult = {
   status: 'created' | 'duplicate';
   dedupeStatus?: 'unconfirmed';
@@ -82,17 +98,24 @@ type RecordExpenseResult = {
 });
 
 const TRUSTED_INBOUND_MAX_AGE_MS = 10 * 60 * 1000;
+const TRUSTED_PROMPT_CORRELATION_MAX_AGE_MS = 60 * 1000;
 const PENDING_CONFIRMATION_TTL_MS = 10 * 60 * 1000;
 const TOOL_CALL_SLOT_RETENTION_MS = TRUSTED_INBOUND_MAX_AGE_MS;
+const AUTHORITATIVE_REPLY_MAX_AGE_MS = TRUSTED_INBOUND_MAX_AGE_MS;
+const MISSING_TRUSTED_INBOUND_ERROR = '缺少当前微信消息的可信元数据，已拒绝操作账本。';
 const EXPENSE_TOOL_NAMES = new Set([
   'record_expense',
   'prepare_expense',
   'resolve_expense_confirmation',
 ]);
+const AUTHORITATIVE_REPLY_TOOL_NAMES = new Set([
+  ...EXPENSE_TOOL_NAMES,
+  'summarize_expenses',
+]);
 const AFFIRMATIVE_REPLIES = new Set(['是', '对', '对的', '确认', '嗯', '嗯嗯', '好', '好的', '可以', '记吧', '记下吧']);
 const NEGATIVE_REPLIES = new Set(['不是', '否', '不对', '取消', '不用', '别记', '不要']);
 
-function trustedInboundLookupKey(kind: 'session' | 'sender' | 'run', value: string) {
+function trustedInboundLookupKey(kind: 'session' | 'sender' | 'run' | 'message', value: string) {
   return createHash('sha256').update(`${kind}\u0000${value}`, 'utf8').digest('hex');
 }
 
@@ -117,11 +140,55 @@ function trustedConversationKey({
     .digest('hex');
 }
 
+function trustedDeliveryKey({
+  channel,
+  accountId,
+  recipientId,
+}: {
+  channel?: string;
+  accountId?: string;
+  recipientId?: string;
+}) {
+  if (!channel || !accountId || !recipientId) return undefined;
+  return createHash('sha256')
+    .update(`delivery\u0000${channel}\u0000${accountId}\u0000${recipientId}`, 'utf8')
+    .digest('hex');
+}
+
+function trustedRecipientKey({
+  channel,
+  recipientId,
+}: {
+  channel?: string;
+  recipientId?: string;
+}) {
+  if (!channel || !recipientId) return undefined;
+  return createHash('sha256')
+    .update(`recipient\u0000${channel}\u0000${recipientId}`, 'utf8')
+    .digest('hex');
+}
+
+function durableToolBridgeLookupKey(toolName: string, recipientKey: string) {
+  return createHash('sha256')
+    .update(`tool-bridge-lookup\u0000${toolName}\u0000${recipientKey}`, 'utf8')
+    .digest('hex');
+}
+
+function durableToolBridgeMessageKey(toolName: string, inbound: InboundMessage) {
+  return createHash('sha256')
+    .update(`tool-bridge-message\u0000${toolName}\u0000${inbound.channel}\u0000${inbound.messageId}`, 'utf8')
+    .digest('hex');
+}
+
 function confirmationDecision(content: string): 'confirm' | 'cancel' | undefined {
   const normalized = content.trim();
   if (AFFIRMATIVE_REPLIES.has(normalized)) return 'confirm';
   if (NEGATIVE_REPLIES.has(normalized)) return 'cancel';
   return undefined;
+}
+
+function promptEndsWithInboundMessage(prompt: string, content: string) {
+  return prompt === content || prompt.endsWith(`\n${content}`);
 }
 
 function trustedInboundLookupKeys({
@@ -229,8 +296,33 @@ export default definePluginEntry({
     const receiptStore = new SqliteReceiptStore(stateDbPath);
     const preparedRuns = new Set<string>();
     const inboundByRun = new Map<string, InboundMessage>();
+    const unverifiedInboundByRun = new Map<string, InboundMessage>();
+    const deliveryKeysByRun = new Map<string, {
+      deliveryKey: string;
+      recipientKey: string;
+      touchedAt: number;
+    }>();
+    const authoritativeRepliesByRun = new Map<string, {
+      text: string;
+      touchedAt: number;
+      persisted: boolean;
+      deliveryKey?: string;
+      recipientKey?: string;
+    }>();
+    const authoritativeReplyDeliveriesByRun = new Map<string, {
+      sourceRunKey: string;
+      touchedAt: number;
+    }>();
+    const authoritativeToolResultsByRun = new Map<string, {
+      response: AuthoritativeToolResponse;
+      touchedAt: number;
+    }>();
     const toolCallSlots = new Map<string, {
       runKey: string;
+      toolName: string;
+      sessionKey?: string;
+      requesterConversationKey?: string;
+      conflictingRunKeys?: Set<string>;
       inbound?: InboundMessage;
       ambiguous: boolean;
       touchedAt: number;
@@ -240,6 +332,56 @@ export default definePluginEntry({
         if (now - slot.touchedAt > TOOL_CALL_SLOT_RETENTION_MS) {
           toolCallSlots.delete(toolCallKey);
         }
+      }
+      for (const [runKey, reply] of authoritativeRepliesByRun) {
+        if (now - reply.touchedAt > AUTHORITATIVE_REPLY_MAX_AGE_MS) {
+          authoritativeRepliesByRun.delete(runKey);
+        }
+      }
+      for (const [runKey, delivery] of authoritativeReplyDeliveriesByRun) {
+        if (now - delivery.touchedAt > AUTHORITATIVE_REPLY_MAX_AGE_MS) {
+          authoritativeReplyDeliveriesByRun.delete(runKey);
+        }
+      }
+      for (const [runKey, delivery] of deliveryKeysByRun) {
+        if (now - delivery.touchedAt > AUTHORITATIVE_REPLY_MAX_AGE_MS) {
+          deliveryKeysByRun.delete(runKey);
+        }
+      }
+      for (const [runKey, result] of authoritativeToolResultsByRun) {
+        if (now - result.touchedAt > AUTHORITATIVE_REPLY_MAX_AGE_MS) {
+          authoritativeToolResultsByRun.delete(runKey);
+        }
+      }
+    };
+    const storeAuthoritativeReply = (
+      runKey: string,
+      text: string,
+      touchedAt = Date.now(),
+    ) => {
+      if (authoritativeRepliesByRun.has(runKey)) return;
+      const delivery = deliveryKeysByRun.get(runKey);
+      const authoritativeReply = {
+        text,
+        touchedAt,
+        persisted: false,
+        ...(delivery ?? {}),
+      };
+      authoritativeRepliesByRun.set(runKey, authoritativeReply);
+      if (!delivery) return;
+      try {
+        receiptStore.storeAuthoritativeReply({
+          replyKey: runKey,
+          deliveryKey: delivery.deliveryKey,
+          recipientKey: delivery.recipientKey,
+          text,
+          expiresAt: touchedAt + AUTHORITATIVE_REPLY_MAX_AGE_MS,
+        });
+        authoritativeReply.persisted = true;
+      } catch {
+        api.logger?.error?.(
+          'clawbot-bookkeeping: failed to persist authoritative reply handoff',
+        );
       }
     };
 
@@ -260,7 +402,9 @@ export default definePluginEntry({
       const senderId = context.senderId ?? event.senderId ?? event.from;
       const accountId = context.accountId;
       const conversationKey = trustedConversationKey({ sessionKey, channel, accountId, senderId });
-      if (!conversationKey) return;
+      const deliveryKey = trustedDeliveryKey({ channel, accountId, recipientId: senderId });
+      const recipientKey = trustedRecipientKey({ channel, recipientId: senderId });
+      if (!conversationKey || !deliveryKey || !recipientKey) return;
       api.logger?.info?.(
         `clawbot-bookkeeping: inbound metadata session=${Boolean(sessionKey)} message=${Boolean(messageId)} sender=${Boolean(senderId)} channel=${Boolean(channel)}`,
       );
@@ -274,8 +418,14 @@ export default definePluginEntry({
         observedAt,
         timeSource: hasMessageTimestamp ? 'message' : 'received',
         conversationKey,
+        deliveryKey,
+        recipientKey,
       } satisfies InboundMessage;
       const lookupKeys = trustedInboundLookupKeys({ sessionKey, channel, senderId });
+      lookupKeys.push(trustedInboundLookupKey(
+        'message',
+        `${channel}\u0000${senderId}\u0000${messageId}`,
+      ));
       const runId = context.runId ?? event.runId;
       if (runId) lookupKeys.push(trustedInboundLookupKey('run', runId));
       receiptStore.enqueueTrustedInbound(
@@ -294,56 +444,318 @@ export default definePluginEntry({
 
       const channel = context.channel ?? context.channelId ?? event.channelId;
       const senderId = context.senderId ?? event.senderId;
-      const fallbackKeys = channel && senderId
-        ? trustedInboundLookupKeys({
-          sessionKey: context.sessionKey,
-          channel,
-          senderId,
-        })
-        : [];
-      const inbound = runId
+      let inbound = runId
         ? receiptStore.claimTrustedInbound([trustedInboundLookupKey('run', runId)]) as InboundMessage | undefined
         : undefined;
-
-      if (!inbound && fallbackKeys.length > 0) {
-        // Consume but never bind an inbound that cannot be correlated to this exact run.
-        receiptStore.claimTrustedInbound(fallbackKeys);
+      if (!inbound
+        && runId
+        && channel
+        && senderId
+        && context.trigger === 'user'
+        && event.senderIsOwner === true) {
+        const now = Date.now();
+        const conversationKey = trustedConversationKey({
+          sessionKey: context.sessionKey,
+          channel,
+          accountId: context.accountId ?? event.accountId,
+          senderId,
+        });
+        inbound = conversationKey ? receiptStore.claimUniqueTrustedInboundMatching(
+          trustedInboundLookupKeys({
+            sessionKey: context.sessionKey,
+            channel,
+            senderId,
+          }),
+          (candidate: unknown) => {
+            if (!candidate || typeof candidate !== 'object') return false;
+            const trusted = candidate as Partial<InboundMessage>;
+            return trusted.channel === channel
+              && trusted.conversationKey === conversationKey
+              && trusted.content === event.prompt
+              && typeof trusted.observedAt === 'number'
+              && now - trusted.observedAt >= 0
+              && now - trusted.observedAt <= TRUSTED_PROMPT_CORRELATION_MAX_AGE_MS;
+          },
+          now,
+        ) as InboundMessage | undefined : undefined;
       }
       if (inbound && runKey && event.senderIsOwner === true) {
         if (confirmationDecision(inbound.content) === undefined) {
           receiptStore.discardPendingExpenseConfirmation(inbound.conversationKey);
         }
         inboundByRun.set(runKey, inbound);
+        deliveryKeysByRun.set(runKey, {
+          deliveryKey: inbound.deliveryKey,
+          recipientKey: inbound.recipientKey,
+          touchedAt: Date.now(),
+        });
+      }
+      if (context.trigger === 'user' && event.senderIsOwner === true) {
+        api.logger?.info?.(
+          `clawbot-bookkeeping: run correlation run=${Boolean(runId)} channel=${Boolean(channel)} sender=${Boolean(senderId)} matched=${Boolean(inbound)}`,
+        );
       }
     });
 
+    api.on('llm_input', (event, context) => {
+      const runId = event.runId ?? context.runId;
+      const channel = context.channel ?? context.messageProvider;
+      const channelSenderId = context.channelContext?.sender?.id;
+      const senderId = context.senderId
+        ?? (typeof channelSenderId === 'string' ? channelSenderId : undefined);
+      if (!runId || context.trigger !== 'user' || !channel || !context.sessionKey) {
+        api.logger?.info?.(
+          `clawbot-bookkeeping: llm input correlation run=${Boolean(runId)} user=${context.trigger === 'user'} channel=${Boolean(channel)} sender=${Boolean(senderId)} matched=false`,
+        );
+        return;
+      }
+      const runKey = transientBindingKey('run', runId);
+      if (inboundByRun.has(runKey) || unverifiedInboundByRun.has(runKey)) return;
+      const now = Date.now();
+      const conversationKey = trustedConversationKey({
+        sessionKey: context.sessionKey,
+        channel,
+        accountId: context.accountId,
+        senderId,
+      });
+      const inbound = receiptStore.claimUniqueTrustedInboundMatching(
+        trustedInboundLookupKeys({ sessionKey: context.sessionKey, channel, senderId }),
+        (candidate: unknown) => {
+          if (!candidate || typeof candidate !== 'object') return false;
+          const trusted = candidate as Partial<InboundMessage>;
+          return trusted.channel === channel
+            && (!conversationKey || trusted.conversationKey === conversationKey)
+            && typeof trusted.content === 'string'
+            && promptEndsWithInboundMessage(event.prompt, trusted.content)
+            && typeof trusted.observedAt === 'number'
+            && now - trusted.observedAt >= 0
+            && now - trusted.observedAt <= TRUSTED_PROMPT_CORRELATION_MAX_AGE_MS;
+        },
+        now,
+      ) as InboundMessage | undefined;
+      if (inbound) {
+        unverifiedInboundByRun.set(runKey, inbound);
+        deliveryKeysByRun.set(runKey, {
+          deliveryKey: inbound.deliveryKey,
+          recipientKey: inbound.recipientKey,
+          touchedAt: Date.now(),
+        });
+      }
+      api.logger?.info?.(
+        `clawbot-bookkeeping: llm input correlation run=true user=true channel=true sender=${Boolean(senderId)} matched=${Boolean(inbound)}`,
+      );
+    });
+
     api.on('before_tool_call', (event, context) => {
-      if (!EXPENSE_TOOL_NAMES.has(event.toolName)) return;
+      if (!AUTHORITATIVE_REPLY_TOOL_NAMES.has(event.toolName)) return;
       const now = Date.now();
       pruneExpiredToolCallSlots(now);
       const runId = context.runId ?? event.runId;
       const toolCallId = context.toolCallId ?? event.toolCallId;
-      if (!runId || !toolCallId || context.requester?.senderIsOwner !== true) return;
+      if (!runId || !toolCallId) return;
       const runKey = transientBindingKey('run', runId);
       const toolCallKey = transientBindingKey('tool-call', toolCallId);
+      const requesterChannel = context.requester?.channel ?? context.channelId;
+      const requesterConversationKey = trustedConversationKey({
+        sessionKey: context.sessionKey,
+        channel: requesterChannel,
+        accountId: context.requester?.accountId,
+        senderId: context.requester?.senderId,
+      });
       const existingSlot = toolCallSlots.get(toolCallKey);
       if (existingSlot) {
+        api.logger?.info?.(
+          `clawbot-bookkeeping: existing tool binding sameRun=${existingSlot.runKey === runKey} ambiguous=${existingSlot.ambiguous} inbound=${Boolean(existingSlot.inbound)}`,
+        );
         if (existingSlot.runKey !== runKey) {
           existingSlot.ambiguous = true;
+          existingSlot.conflictingRunKeys ??= new Set([existingSlot.runKey]);
+          existingSlot.conflictingRunKeys.add(runKey);
           existingSlot.touchedAt = now;
           delete existingSlot.inbound;
           inboundByRun.delete(runKey);
+          for (const conflictingRunKey of existingSlot.conflictingRunKeys) {
+            if (!authoritativeRepliesByRun.has(conflictingRunKey)) {
+              storeAuthoritativeReply(
+                conflictingRunKey,
+                '这次没记成功，账本里没有新增记录～ 请重新发一条新消息吧。',
+                now,
+              );
+            }
+          }
         }
         return;
       }
-      const inbound = inboundByRun.get(runKey);
+      let inbound = inboundByRun.get(runKey);
+      const embeddedBinding = Boolean(inbound);
+      if (!inbound && context.requester?.senderIsOwner === true) {
+        const unverifiedInbound = unverifiedInboundByRun.get(runKey);
+        if (unverifiedInbound
+          && requesterChannel
+          && requesterConversationKey
+          && unverifiedInbound.channel === requesterChannel
+          && unverifiedInbound.conversationKey === requesterConversationKey) {
+          inbound = unverifiedInbound;
+        }
+        inbound ??= receiptStore.claimTrustedInbound([
+          trustedInboundLookupKey('run', runId),
+        ]) as InboundMessage | undefined;
+      }
+      api.logger?.info?.(
+        `clawbot-bookkeeping: tool binding tool=${event.toolName} owner=${context.requester?.senderIsOwner === true} session=${Boolean(context.sessionKey)} conversation=${Boolean(requesterConversationKey)} embedded=${embeddedBinding} matched=${Boolean(inbound)}`,
+      );
       toolCallSlots.set(toolCallKey, {
         runKey,
+        toolName: event.toolName,
+        sessionKey: context.sessionKey,
+        requesterConversationKey,
         ...(inbound ? { inbound } : {}),
         ambiguous: false,
         touchedAt: now,
       });
+      if (inbound) {
+        deliveryKeysByRun.set(runKey, {
+          deliveryKey: inbound.deliveryKey,
+          recipientKey: inbound.recipientKey,
+          touchedAt: now,
+        });
+        receiptStore.enqueueTrustedInbound(
+          [durableToolBridgeLookupKey(event.toolName, inbound.recipientKey)],
+          durableToolBridgeMessageKey(event.toolName, inbound),
+          inbound,
+          now + TRUSTED_PROMPT_CORRELATION_MAX_AGE_MS,
+        );
+      }
       if (inbound) inboundByRun.delete(runKey);
+      if (inbound) unverifiedInboundByRun.delete(runKey);
+    });
+
+    api.on('after_tool_call', (event, context) => {
+      if (!AUTHORITATIVE_REPLY_TOOL_NAMES.has(event.toolName)) return;
+      const runId = context.runId ?? event.runId;
+      if (!runId) return;
+      const runKey = transientBindingKey('run', runId);
+      if (authoritativeRepliesByRun.has(runKey)) return;
+      let authoritativeText: string | undefined;
+      if (event.error) {
+        if (EXPENSE_TOOL_NAMES.has(event.toolName)) {
+          authoritativeText = String(event.error) === MISSING_TRUSTED_INBOUND_ERROR
+            ? '这次没记成功，账本里没有新增记录～ 请重新发一条新消息吧。'
+            : '记账结果无法确认，请先查看账本，暂时不要重复发送。';
+        } else {
+          authoritativeText = '这次没查成功，稍后再试一下吧～';
+        }
+      } else if (event.result && typeof event.result === 'object') {
+        const content = (event.result as { content?: unknown }).content;
+        if (Array.isArray(content)) {
+          const text = content.find((item) => item
+            && typeof item === 'object'
+            && (item as { type?: unknown }).type === 'text'
+            && typeof (item as { text?: unknown }).text === 'string') as { text: string } | undefined;
+          authoritativeText = text?.text;
+        }
+      }
+      if (!authoritativeText) return;
+      storeAuthoritativeReply(runKey, authoritativeText);
+    });
+
+    api.on('reply_payload_sending', (event, context) => {
+      if (event.kind !== 'final') return;
+      pruneExpiredToolCallSlots();
+      const runId = context.runId ?? event.runId;
+      const runKey = runId ? transientBindingKey('run', runId) : undefined;
+      const authoritative = runKey ? authoritativeRepliesByRun.get(runKey) : undefined;
+      api.logger?.info?.(
+        `clawbot-bookkeeping: final reply authority run=${Boolean(runId)} matched=${Boolean(authoritative)}`,
+      );
+      if (!runKey || !authoritative) return;
+      return {
+        payload: {
+          ...event.payload,
+          text: authoritative.text,
+        },
+      };
+    });
+
+    api.on('message_sending', (event, context) => {
+      const channel = context.channelId
+        ?? (typeof event.metadata?.channel === 'string' ? event.metadata.channel : undefined);
+      if (channel !== 'openclaw-weixin') return;
+      const runId = typeof event.metadata?.runId === 'string'
+        ? event.metadata.runId
+        : context.runId;
+      const runKey = runId ? transientBindingKey('run', runId) : undefined;
+      const accountId = context.accountId
+        ?? (typeof event.metadata?.accountId === 'string' ? event.metadata.accountId : undefined);
+      const recipientId = typeof event.to === 'string' ? event.to : undefined;
+      const deliveryKey = trustedDeliveryKey({ channel, accountId, recipientId });
+      const recipientKey = trustedRecipientKey({ channel, recipientId });
+      let sourceRunKey: string | undefined;
+      let authoritativeText: string | undefined;
+      let recoveredByDelivery = false;
+      if (runKey && recipientKey) {
+        try {
+          const reserved = receiptStore.reserveUniqueAuthoritativeReply({
+            deliveryKey,
+            recipientKey,
+            outboundRunKey: runKey,
+          });
+          if (reserved) {
+            sourceRunKey = reserved.reply_key;
+            authoritativeText = reserved.text;
+            recoveredByDelivery = sourceRunKey !== runKey;
+          }
+        } catch {
+          api.logger?.error?.(
+            'clawbot-bookkeeping: failed to reserve authoritative reply handoff',
+          );
+        }
+      }
+      if (!authoritativeText && runKey) {
+        const exactRunReply = authoritativeRepliesByRun.get(runKey);
+        if (exactRunReply?.persisted === false) {
+          sourceRunKey = runKey;
+          authoritativeText = exactRunReply.text;
+        }
+      }
+      api.logger?.info?.(
+        `clawbot-bookkeeping: WeChat send authority run=${Boolean(runId)} account=${Boolean(accountId)} matched=${Boolean(authoritativeText)} recovered=${recoveredByDelivery}`,
+      );
+      if (!runKey || !sourceRunKey || !authoritativeText) return;
+      authoritativeReplyDeliveriesByRun.set(runKey, {
+        sourceRunKey,
+        touchedAt: Date.now(),
+      });
+      return { content: authoritativeText };
+    });
+
+    api.on('message_sent', (event, context) => {
+      const channel = context.channelId;
+      if (channel !== 'openclaw-weixin' || typeof event.success !== 'boolean') return;
+      const runId = context.runId ?? event.runId;
+      const runKey = runId ? transientBindingKey('run', runId) : undefined;
+      if (!runKey) return;
+      const sourceRunKey = authoritativeReplyDeliveriesByRun.get(runKey)?.sourceRunKey ?? runKey;
+      let completedReplyKeys: string[] = [];
+      try {
+        completedReplyKeys = receiptStore.finishAuthoritativeReplyDelivery(runKey, event.success);
+      } catch {
+        api.logger?.error?.(
+          'clawbot-bookkeeping: failed to finish authoritative reply handoff',
+        );
+      }
+      if (event.success) {
+        const replyKeys = new Set([sourceRunKey, ...completedReplyKeys]);
+        for (const replyKey of replyKeys) {
+          authoritativeRepliesByRun.delete(replyKey);
+          deliveryKeysByRun.delete(replyKey);
+        }
+      }
+      for (const [outboundRunKey, delivery] of authoritativeReplyDeliveriesByRun) {
+        if (outboundRunKey === runKey || delivery.sourceRunKey === sourceRunKey) {
+          authoritativeReplyDeliveriesByRun.delete(outboundRunKey);
+        }
+      }
     });
 
     api.on('agent_end', (event, context) => {
@@ -354,6 +766,8 @@ export default definePluginEntry({
       const runKey = transientBindingKey('run', runId);
       preparedRuns.delete(runKey);
       inboundByRun.delete(runKey);
+      unverifiedInboundByRun.delete(runKey);
+      authoritativeToolResultsByRun.delete(runKey);
       for (const slot of toolCallSlots.values()) {
         if (slot.runKey === runKey) {
           delete slot.inbound;
@@ -365,28 +779,178 @@ export default definePluginEntry({
     api.on('gateway_stop', () => {
       preparedRuns.clear();
       inboundByRun.clear();
+      unverifiedInboundByRun.clear();
       toolCallSlots.clear();
+      deliveryKeysByRun.clear();
+      authoritativeRepliesByRun.clear();
+      authoritativeReplyDeliveriesByRun.clear();
+      authoritativeToolResultsByRun.clear();
       receiptStore.close();
     });
 
-    const takeToolCallBinding = (_id: unknown) => {
-      pruneExpiredToolCallSlots();
+    const takeToolCallBinding = (
+      _id: unknown,
+      toolName: string,
+      toolContext: ToolExecutionContext,
+      params: unknown,
+    ) => {
+      const now = Date.now();
+      pruneExpiredToolCallSlots(now);
       const toolCallKey = typeof _id === 'string'
         ? transientBindingKey('tool-call', _id)
         : undefined;
-      const slot = toolCallKey ? toolCallSlots.get(toolCallKey) : undefined;
+      let resolvedToolCallKey = toolCallKey;
+      let slot = toolCallKey ? toolCallSlots.get(toolCallKey) : undefined;
+      if (slot && slot.toolName !== toolName) {
+        slot.ambiguous = true;
+        delete slot.inbound;
+      }
+      let recoveredByExecutionContext = false;
+      if (!slot && toolContext.senderIsOwner === true) {
+        const executionConversationKey = trustedConversationKey({
+          sessionKey: toolContext.sessionKey,
+          channel: toolContext.messageChannel,
+          accountId: toolContext.agentAccountId,
+          senderId: toolContext.requesterSenderId,
+        });
+        if (executionConversationKey && toolContext.sessionKey) {
+          const availableCandidates = [...toolCallSlots.entries()].filter(([, candidate]) => (
+            candidate.ambiguous === false
+            && (Boolean(candidate.inbound) || authoritativeToolResultsByRun.has(candidate.runKey))
+          ));
+          const sameToolCandidates = availableCandidates.filter(([, candidate]) => candidate.toolName === toolName);
+          const sameSessionCandidates = sameToolCandidates.filter(([, candidate]) => (
+            candidate.sessionKey === toolContext.sessionKey
+          ));
+          const candidates = sameSessionCandidates.filter(([, candidate]) => (
+            candidate.requesterConversationKey === executionConversationKey
+          ));
+          api.logger?.info?.(
+            `clawbot-bookkeeping: recovery candidates available=${availableCandidates.length} tool=${sameToolCandidates.length} session=${sameSessionCandidates.length} conversation=${candidates.length}`,
+          );
+          const candidateRunKeys = new Set(candidates.map(([, candidate]) => candidate.runKey));
+          const sameToolRunKeys = new Set(sameToolCandidates.map(([, candidate]) => candidate.runKey));
+          const recoveryCandidates = candidateRunKeys.size === 1
+            ? candidates
+            : sameToolRunKeys.size === 1
+              ? sameToolCandidates
+              : [];
+          if (recoveryCandidates.length > 0) {
+            const selected = recoveryCandidates.find(([, candidate]) => Boolean(candidate.inbound))
+              ?? recoveryCandidates[0];
+            [resolvedToolCallKey, slot] = selected;
+            recoveredByExecutionContext = true;
+          }
+        }
+      }
+      let recoveredByDurableBridge = false;
+      if (!slot && toolCallKey && toolContext.senderIsOwner === true) {
+        const recipientKey = trustedRecipientKey({
+          channel: toolContext.messageChannel,
+          recipientId: toolContext.requesterSenderId,
+        });
+        const durableInbound = recipientKey
+          ? receiptStore.claimUniqueTrustedInboundMatching(
+            [durableToolBridgeLookupKey(toolName, recipientKey)],
+            (candidate: unknown) => {
+              if (!candidate || typeof candidate !== 'object') return false;
+              const trusted = candidate as Partial<InboundMessage>;
+              if (trusted.recipientKey !== recipientKey
+                || typeof trusted.observedAt !== 'number'
+                || now - trusted.observedAt < 0
+                || now - trusted.observedAt > TRUSTED_PROMPT_CORRELATION_MAX_AGE_MS) return false;
+              if (toolName !== 'resolve_expense_confirmation') return true;
+              const decision = params && typeof params === 'object'
+                ? (params as { decision?: unknown }).decision
+                : undefined;
+              return (decision === 'confirm' || decision === 'cancel')
+                && typeof trusted.content === 'string'
+                && confirmationDecision(trusted.content) === decision;
+            },
+            now,
+          ) as InboundMessage | undefined
+          : undefined;
+        if (durableInbound) {
+          const durableRunKey = transientBindingKey(
+            'run',
+            `tool-bridge\u0000${toolName}\u0000${durableInbound.channel}\u0000${durableInbound.messageId}`,
+          );
+          slot = {
+            runKey: durableRunKey,
+            toolName,
+            requesterConversationKey: durableInbound.conversationKey,
+            inbound: durableInbound,
+            ambiguous: false,
+            touchedAt: now,
+          };
+          resolvedToolCallKey = toolCallKey;
+          toolCallSlots.set(toolCallKey, slot);
+          deliveryKeysByRun.set(durableRunKey, {
+            deliveryKey: durableInbound.deliveryKey,
+            recipientKey: durableInbound.recipientKey,
+            touchedAt: now,
+          });
+          recoveredByDurableBridge = true;
+        }
+      }
       const inbound = slot?.ambiguous === false ? slot.inbound : undefined;
+      const cachedResponse = slot?.ambiguous === false
+        ? authoritativeToolResultsByRun.get(slot.runKey)?.response
+        : undefined;
+      api.logger?.info?.(
+        `clawbot-bookkeeping: take tool binding tool=${toolName} id=${Boolean(toolCallKey)} owner=${toolContext.senderIsOwner === true} session=${Boolean(toolContext.sessionKey)} channel=${Boolean(toolContext.messageChannel)} account=${Boolean(toolContext.agentAccountId)} sender=${Boolean(toolContext.requesterSenderId)} slot=${Boolean(slot)} recovered=${recoveredByExecutionContext} durable=${recoveredByDurableBridge} ambiguous=${slot?.ambiguous === true} inbound=${Boolean(inbound)} cached=${Boolean(cachedResponse)}`,
+      );
+      if (cachedResponse !== undefined) return { cachedResponse };
+      if (inbound && !recoveredByDurableBridge) {
+        receiptStore.claimUniqueTrustedInboundMatching(
+          [durableToolBridgeLookupKey(toolName, inbound.recipientKey)],
+          (candidate: unknown) => Boolean(candidate
+            && typeof candidate === 'object'
+            && (candidate as Partial<InboundMessage>).messageId === inbound.messageId),
+          now,
+        );
+      }
       if (slot) delete slot.inbound;
-      if (!slot || !inbound || !toolCallKey) {
-        throw new Error('缺少当前微信消息的可信元数据，已拒绝操作账本。');
+      if (!slot || !inbound || !resolvedToolCallKey) {
+        if (slot?.runKey && !authoritativeRepliesByRun.has(slot.runKey)) {
+          storeAuthoritativeReply(
+            slot.runKey,
+            '这次没记成功，账本里没有新增记录～ 请重新发一条新消息吧。',
+          );
+        }
+        throw new Error(MISSING_TRUSTED_INBOUND_ERROR);
       }
       if (Date.now() - inbound.observedAt > TRUSTED_INBOUND_MAX_AGE_MS) {
+        if (!authoritativeRepliesByRun.has(slot.runKey)) {
+          storeAuthoritativeReply(
+            slot.runKey,
+            '这次没记成功，账本里没有新增记录～ 请重新发一条新消息吧。',
+          );
+        }
         throw new Error('当前微信消息的可信元数据已过期，已拒绝操作账本。');
       }
       const boundRunKey = slot.runKey;
       return {
         inbound,
-        isStillAuthorized: () => toolCallSlots.get(toolCallKey) === slot
+        authoritativeResponse: <Response extends AuthoritativeToolResponse>(response: Response) => {
+          const text = Array.isArray(response.content)
+            ? response.content.find((item) => item
+              && typeof item === 'object'
+              && (item as { type?: unknown }).type === 'text'
+              && typeof (item as { text?: unknown }).text === 'string') as { text: string } | undefined
+            : undefined;
+          if (text && !authoritativeRepliesByRun.has(boundRunKey)) {
+            storeAuthoritativeReply(boundRunKey, text.text);
+          }
+          if (!authoritativeToolResultsByRun.has(boundRunKey)) {
+            authoritativeToolResultsByRun.set(boundRunKey, {
+              response,
+              touchedAt: Date.now(),
+            });
+          }
+          return response;
+        },
+        isStillAuthorized: () => toolCallSlots.get(resolvedToolCallKey) === slot
           && slot.runKey === boundRunKey
           && slot.ambiguous === false,
       };
@@ -407,10 +971,10 @@ export default definePluginEntry({
         content: [{
           type: 'text' as const,
           text: rejected
-            ? '这条消息的金额与当前请求不一致，或仍带有疑问，本次没有入账。'
+            ? '这笔金额或语气还不够确定，所以我没有入账哦～'
             : unknown
-              ? '记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。'
-              : '账本暂时连不上，本次没有写入任何数据，请稍后再试。',
+              ? '这次记账结果暂时拿不准，请先看一眼账本，先别重复发送这条消费哦。'
+              : '账本暂时连不上，这次没有写入任何数据～ 稍后再试试吧。',
         }],
         details: {
           status: rejected ? 'rejected' : unknown ? 'unknown' : 'failed',
@@ -479,7 +1043,12 @@ export default definePluginEntry({
         parameters: SUMMARY_PARAMETERS,
         async execute(_id, params: SummaryParams) {
           if (toolContext.senderIsOwner !== true) {
-            throw new Error('无法确认消息发送者为账本 owner，已拒绝查询。');
+            try {
+              const binding = takeToolCallBinding(_id, 'summarize_expenses', toolContext, params);
+              if ('cachedResponse' in binding) return binding.cachedResponse;
+            } catch {
+              throw new Error('无法确认消息发送者为账本 owner，已拒绝查询。');
+            }
           }
           if (params.subcategory !== undefined && params.primaryCategory === undefined) {
             throw new Error('二级分类查询必须同时指定一级分类。');
@@ -518,7 +1087,7 @@ export default definePluginEntry({
             const errorClass = error instanceof Error ? error.constructor.name : 'UnknownError';
             api.logger?.error?.(`clawbot-bookkeeping: expense summary read failed errorClass=${errorClass}`);
             return {
-              content: [{ type: 'text', text: '账本暂时连不上，本次没有读取任何数据，请稍后再试。' }],
+              content: [{ type: 'text', text: '账本暂时连不上，这次没有读取任何数据～ 稍后再试试吧。' }],
               details: { status: 'failed' },
             };
           }
@@ -550,14 +1119,53 @@ export default definePluginEntry({
           ].join('\n'),
           parameters: EXPENSE_PARAMETERS,
           async execute(_id, params: RecordExpenseParams) {
-            if (toolContext.senderIsOwner !== true) {
-              throw new Error('无法确认消息发送者为账本所有者，已拒绝入账。');
-            }
-            const { inbound, isStillAuthorized } = takeToolCallBinding(_id);
+            const binding = takeToolCallBinding(_id, 'record_expense', toolContext, params);
+            if ('cachedResponse' in binding) return binding.cachedResponse;
+            const { inbound, isStillAuthorized, authoritativeResponse } = binding;
             const normalizedInput = {
               ...params,
               subcategory: normalizeSubcategory(params.primaryCategory, params.subcategory),
             };
+            if (requiresExpenseConfirmation(inbound.content)) {
+              let candidate;
+              try {
+                candidate = prepareExpenseConfirmation({ input: normalizedInput, inbound });
+              } catch (error) {
+                if (!(error instanceof ExpenseRecordingError)) throw error;
+                return authoritativeResponse(expenseFailureResponse(error));
+              }
+              if (!isStillAuthorized()) {
+                throw new Error('当前微信消息的可信绑定已变化，本次没有准备入账。');
+              }
+              receiptStore.replacePendingExpenseConfirmation(
+                inbound.conversationKey,
+                {
+                  sourceMessageKey: trustedInboundMessageKey(inbound.channel, inbound.messageId),
+                  sourceInbound: inbound,
+                  input: normalizedInput,
+                },
+                Date.now() + PENDING_CONFIRMATION_TTL_MS,
+              );
+              return authoritativeResponse({
+                content: [{
+                  type: 'text' as const,
+                  text: formatExpenseConfirmation({
+                    ledgerDisplayName,
+                    amountMinor: candidate.amountMinor,
+                    primaryCategory: normalizedInput.primaryCategory,
+                    subcategory: normalizedInput.subcategory,
+                    comment: candidate.comment,
+                    time: candidate.time,
+                  }),
+                }],
+                details: {
+                  status: 'pending_confirmation',
+                  currency: 'SGD',
+                  timeSource: inbound.timeSource,
+                  expiresInSeconds: PENDING_CONFIRMATION_TTL_MS / 1000,
+                },
+              });
+            }
             let result;
             try {
               result = await recordExpense({
@@ -570,9 +1178,9 @@ export default definePluginEntry({
               }) as RecordExpenseResult;
             } catch (error) {
               if (!(error instanceof ExpenseRecordingError)) throw error;
-              return expenseFailureResponse(error);
+              return authoritativeResponse(expenseFailureResponse(error));
             }
-            return recordedExpenseResponse(result, normalizedInput, inbound);
+            return authoritativeResponse(recordedExpenseResponse(result, normalizedInput, inbound));
           },
         };
       },
@@ -593,10 +1201,9 @@ export default definePluginEntry({
         ].join('\n'),
         parameters: EXPENSE_PARAMETERS,
         async execute(_id, params: RecordExpenseParams) {
-          if (toolContext.senderIsOwner !== true) {
-            throw new Error('无法确认消息发送者为账本所有者，已拒绝准备入账。');
-          }
-          const { inbound, isStillAuthorized } = takeToolCallBinding(_id);
+          const binding = takeToolCallBinding(_id, 'prepare_expense', toolContext, params);
+          if ('cachedResponse' in binding) return binding.cachedResponse;
+          const { inbound, isStillAuthorized, authoritativeResponse } = binding;
           const normalizedInput = {
             ...params,
             subcategory: normalizeSubcategory(params.primaryCategory, params.subcategory),
@@ -606,7 +1213,7 @@ export default definePluginEntry({
             candidate = prepareExpenseConfirmation({ input: normalizedInput, inbound });
           } catch (error) {
             if (!(error instanceof ExpenseRecordingError)) throw error;
-            return expenseFailureResponse(error);
+            return authoritativeResponse(expenseFailureResponse(error));
           }
           if (!isStillAuthorized()) {
             throw new Error('当前微信消息的可信绑定已变化，本次没有准备入账。');
@@ -620,9 +1227,9 @@ export default definePluginEntry({
             },
             Date.now() + PENDING_CONFIRMATION_TTL_MS,
           );
-          return {
+          return authoritativeResponse({
             content: [{
-              type: 'text',
+              type: 'text' as const,
               text: formatExpenseConfirmation({
                 ledgerDisplayName,
                 amountMinor: candidate.amountMinor,
@@ -638,7 +1245,7 @@ export default definePluginEntry({
               timeSource: inbound.timeSource,
               expiresInSeconds: PENDING_CONFIRMATION_TTL_MS / 1000,
             },
-          };
+          });
         },
       }),
       { name: 'prepare_expense' },
@@ -659,38 +1266,40 @@ export default definePluginEntry({
           decision: Type.Union([Type.Literal('confirm'), Type.Literal('cancel')]),
         }, { additionalProperties: false }),
         async execute(_id, params: ResolveExpenseConfirmationParams) {
-          if (toolContext.senderIsOwner !== true) {
-            throw new Error('无法确认消息发送者为账本所有者，已拒绝处理确认。');
-          }
-          const { inbound, isStillAuthorized } = takeToolCallBinding(_id);
+          const binding = takeToolCallBinding(_id, 'resolve_expense_confirmation', toolContext, params);
+          if ('cachedResponse' in binding) return binding.cachedResponse;
+          const { inbound, isStillAuthorized, authoritativeResponse } = binding;
           const trustedDecision = confirmationDecision(inbound.content);
           if (trustedDecision === undefined || trustedDecision !== params.decision) {
-            return {
-              content: [{ type: 'text', text: '当前回复不是有效的确认或取消，本次没有操作账本。' }],
+            return authoritativeResponse({
+              content: [{
+                type: 'text' as const,
+                text: '我还没听明白你是想确认还是取消呢～ 回复“是”我就记上，回复“不是”我就不记 😊',
+              }],
               details: { status: 'rejected' },
-            };
+            });
           }
           if (!isStillAuthorized()) {
             throw new Error('当前微信消息的可信绑定已变化，本次没有操作账本。');
           }
           const pending = receiptStore.takePendingExpenseConfirmation(inbound.conversationKey);
           if (pending.status === 'missing') {
-            return {
-              content: [{ type: 'text', text: '现在没有等待确认的支出，不用担心，我没有记账。' }],
+            return authoritativeResponse({
+              content: [{ type: 'text' as const, text: '现在没有等你确认的支出啦～ 放心，我什么都没记 😊' }],
               details: { status: 'missing' },
-            };
+            });
           }
           if (pending.status === 'expired') {
-            return {
-              content: [{ type: 'text', text: '刚才那笔待确认支出已经过期，我没有记账；需要的话请重新发一次。' }],
+            return authoritativeResponse({
+              content: [{ type: 'text' as const, text: '刚才那笔确认已经过期啦～ 我没有入账，需要的话重新发一次就好 😊' }],
               details: { status: 'expired' },
-            };
+            });
           }
           if (params.decision === 'cancel') {
-            return {
-              content: [{ type: 'text', text: '好哒，已经取消，这笔没有记到账本里。' }],
+            return authoritativeResponse({
+              content: [{ type: 'text' as const, text: '好哒，已经帮你取消啦～ 这笔没有记到账本里 😊' }],
               details: { status: 'cancelled' },
-            };
+            });
           }
           const proposal = pending.proposal;
           if (proposal.sourceMessageKey !== trustedInboundMessageKey(
@@ -711,9 +1320,9 @@ export default definePluginEntry({
             }) as RecordExpenseResult;
           } catch (error) {
             if (!(error instanceof ExpenseRecordingError)) throw error;
-            return expenseFailureResponse(error);
+            return authoritativeResponse(expenseFailureResponse(error));
           }
-          return recordedExpenseResponse(result, proposal.input, proposal.sourceInbound);
+          return authoritativeResponse(recordedExpenseResponse(result, proposal.input, proposal.sourceInbound));
         },
       }),
       { name: 'resolve_expense_confirmation' },

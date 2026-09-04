@@ -130,14 +130,12 @@ export function aggregateExpenseSummary(transactions, primaryByCategoryId, categ
 }
 
 export function formatExpenseSummary(label, summary) {
-  if (summary.count === 0) return `${label}还没有支出记录～`;
+  if (summary.count === 0) return `${label}还没有支出记录哦～`;
   return [
     `${label}一共花了 ${formatMinor(summary.totalAmountMinor)}，共 ${summary.count} 笔 📊`,
-    '',
-    '分类汇总：',
-    ...summary.categories.map((item) => `${item.name}：${formatMinor(item.amountMinor)}`),
-    '',
-    '最大三笔：',
-    ...summary.largest.map((item) => `${formatMonthDay(item.time)} ${item.categoryName}：${formatMinor(item.amountMinor)}`),
+    '- 📂 分类汇总',
+    ...summary.categories.map((item) => `  - ${item.name}：${formatMinor(item.amountMinor)}`),
+    '- 🏆 最大三笔',
+    ...summary.largest.map((item) => `  - ${formatMonthDay(item.time)} ${item.categoryName}：${formatMinor(item.amountMinor)}`),
   ].join('\n');
 }

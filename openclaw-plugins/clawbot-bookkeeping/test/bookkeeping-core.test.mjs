@@ -32,6 +32,8 @@ test('extracts only the verbatim text after the first 备注 delimiter', () => {
   );
   assert.equal(extractVerbatimComment('午饭12.8'), '');
   assert.equal(extractVerbatimComment('咖啡3，备注少糖  不加冰'), '少糖  不加冰');
+  assert.equal(extractVerbatimComment('午饭0.01，备注：端到端测试'), '端到端测试');
+  assert.equal(extractVerbatimComment('午饭0.01，备注: 端到端测试'), '端到端测试');
 });
 
 test('rejects comments longer than ezBookkeeping supports', () => {
@@ -69,11 +71,11 @@ test('formats a verified expense receipt in Singapore time', () => {
     }),
     [
       '记下来啦！🧾',
-      '账本：[ 日常账本 ]',
-      '支出：7.20 SGD',
-      '分类：食品酒水 - 早午晚餐',
-      '备注：无',
-      '时间：2026/09/03 16:51',
+      '- 账本：[ 日常账本 ]',
+      '- 支出：7.20 SGD',
+      '- 分类：食品酒水 - 早午晚餐',
+      '- 备注：无',
+      '- 时间：2026/09/03 16:51',
     ].join('\n'),
   );
 });
@@ -90,11 +92,11 @@ test('flattens multiline receipt notes so a receipt always has exactly six lines
 
   assert.equal(receipt, [
     '记下来啦！🧾',
-    '账本：[ 日常账本 ]',
-    '支出：7.20 SGD',
-    '分类：食品酒水 - 早午晚餐',
-    '备注：买菜  时间：伪造 账本：伪造 分类：伪造',
-    '时间：2026/09/03 16:51',
+    '- 账本：[ 日常账本 ]',
+    '- 支出：7.20 SGD',
+    '- 分类：食品酒水 - 早午晚餐',
+    '- 备注：买菜  时间：伪造 账本：伪造 分类：伪造',
+    '- 时间：2026/09/03 16:51',
   ].join('\n'));
   assert.equal(receipt.split('\n').length, 6);
 });
@@ -108,13 +110,13 @@ test('formats a complete confirmation form without claiming the expense was writ
     comment: '食阁吃饭',
     time: 1_788_425_460,
   }), [
-    '你是想记下这笔吗？🤔',
-    '账本：[ 日常账本 ]',
-    '支出：7.20 SGD',
-    '分类：食品酒水 - 早午晚餐',
-    '备注：食阁吃饭',
-    '时间：2026/09/03 16:51',
-    '回复“是”确认，回复“不是”取消。',
+    '帮你核对一下这笔～🤔',
+    '- 账本：[ 日常账本 ]',
+    '- 支出：7.20 SGD',
+    '- 分类：食品酒水 - 早午晚餐',
+    '- 备注：食阁吃饭',
+    '- 时间：2026/09/03 16:51',
+    '- 确认：没问题就回复“是”，不记的话回复“不是”就好～',
   ].join('\n'));
 });
 
@@ -325,6 +327,7 @@ for (const [label, content, amount] of [
   ['meal shorthand', '午饭7.2', '7.2'],
   ['merchant purchase details', 'NTUC购物8.25，买了两根芹菜，一个菜板', '8.25'],
   ['additive shorthand', '食阁吃饭6.5+2.5', '9'],
+  ['spoken additive amount', '昨天中午在食阁吃饭，花了6块5加两块五', '9'],
   ['explicit compound expense clause', '午饭7.2，顺便查本月支出', '7.2'],
   ['example wording inside a later note', '午饭7.2，备注例如鸡饭', '7.2'],
   ['conditional wording inside an attached note', '午饭7.2备注如果好吃再来', '7.2'],
@@ -581,14 +584,14 @@ for (const [label, addTransaction] of [
 test('duplicate replies distinguish confirmed, failed, and uncertain prior attempts', () => {
   assert.equal(
     duplicateResponseText({ previousStatus: 'created' }),
-    '同一条微信消息已处理，未重复入账。',
+    '这条消息已经处理过啦，我没有重复入账～',
   );
   assert.equal(
     duplicateResponseText({ previousStatus: 'failed' }),
-    '上一处理尝试失败，未重复入账；请重新发送一条消息重试。',
+    '上次没有记成功，我也没有重复入账～ 请重新发一条消息再试吧。',
   );
   assert.equal(
     duplicateResponseText({ previousStatus: 'pending' }),
-    '同一条微信消息正在处理或状态未确认，未重复入账。',
+    '这条消息还在处理，或者结果暂时不确定；我没有重复入账哦。',
   );
 });

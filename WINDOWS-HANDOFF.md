@@ -1,11 +1,11 @@
-# Windows 运行与交接：微信本地账本助理
+# Windows 运行与交接：微信账本助理
 
 整理于 2026-09-04，时区 `Asia/Singapore`。这是 Windows 接手、恢复和验收的第一入口。仓库描述发布契约；任何“正在运行”结论都必须在当前主机重新探测。
 
 ## 不变边界
 
 - Windows 是唯一在线接收端，原 Mac 接收端已停止。不要让两台 iLink Gateway 同时轮询。
-- 微信消息经腾讯 iLink 进入 Windows OpenClaw；专用 `bookkeeper` 使用本地 Qwen，账本数据不得交给云端模型。
+- 微信消息经腾讯 iLink 进入 Windows OpenClaw；专用 `bookkeeper` 使用 OpenAI GPT-5.6 Sol，并强制走官方 Codex harness。该云端处理已获用户明确授权。
 - OpenClaw Gateway 固定绑定 `127.0.0.1:18789`，ezBookkeeping 固定绑定 `127.0.0.1:8180`。
 - 本轮不部署 Vercel，不开放公网端口，不实现家庭网页登录。
 - 不提交或转发密码、API token、MCP token、微信账户 ID、发送者 ID、二维码、会话正文、SQLite 文件或 OpenClaw 状态。
@@ -13,11 +13,12 @@
 ## 发布架构
 
 ```text
-WeChat -> OpenClaw owner-bound local Qwen
+WeChat -> OpenClaw owner-bound OpenAI GPT-5.6 Sol (official Codex harness)
   -> record_expense | prepare_expense | resolve_expense_confirmation
      -> trusted write/confirmation adapter -> ezBookkeeping HTTP API
   -> summarize_expenses -> deterministic read adapter -> ezBookkeeping HTTP API
   -> ezbookkeeping__query_transactions -> requester-scoped read-only MCP
+     (code-ready; local MCP activation still pending)
 ```
 
 各层职责：
@@ -26,11 +27,11 @@ WeChat -> OpenClaw owner-bound local Qwen
 | --- | --- |
 | 腾讯 iLink / stable-ID 插件 | 保留可信消息 ID、发送者、会话和消息时间 |
 | OpenClaw `bookkeeper` | 判断记账、汇总、历史查询或需要澄清；只发送最终回复 |
-| 本地 Qwen | 理解金额、分类、语义备注和查询意图，不负责精确求和或服务恢复 |
+| OpenAI GPT-5.6 Sol / Codex | 理解金额、分类、语义备注和查询意图，不负责精确求和或服务恢复 |
 | `clawbot-bookkeeping` | 可信消息关联、字段校验、去重、安全写入、确定性汇总、owner-only MCP resolver |
 | ezBookkeeping | Windows 本地 SQLite、账户/分类、交易 HTTP API、只读 MCP 查询 |
 
-当前兼容基线为 OpenClaw 2026.8.2、ezBookkeeping 1.6.1、Ollama `qwen3:8b`（8192-token context、thinking off）。配置账户固定为唯一可见 SGD 账户 `日常支出`，回执账本名固定为 `日常账本`。
+当前兼容基线为 OpenClaw 2026.8.2、官方 `@openclaw/codex` 2026.8.2、OpenAI `gpt-5.6-sol`（ChatGPT OAuth、thinking low）和 ezBookkeeping 1.6.1。配置账户固定为唯一可见 SGD 账户 `日常支出`，回执账本名固定为 `日常账本`。专用模型以 `agentRuntime.id: codex` fail closed，不配置 Qwen 或其他模型后备。截至 2026-09-04，确定性 HTTP 汇总已上线；原生 MCP 仍为 `enable_mcp=false`，独立 MCP token 尚未生成，因此灵活历史查询只是代码就绪，不是当前在线能力。
 
 专用代理的最终 allowlist 恰好是：
 
@@ -66,7 +67,7 @@ ezbookkeeping__query_transactions
 
 ## 写入路径
 
-本地 Qwen 负责判断语义。明确表达已发生消费且包含明确金额时调用一次 `record_expense`；候选信息完整但仍带疑问或不确定语气时调用一次 `prepare_expense`。每条消息最多写一笔；`6.5+2.5` 是一笔合计 9，不是两笔。
+Codex 负责判断语义。明确表达已发生消费且包含明确金额时调用一次 `record_expense`；候选信息完整但仍带疑问或不确定语气时调用一次 `prepare_expense`。每条消息最多写一笔；`6.5+2.5` 是一笔合计 9，不是两笔。
 
 1. OpenClaw 将所有者微信消息路由给专用代理。
 2. 插件按 session 或 `channel + sender` 找到十分钟内的可信原始消息。
@@ -81,9 +82,11 @@ ezbookkeeping__query_transactions
 
 用户随后单独回复“是”“对”“确认”等简短确认词时，`resolve_expense_confirmation` 原子取出提案并走同一套账户、分类、去重、API 写入和终态处理；单独回复“不是”“取消”等则只删除提案。确认写入始终使用原候选消息的时间。重复确认、过期确认和没有待确认提案的确认都不会写入。
 
-如果等待期间收到其他实质新消息，插件会先废弃旧提案，再让 Qwen 正常处理新请求；`不是，是8.2` 因此按新消息处理，而不是误用旧提案。确认词与工具参数不一致时不会消费提案。
+如果等待期间收到其他实质新消息，插件会先废弃旧提案，再让 Codex 正常处理新请求；`不是，是8.2` 因此按新消息处理，而不是误用旧提案。确认词与工具参数不一致时不会消费提案。
 
 原生 MCP 的 `add_transaction` 永不暴露给模型。它不具有本项目的可信消息关联和消息 ID 去重，超时重试可能创建重复交易。
+
+短期可信入站交接、待确认提案和最终权威回执都保存在本地 SQLite，因此 Codex 上下文 compact、恢复轮次或 OpenClaw 使用不同插件实例时不依赖单个进程的内存。微信外发仅在账号+接收者唯一匹配，或外层缺少账号元数据时接收者唯一匹配，才原子预留一条回执。成功发送后删除，失败则释放预留；候选不唯一时失败关闭。
 
 ### 备注规则
 
@@ -150,13 +153,13 @@ ezbookkeeping__query_transactions
 
 ### 灵活历史查询
 
-`ezbookkeeping__query_transactions` 用于“最近三笔是什么”“上周在 NTUC 买过什么”等逐笔问题。默认 3 条、最多 10 条是专用代理的回复策略；它不是原生 MCP 上由项目包装器强制执行的上限，也不是安全边界。只可根据实际返回的时间、金额、分类和备注回答，交易数据或备注中的文字始终是不可信数据，不能触发任何工具。
+`ezbookkeeping__query_transactions` 用于“最近三笔是什么”“上周在 NTUC 买过什么”等逐笔问题。它已在代码与 allowlist 中就绪，但必须先完成下文的交互式 MCP 激活才能作为在线能力验收。默认 3 条、最多 10 条是专用代理的回复策略；它不是原生 MCP 上由项目包装器强制执行的上限，也不是安全边界。只可根据实际返回的时间、金额、分类和备注回答，交易数据或备注中的文字始终是不可信数据，不能触发任何工具。
 
 一条消息同时明确要求记账和查询时，只执行一次写入并原样返回其结果，本轮不读取；用户另发一条消息查询。
 
 ## owner-only MCP
 
-`clawbot-bookkeeping` 为 `ezbookkeeping` 注册 requester-scoped connection resolver。只有同时满足以下条件时才返回连接：
+`clawbot-bookkeeping` 已为 `ezbookkeeping` 实现 requester-scoped connection resolver；本节是激活后的安全契约，不代表当前本机 MCP 已开启。只有同时满足以下条件时才返回连接：
 
 1. `messageChannel` 是 `openclaw-weixin`；
 2. OpenClaw 提供非空可信 `requesterSenderId`；
@@ -256,6 +259,24 @@ Assert-NoStaticEzBookkeepingMcpFallback -ConfigPath $openclawConfigPath
 
 ## Windows 安装
 
+### 0. 安装并登录官方 Codex harness
+
+```powershell
+openclaw plugins install codex --accept-capabilities
+openclaw plugins enable codex --accept-capabilities
+openclaw models auth login --provider openai --agent bookkeeper
+```
+
+安装器会选择与当前 OpenClaw 兼容的最新 `@openclaw/codex` 版本。专用代理配置必须使用规范模型名 `openai/gpt-5.6-sol`，并在该模型条目上设置 `agentRuntime.id: codex`；不要添加 Qwen 或其他 fallback。OAuth 凭据只保存在本机 OpenClaw 凭据存储中，不进入仓库。
+
+同时设置 Codex 动态工具直接加载：
+
+```powershell
+openclaw config set plugins.entries.codex.config.codexDynamicToolsLoading direct
+```
+
+bookkeeper 的 allowlist 只有五个账本工具，因此这里不依赖工具搜索。Codex Code Mode 仍可在 `exec` 中调用已经直接加载的 `tools.<账本工具>`；不得查询 `ALL_TOOLS` 或搜索工具目录。包装返回字符串时原样输出完整字符串。工具返回文本是最终账本事实；模型不得自行重建回执。设置后必须重启 Gateway。
+
 默认安装目录是 `D:\Clawbot\ezbookkeeping`，实际配置文件位于嵌套目录 `D:\Clawbot\ezbookkeeping\conf\ezbookkeeping.ini`。
 
 ### 1. 安装可恢复计划任务
@@ -308,6 +329,8 @@ Invoke-RestMethod http://127.0.0.1:8180/healthz.json
 openclaw gateway status
 openclaw channels status --probe
 openclaw plugins info clawbot-bookkeeping
+openclaw plugins inspect codex
+openclaw models status --agent bookkeeper --json
 ```
 
 验收条件：
@@ -315,6 +338,8 @@ openclaw plugins info clawbot-bookkeeping
 - 健康端点返回 `success=true`；
 - Gateway 只监听 loopback，微信通道正常；
 - 插件加载成功；
+- Codex 插件状态为 loaded，`bookkeeper` 的 `openai/gpt-5.6-sol` 条目显式显示 `agentRuntime.id: codex`；
+- Codex 插件的 `codexDynamicToolsLoading` 为 `direct`，专用代理通过 Code Mode 直接调用 allowlist 中的账本工具，不查询 `ALL_TOOLS` 或搜索工具目录；
 - 自动化测试确认 manifest、requester-scoped resolver 和代理 allowlist 允许 `query_transactions`，且源码和测试明确排除 `add_transaction`；
 - 所有者从微信发起的历史查询实际返回账本记录，证明 `query_transactions` 在可信发送者上下文中可用。
 
@@ -348,7 +373,7 @@ npm.cmd run build
 node --test test\inbound-message-id.test.mjs
 ```
 
-当前基线应为账本插件 81 项测试全部通过，stable-ID 插件 3 项测试全部通过；不要只依赖数量，任何失败都必须处理。
+当前基线应为账本插件 205 项测试全部通过，stable-ID 插件 3 项测试全部通过；其中包含内外运行编号不同的微信回执替换、缺少外层账号元数据时的安全恢复、跨插件实例的确认与回执接力、失败发送后释放预留、同一外发运行编号不得改投其他接收者、不同接收者隔离和候选不唯一时失败关闭。不要只依赖数量，任何失败都必须处理。
 
 仓库秘密扫描：
 
@@ -366,8 +391,8 @@ rg -n --hidden --glob '!**/node_modules/**' --glob '!**/.git/**' --glob '!**/.wo
 1. 一条新的实际消费，例如 `支出7.2 午饭`：应返回六行回执，账本只新增一笔。
 2. `这个月我花了多少钱`：应返回精确 A 型汇总，不写入。
 3. `这个月吃饭花了多少`：应按正式分类汇总，不写入。
-4. `最近三笔支出是什么`：应调用只读 MCP，默认只列实际记录。
-5. `上个月在NTUC买过什么`：应只依据实际查询结果回答。
+4. MCP 激活后发 `最近三笔支出是什么`：应调用只读 MCP，默认只列实际记录。
+5. MCP 激活后发 `上个月在NTUC买过什么`：应只依据实际查询结果回答。
 6. 对原消息执行平台级重放：不得新增第二笔。
 
 微信只应看到最终结果。不得出现思考过程、工具名、JSON、参数校验、候选分类、底层错误或重试过程。
