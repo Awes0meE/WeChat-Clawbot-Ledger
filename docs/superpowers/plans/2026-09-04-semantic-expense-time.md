@@ -1,5 +1,7 @@
 # Semantic Expense Time Implementation Plan
 
+> **Historical record (2026-09-04):** This plan has been implemented, merged to `main` in PR #3, and loaded by the Windows OpenClaw Gateway. Use `README.md` and `WINDOWS-HANDOFF.md` for current operations; do not execute these unchecked implementation steps verbatim.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make each expense write use the user-stated occurrence time when present, while keeping the trusted WeChat receive time as the safe default.
