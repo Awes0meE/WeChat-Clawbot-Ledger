@@ -8,12 +8,31 @@ import test from 'node:test';
 import plugin from '../index.ts';
 import { SqliteReceiptStore } from '../adapter.mjs';
 
+function receivedExpenseParams(overrides = {}) {
+  return {
+    amount: '7.2',
+    currency: 'SGD',
+    timeMode: 'received',
+    primaryCategory: '食品酒水',
+    subcategory: '早午晚餐',
+    ...overrides,
+  };
+}
+
+function normalizeExpenseTestParams(toolName, params) {
+  return toolName === 'record_expense' || toolName === 'prepare_expense'
+    ? receivedExpenseParams(params)
+    : params;
+}
+
 function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
   const inboundHooks = new Map();
+  const hookOptions = new Map();
   let recordExpenseFactory;
   let prepareExpenseFactory;
   let resolveExpenseConfirmationFactory;
   let recordExpenseDefinition;
+  let prepareExpenseDefinition;
   const logs = [];
   const pluginApi = {
     pluginConfig: {
@@ -23,8 +42,9 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
       accountName: '日常支出',
       ...pluginConfig,
     },
-    on(name, handler) {
+    on(name, handler, options) {
       inboundHooks.set(name, handler);
+      hookOptions.set(name, options);
     },
     registerTool(definition, options) {
       if (typeof definition === 'function' && options?.name === 'record_expense') {
@@ -33,6 +53,7 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
       }
       if (typeof definition === 'function' && options?.name === 'prepare_expense') {
         prepareExpenseFactory = definition;
+        prepareExpenseDefinition = definition;
       }
       if (typeof definition === 'function' && options?.name === 'resolve_expense_confirmation') {
         resolveExpenseConfirmationFactory = definition;
@@ -64,8 +85,19 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
     };
   };
 
+  const materializeRawExpenseTool = (factory, toolName, toolContext) => {
+    const tool = factory(toolContext);
+    return {
+      ...tool,
+      execute(toolCallId, params) {
+        return tool.execute(toolCallId, normalizeExpenseTestParams(toolName, params));
+      },
+    };
+  };
+
   return {
     inboundHooks,
+    hookOptions,
     recordExpenseFactory: (context) => materializeExpenseTool(recordExpenseFactory, 'record_expense', context),
     prepareExpenseFactory: (context) => materializeExpenseTool(prepareExpenseFactory, 'prepare_expense', context),
     resolveExpenseConfirmationFactory: (context) => materializeExpenseTool(
@@ -73,10 +105,19 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
       'resolve_expense_confirmation',
       context,
     ),
-    rawRecordExpenseFactory: recordExpenseFactory,
-    rawPrepareExpenseFactory: prepareExpenseFactory,
+    rawRecordExpenseFactory: (context) => materializeRawExpenseTool(
+      recordExpenseFactory,
+      'record_expense',
+      context,
+    ),
+    rawPrepareExpenseFactory: (context) => materializeRawExpenseTool(
+      prepareExpenseFactory,
+      'prepare_expense',
+      context,
+    ),
     rawResolveExpenseConfirmationFactory: resolveExpenseConfirmationFactory,
     recordExpenseDefinition,
+    prepareExpenseDefinition,
     logs,
     restore() {
       inboundHooks.get('gateway_stop')?.({}, {});
@@ -120,8 +161,14 @@ async function executeForTurn(inboundHooks, tool, {
   toolName = 'record_expense',
   params,
 }) {
-  await bindToolCallForTurn(inboundHooks, { runId, toolCallId, toolName, params });
-  return tool.execute(toolCallId, params);
+  const normalizedParams = normalizeExpenseTestParams(toolName, params);
+  await bindToolCallForTurn(inboundHooks, {
+    runId,
+    toolCallId,
+    toolName,
+    params: normalizedParams,
+  });
+  return tool.execute(toolCallId, normalizedParams);
 }
 
 async function bindToolCallForTurn(inboundHooks, {
@@ -130,9 +177,10 @@ async function bindToolCallForTurn(inboundHooks, {
   toolName = 'record_expense',
   params,
 }) {
+  const normalizedParams = normalizeExpenseTestParams(toolName, params);
   await inboundHooks.get('before_tool_call')?.({
     toolName,
-    params,
+    params: normalizedParams,
     runId,
     toolCallId,
   }, {
@@ -260,6 +308,68 @@ test('declares the fixed ledger display name in the plugin manifest', () => {
     type: 'string',
     const: '日常账本',
   });
+});
+
+test('requires an explicit SGD currency and time decision in both expense tools', () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not run while inspecting tool schemas');
+  });
+  try {
+    const recordSchema = harness.recordExpenseDefinition({}).parameters;
+    const prepareSchema = harness.prepareExpenseDefinition({}).parameters;
+    for (const schema of [recordSchema, prepareSchema]) {
+      assert.equal(schema.anyOf.length, 2);
+      assert.deepEqual(
+        schema.anyOf.map((branch) => branch.properties.timeMode.const),
+        ['received', 'explicit'],
+      );
+      assert.equal(
+        schema.anyOf.every((branch) => branch.properties.currency.const === 'SGD'),
+        true,
+      );
+      assert.equal(schema.anyOf.every((branch) => branch.required.includes('currency')), true);
+      assert.equal(schema.anyOf.every((branch) => branch.required.includes('timeMode')), true);
+      assert.equal(schema.anyOf[0].required.includes('localDate'), false);
+      assert.equal(schema.anyOf[1].required.includes('localDate'), true);
+      assert.equal(schema.anyOf[1].required.includes('timeEvidence'), true);
+    }
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('injects only the correlated trusted send time into an authorized prompt', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not run while building prompt context');
+  });
+  try {
+    await beginTrustedOwnerTurn(harness.inboundHooks, {
+      content: '昨天晚上6点，晚饭10.5',
+      messageId: 'time-context-1',
+      runId: 'run-time-context-1',
+      timestamp: 1_788_512_940,
+    });
+    const result = await harness.inboundHooks.get('before_prompt_build')?.({
+      prompt: '昨天晚上6点，晚饭10.5',
+      messages: [],
+    }, {
+      runId: 'run-time-context-1',
+      trigger: 'user',
+      toolAuthority: {
+        assertActive() {},
+        allows(name) { return name === 'record_expense'; },
+      },
+    });
+    assert.match(result?.prependContext ?? '', /2026-09-04 17:09/u);
+    assert.equal(/owner-user|time-context-1|bot-account/u.test(result.prependContext), false);
+    assert.equal(harness.hookOptions.get('before_prompt_build')?.requiresToolAuthority, true);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
 });
 
 test('binds a trusted owner run when the embedded before-tool hook omits requester', async () => {
@@ -666,6 +776,10 @@ test('binds the exact owner conversation when current transport metadata is abse
     });
     const params = {
       amount: '9',
+      currency: 'SGD',
+      timeMode: 'explicit',
+      localDate: '2026-09-02',
+      timeEvidence: '昨天中午',
       primaryCategory: '食品酒水',
       subcategory: '早午晚餐',
       comment: '食阁',
@@ -1990,8 +2104,9 @@ test('returns the authoritative rich receipt after a trusted expense write', asy
     assert.equal(result.details.status, 'created');
     assert.equal(result.details.amountMinor, 825);
     assert.equal(requests.length, 3);
-    assert.equal(harness.recordExpenseDefinition({}).parameters.properties.comment.maxLength, 255);
-    assert.equal(harness.recordExpenseDefinition({}).parameters.required.includes('comment'), false);
+    const receivedSchema = harness.recordExpenseDefinition({}).parameters.anyOf[0];
+    assert.equal(receivedSchema.properties.comment.maxLength, 255);
+    assert.equal(receivedSchema.required.includes('comment'), false);
     assert.match(harness.recordExpenseDefinition({}).description, /由你理解语义/u);
     const addRequest = requests.find(({ url }) => url.endsWith('/transactions/add.json'));
     assert.equal(addRequest.options.method, 'POST');
@@ -2018,7 +2133,7 @@ test('returns the authoritative rich receipt after a trusted expense write', asy
   }
 });
 
-test('prepares an ambiguous expense, confirms it once, and keeps the original message time', async () => {
+test('writes the model-resolved occurrence time into both the API and receipt', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
   const requests = [];
@@ -2026,48 +2141,92 @@ test('prepares an ambiguous expense, confirms it once, and keeps the original me
 
   try {
     await receiveTrustedOwnerMessage(harness.inboundHooks, {
-      content: '午饭7.2吗',
-      messageId: 'ambiguous-expense',
-      timestamp: 1_788_425_460,
+      content: '记账昨天晚上6点钟，晚餐10.5 备注麦当劳5卤肉饭5.5',
+      messageId: 'semantic-time-expense',
+      timestamp: 1_788_512_940,
     });
-    const prepared = await harness.prepareExpenseFactory(trustedOwnerContext()).execute('prepare-1', {
-      amount: '7.2',
+    const result = await harness.recordExpenseFactory(trustedOwnerContext()).execute(
+      'semantic-time-record',
+      receivedExpenseParams({
+        amount: '10.5',
+        timeMode: 'explicit',
+        localDate: '2026-09-03',
+        localTime: '18:00',
+        timeEvidence: '昨天晚上6点钟',
+      }),
+    );
+
+    assert.equal(result.details.status, 'created');
+    assert.equal(result.details.timeSource, 'explicit-clock');
+    assert.match(result.content[0].text, /- 时间：2026\/09\/03 18:00/u);
+    const addRequests = requests.filter(({ url }) => url.endsWith('/transactions/add.json'));
+    assert.equal(addRequests.length, 1);
+    assert.equal(JSON.parse(addRequests[0].options.body).time, 1_788_429_600);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('confirms a durable semantic-time proposal once after the plugin restarts', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  let firstHarness = createPluginHarness(tempDirectory, successfulExpenseFetch(requests));
+  let secondHarness;
+
+  try {
+    await receiveTrustedOwnerMessage(firstHarness.inboundHooks, {
+      content: '昨天晚上6点，晚饭10.5吗',
+      messageId: 'ambiguous-expense-time',
+      timestamp: 1_788_512_940,
+    });
+    const prepared = await firstHarness.prepareExpenseFactory(trustedOwnerContext()).execute('prepare-1', {
+      amount: '10.5',
       primaryCategory: '食品酒水',
       subcategory: '早午晚餐',
-      comment: '食阁吃饭',
+      comment: '晚饭',
+      timeMode: 'explicit',
+      localDate: '2026-09-03',
+      localTime: '18:00',
+      timeEvidence: '昨天晚上6点',
     });
 
     assert.equal(prepared.details.status, 'pending_confirmation');
     assert.equal(prepared.content[0].text, [
       '帮你核对一下这笔～🤔',
       '- 账本：[ 日常账本 ]',
-      '- 支出：7.20 SGD',
+      '- 支出：10.50 SGD',
       '- 分类：食品酒水 - 早午晚餐',
-      '- 备注：食阁吃饭',
-      '- 时间：2026/09/03 16:51',
+      '- 备注：晚饭',
+      '- 时间：2026/09/03 18:00',
       '- 确认：没问题就回复“是”，不记的话回复“不是”就好～',
     ].join('\n'));
     assert.equal(requests.length, 0);
 
-    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+    firstHarness.restore();
+    firstHarness = undefined;
+    secondHarness = createPluginHarness(tempDirectory, successfulExpenseFetch(requests));
+
+    await receiveTrustedOwnerMessage(secondHarness.inboundHooks, {
       content: '是',
       messageId: 'confirm-expense',
-      timestamp: 1_788_425_900,
+      timestamp: 1_788_513_900,
     });
-    const confirmed = await harness.resolveExpenseConfirmationFactory(trustedOwnerContext()).execute(
+    const confirmed = await secondHarness.resolveExpenseConfirmationFactory(trustedOwnerContext()).execute(
       'confirm-1',
       { decision: 'confirm' },
     );
     assert.equal(confirmed.details.status, 'created');
-    assert.match(confirmed.content[0].text, /时间：2026\/09\/03 16:51/u);
+    assert.match(confirmed.content[0].text, /时间：2026\/09\/03 18:00/u);
     const addRequest = requests.find(({ url }) => url.endsWith('/transactions/add.json'));
-    assert.equal(JSON.parse(addRequest.options.body).time, 1_788_425_460);
+    assert.equal(JSON.parse(addRequest.options.body).time, 1_788_429_600);
 
-    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+    await receiveTrustedOwnerMessage(secondHarness.inboundHooks, {
       content: '是',
       messageId: 'confirm-expense-again',
     });
-    const repeated = await harness.resolveExpenseConfirmationFactory(trustedOwnerContext()).execute(
+    const repeated = await secondHarness.resolveExpenseConfirmationFactory(trustedOwnerContext()).execute(
       'confirm-2',
       { decision: 'confirm' },
     );
@@ -2075,7 +2234,8 @@ test('prepares an ambiguous expense, confirms it once, and keeps the original me
     assert.equal(repeated.content[0].text, '现在没有等你确认的支出啦～ 放心，我什么都没记 😊');
     assert.equal(requests.filter(({ url }) => url.endsWith('/transactions/add.json')).length, 1);
   } finally {
-    harness.restore();
+    secondHarness?.restore();
+    firstHarness?.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
   }
 });

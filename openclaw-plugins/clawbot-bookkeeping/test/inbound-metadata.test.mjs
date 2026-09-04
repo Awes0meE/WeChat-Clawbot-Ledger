@@ -94,6 +94,8 @@ test('correlates trusted metadata across isolated plugin instances', async () =>
       toolName: 'record_expense',
       params: {
         amount: '12.5',
+        currency: 'SGD',
+        timeMode: 'received',
         primaryCategory: '食品酒水',
         subcategory: '早午晚餐',
       },
@@ -107,6 +109,8 @@ test('correlates trusted metadata across isolated plugin instances', async () =>
     });
     const result = await tool.execute('tool-call-1', {
       amount: '12.5',
+      currency: 'SGD',
+      timeMode: 'received',
       primaryCategory: '食品酒水',
       subcategory: '早午晚餐',
     });

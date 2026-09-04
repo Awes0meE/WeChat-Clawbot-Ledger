@@ -22,10 +22,11 @@ function pendingExpenseProposal({
 } = {}) {
   return {
     sourceMessageKey: trustedInboundMessageKey('openclaw-weixin', messageId),
+    resolvedTime: 1_788_429_600,
     sourceInbound: {
       channel: 'openclaw-weixin',
       messageId,
-      content: `午饭${amount}吗`,
+      content: `昨晚6点，午饭${amount}吗`,
       timestamp,
       observedAt,
       timeSource: 'message',
@@ -33,6 +34,11 @@ function pendingExpenseProposal({
     },
     input: {
       amount,
+      currency: 'SGD',
+      timeMode: 'explicit',
+      localDate: '2026-09-03',
+      localTime: '18:00',
+      timeEvidence: '昨晚6点',
       primaryCategory: '食品酒水',
       subcategory: '早午晚餐',
       comment: '午饭',
@@ -131,6 +137,12 @@ test('pending expense confirmation is durable and replaced per conversation', ()
     assert.equal(taken.status, 'active');
     assert.equal(taken.proposal.sourceInbound.messageId, 'pending-replacement');
     assert.equal(taken.proposal.input.amount, '3.5');
+    assert.equal(taken.proposal.resolvedTime, 1_788_429_600);
+    assert.equal(taken.proposal.input.currency, 'SGD');
+    assert.equal(taken.proposal.input.timeMode, 'explicit');
+    assert.equal(taken.proposal.input.localDate, '2026-09-03');
+    assert.equal(taken.proposal.input.localTime, '18:00');
+    assert.equal(taken.proposal.input.timeEvidence, '昨晚6点');
     assert.deepEqual(second.takePendingExpenseConfirmation(conversationKey, now), { status: 'missing' });
     assert.equal(second.takePendingExpenseConfirmation(otherConversationKey, now).status, 'active');
   } finally {

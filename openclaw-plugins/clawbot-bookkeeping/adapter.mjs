@@ -67,23 +67,43 @@ function normalizePendingExpenseProposal(value) {
   }
   const sourceInbound = normalizeTrustedInboundPayload(value.sourceInbound);
   const conversationKey = value.sourceInbound?.conversationKey;
+  const input = value.input;
+  const receivedTime = input.timeMode === 'received'
+    && input.currency === 'SGD';
+  const explicitTime = input.timeMode === 'explicit'
+    && input.currency === 'SGD'
+    && /^\d{4}-\d{2}-\d{2}$/u.test(input.localDate)
+    && (input.localTime === undefined || /^\d{2}:\d{2}$/u.test(input.localTime))
+    && typeof input.timeEvidence === 'string'
+    && input.timeEvidence.trim() !== ''
+    && Array.from(input.timeEvidence).length <= 100;
   if (!sourceInbound || typeof conversationKey !== 'string' || !HASH_KEY_PATTERN.test(conversationKey)
-    || typeof value.input.amount !== 'string'
-    || !/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/u.test(value.input.amount)
-    || typeof value.input.primaryCategory !== 'string' || value.input.primaryCategory.trim() === ''
-    || typeof value.input.subcategory !== 'string' || value.input.subcategory.trim() === ''
-    || (value.input.comment !== undefined
-      && (typeof value.input.comment !== 'string' || Array.from(value.input.comment).length > 255))) {
+    || !Number.isSafeInteger(value.resolvedTime) || value.resolvedTime <= 0
+    || (!receivedTime && !explicitTime)
+    || typeof input.amount !== 'string'
+    || !/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/u.test(input.amount)
+    || typeof input.primaryCategory !== 'string' || input.primaryCategory.trim() === ''
+    || typeof input.subcategory !== 'string' || input.subcategory.trim() === ''
+    || (input.comment !== undefined
+      && (typeof input.comment !== 'string' || Array.from(input.comment).length > 255))) {
     return undefined;
   }
   return {
     sourceMessageKey: value.sourceMessageKey,
+    resolvedTime: value.resolvedTime,
     sourceInbound: { ...sourceInbound, conversationKey },
     input: {
-      amount: value.input.amount,
-      primaryCategory: value.input.primaryCategory,
-      subcategory: value.input.subcategory,
-      ...(value.input.comment === undefined ? {} : { comment: value.input.comment }),
+      amount: input.amount,
+      currency: input.currency,
+      timeMode: input.timeMode,
+      ...(input.timeMode === 'explicit' ? {
+        localDate: input.localDate,
+        ...(input.localTime === undefined ? {} : { localTime: input.localTime }),
+        timeEvidence: input.timeEvidence,
+      } : {}),
+      primaryCategory: input.primaryCategory,
+      subcategory: input.subcategory,
+      ...(input.comment === undefined ? {} : { comment: input.comment }),
     },
   };
 }

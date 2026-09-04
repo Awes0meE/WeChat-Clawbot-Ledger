@@ -14,6 +14,7 @@ import {
   ExpenseRecordingError,
   formatExpenseConfirmation,
   formatExpenseReceipt,
+  formatTrustedExpenseTimeContext,
   prepareExpenseConfirmation,
   recordConfirmedExpense,
   recordExpense,
@@ -58,12 +59,22 @@ type SummaryParams = {
   keyword?: string;
 };
 
-type RecordExpenseParams = {
+type ExpenseBaseParams = {
   amount: string;
+  currency: 'SGD';
   primaryCategory: string;
   subcategory: string;
   comment?: string;
 };
+
+type RecordExpenseParams = ExpenseBaseParams & ({
+  timeMode: 'received';
+} | {
+  timeMode: 'explicit';
+  localDate: string;
+  localTime?: string;
+  timeEvidence: string;
+});
 
 type ResolveExpenseConfirmationParams = {
   decision: 'confirm' | 'cancel';
@@ -263,12 +274,32 @@ const SUMMARY_PARAMETERS = Type.Union([
   }, { additionalProperties: false }),
 ]);
 
-const EXPENSE_PARAMETERS = Type.Object({
+const EXPENSE_PARAMETER_PROPERTIES = {
   amount: Type.String({ pattern: '^(?:0|[1-9]\\d*)(?:\\.\\d{1,2})?$' }),
+  currency: Type.Literal('SGD'),
   primaryCategory: Type.Union(PRIMARY_CATEGORIES.map((value) => Type.Literal(value))),
   subcategory: Type.String({ minLength: 1, maxLength: 20 }),
   comment: Type.Optional(Type.String({ maxLength: 255 })),
-}, { additionalProperties: false });
+};
+
+const EXPENSE_PARAMETERS = Type.Union([
+  Type.Object({
+    ...EXPENSE_PARAMETER_PROPERTIES,
+    timeMode: Type.Literal('received'),
+  }, { additionalProperties: false }),
+  Type.Object({
+    ...EXPENSE_PARAMETER_PROPERTIES,
+    timeMode: Type.Literal('explicit'),
+    localDate: Type.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' }),
+    localTime: Type.Optional(Type.String({ pattern: '^\\d{2}:\\d{2}$' })),
+    timeEvidence: Type.String({ minLength: 1, maxLength: 100 }),
+  }, { additionalProperties: false }),
+]);
+
+function expenseTimeSource(input: RecordExpenseParams) {
+  if (input.timeMode === 'received') return 'received';
+  return input.localTime === undefined ? 'explicit-date' : 'explicit-clock';
+}
 
 export default definePluginEntry({
   id: 'clawbot-bookkeeping',
@@ -496,6 +527,16 @@ export default definePluginEntry({
         );
       }
     });
+
+    api.on('before_prompt_build', (_event, context) => {
+      if (context.trigger !== 'user' || !context.runId || !context.toolAuthority) return;
+      context.toolAuthority.assertActive();
+      if (!context.toolAuthority.allows('record_expense')
+        && !context.toolAuthority.allows('prepare_expense')) return;
+      const inbound = inboundByRun.get(transientBindingKey('run', context.runId));
+      if (!inbound) return;
+      return { prependContext: formatTrustedExpenseTimeContext(inbound.timestamp) };
+    }, { requiresToolAuthority: true });
 
     api.on('llm_input', (event, context) => {
       const runId = event.runId ?? context.runId;
@@ -986,14 +1027,13 @@ export default definePluginEntry({
     const recordedExpenseResponse = (
       result: RecordExpenseResult,
       input: RecordExpenseParams,
-      inbound: InboundMessage,
     ) => {
       if (result.dedupeStatus === 'unconfirmed') {
         api.logger?.warn?.(
           'clawbot-bookkeeping: ExpenseRecordingError outcome=written_unconfirmed message=expense write confirmed; deduplication persistence is unconfirmed',
         );
       }
-      const details = { ...result, currency: 'SGD', timeSource: inbound.timeSource };
+      const details = { ...result, currency: 'SGD', timeSource: expenseTimeSource(input) };
       if (result.status === 'duplicate') {
         return {
           content: [{ type: 'text' as const, text: duplicateResponseText(result) }],
@@ -1113,6 +1153,7 @@ export default definePluginEntry({
             '早餐、午餐、晚餐、早饭、午饭、晚饭或一般餐饮，二级分类一律使用“早午晚餐”，不要使用“餐饮”“午餐”等非正式名称。',
             '同一消息中的加法金额表示一笔消费总额，例如“6.5+2.5”必须只调用一次并传入“9”。',
             '如果消息像“午饭7.2吗”一样含有不确定或疑问语气，不要调用本工具，改用 prepare_expense。',
+            '必须判断当前消息是否给出消费时间：没有则使用 currency=SGD、timeMode=received；有则使用 timeMode=explicit，并提供 localDate、原文 timeEvidence，以及仅在具体钟点明确时提供 localTime。',
             '否定、举例、转述、代付、退款、收款、未来计划或查询不是已发生的本人支出；正常对话或查询即可，不要调用写入工具。',
             '工具成功后，最终回复只能原样采用工具返回的“已记账”结果；不得展示思考、参数校验、候选分类或重试过程。',
             CATEGORY_GUIDE,
@@ -1141,6 +1182,7 @@ export default definePluginEntry({
                 inbound.conversationKey,
                 {
                   sourceMessageKey: trustedInboundMessageKey(inbound.channel, inbound.messageId),
+                  resolvedTime: candidate.time,
                   sourceInbound: inbound,
                   input: normalizedInput,
                 },
@@ -1161,7 +1203,7 @@ export default definePluginEntry({
                 details: {
                   status: 'pending_confirmation',
                   currency: 'SGD',
-                  timeSource: inbound.timeSource,
+                  timeSource: expenseTimeSource(normalizedInput),
                   expiresInSeconds: PENDING_CONFIRMATION_TTL_MS / 1000,
                 },
               });
@@ -1180,7 +1222,7 @@ export default definePluginEntry({
               if (!(error instanceof ExpenseRecordingError)) throw error;
               return authoritativeResponse(expenseFailureResponse(error));
             }
-            return authoritativeResponse(recordedExpenseResponse(result, normalizedInput, inbound));
+            return authoritativeResponse(recordedExpenseResponse(result, normalizedInput));
           },
         };
       },
@@ -1196,6 +1238,7 @@ export default definePluginEntry({
           '为包含明确金额、但语义仍需用户确认的一笔候选支出生成确认单；本工具绝不会写入账本。',
           '例如“午饭7.2吗”应使用本工具，让用户确认你的金额、分类、备注和原消息时间理解。',
           '金额、分类和备注由你根据当前消息理解；不得猜测消息中没有的信息。',
+          '必须判断当前消息是否给出消费时间：没有则使用 currency=SGD、timeMode=received；有则使用 timeMode=explicit，并提供 localDate、原文 timeEvidence，以及仅在具体钟点明确时提供 localTime。',
           '工具返回后只逐字回复确认单，不展示思考、参数或工具名。',
           CATEGORY_GUIDE,
         ].join('\n'),
@@ -1222,6 +1265,7 @@ export default definePluginEntry({
             inbound.conversationKey,
             {
               sourceMessageKey: trustedInboundMessageKey(inbound.channel, inbound.messageId),
+              resolvedTime: candidate.time,
               sourceInbound: inbound,
               input: normalizedInput,
             },
@@ -1242,7 +1286,7 @@ export default definePluginEntry({
             details: {
               status: 'pending_confirmation',
               currency: 'SGD',
-              timeSource: inbound.timeSource,
+              timeSource: expenseTimeSource(normalizedInput),
               expiresInSeconds: PENDING_CONFIRMATION_TTL_MS / 1000,
             },
           });
@@ -1315,6 +1359,7 @@ export default definePluginEntry({
               store: receiptStore,
               input: proposal.input,
               inbound: proposal.sourceInbound,
+              resolvedTime: proposal.resolvedTime,
               accountName,
               validateBeforeWrite: isStillAuthorized,
             }) as RecordExpenseResult;
@@ -1322,7 +1367,7 @@ export default definePluginEntry({
             if (!(error instanceof ExpenseRecordingError)) throw error;
             return authoritativeResponse(expenseFailureResponse(error));
           }
-          return authoritativeResponse(recordedExpenseResponse(result, proposal.input, proposal.sourceInbound));
+          return authoritativeResponse(recordedExpenseResponse(result, proposal.input));
         },
       }),
       { name: 'resolve_expense_confirmation' },
