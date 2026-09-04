@@ -1,5 +1,9 @@
 [
   {
+    "path": "plugins.entries.codex.config.codexDynamicToolsLoading",
+    "value": "direct"
+  },
+  {
     "path": "agents.entries.bookkeeper",
     "value": {
       "name": "bookkeeper",

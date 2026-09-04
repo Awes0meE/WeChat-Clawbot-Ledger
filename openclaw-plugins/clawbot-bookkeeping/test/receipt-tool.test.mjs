@@ -75,6 +75,7 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
     ),
     rawRecordExpenseFactory: recordExpenseFactory,
     rawPrepareExpenseFactory: prepareExpenseFactory,
+    rawResolveExpenseConfirmationFactory: resolveExpenseConfirmationFactory,
     recordExpenseDefinition,
     logs,
     restore() {
@@ -457,6 +458,93 @@ test('correlates a resumed Codex call when hook and execute ids differ', async (
     const result = await tool.execute('codex-execute-call-id', params);
 
     assert.equal(result.details.status, 'pending_confirmation');
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('correlates a compacted Codex call when the tool factory keeps stale session context', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not run while preparing confirmation');
+  });
+
+  try {
+    const runId = await receiveTrustedOwnerMessageWithoutBeforeAgentRun(harness.inboundHooks, {
+      content: '午饭8.8么？',
+      messageId: 'codex-compacted-stale-session',
+    });
+    const params = {
+      amount: '8.8',
+      primaryCategory: '食品酒水',
+      subcategory: '早午晚餐',
+      comment: '午饭',
+    };
+    await bindToolCallForTurn(harness.inboundHooks, {
+      runId,
+      toolCallId: 'codex-current-hook-id',
+      toolName: 'prepare_expense',
+      params,
+    });
+
+    const tool = harness.rawPrepareExpenseFactory({
+      ...trustedOwnerContext(),
+      sessionKey: 'agent:main:stale-compacted-session',
+    });
+    const result = await tool.execute('codex-resumed-execute-id', params);
+
+    assert.equal(result.details.status, 'pending_confirmation');
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('fails compacted Codex recovery closed when two authorized runs match the same tool', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not run while preparing confirmation');
+  });
+
+  try {
+    const params = {
+      amount: '8.8',
+      primaryCategory: '食品酒水',
+      subcategory: '早午晚餐',
+      comment: '午饭',
+    };
+    const firstRunId = await receiveTrustedOwnerMessageWithoutBeforeAgentRun(harness.inboundHooks, {
+      content: '午饭8.8么？',
+      messageId: 'codex-compacted-first-run',
+    });
+    await bindToolCallForTurn(harness.inboundHooks, {
+      runId: firstRunId,
+      toolCallId: 'codex-compacted-first-hook',
+      toolName: 'prepare_expense',
+      params,
+    });
+    const secondRunId = await receiveTrustedOwnerMessageWithoutBeforeAgentRun(harness.inboundHooks, {
+      content: '晚饭8.8么？',
+      messageId: 'codex-compacted-second-run',
+    });
+    await bindToolCallForTurn(harness.inboundHooks, {
+      runId: secondRunId,
+      toolCallId: 'codex-compacted-second-hook',
+      toolName: 'prepare_expense',
+      params,
+    });
+
+    const tool = harness.rawPrepareExpenseFactory({
+      ...trustedOwnerContext(),
+      sessionKey: 'agent:main:stale-compacted-session',
+    });
+    await assert.rejects(
+      () => tool.execute('codex-compacted-ambiguous-execute', params),
+      /可信元数据/u,
+    );
   } finally {
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
@@ -945,6 +1033,396 @@ test('replaces a WeChat provider send with the authoritative tool receipt', asyn
 
     assert.equal(outgoing.content, result.content[0].text);
     assert.match(outgoing.content, /^帮你核对一下这笔～🤔\n- 账本：/u);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('replaces a WeChat send when the Codex tool and outbound run ids differ', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not run for a confirmation');
+  });
+
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭8.8么？',
+      messageId: 'authoritative-wechat-cross-run-confirmation',
+    });
+    const result = await harness.prepareExpenseFactory(trustedOwnerContext()).execute(
+      'authoritative-wechat-cross-run-call',
+      {
+        amount: '8.8',
+        primaryCategory: '食品酒水',
+        subcategory: '早午晚餐',
+        comment: '午饭',
+      },
+    );
+    const outboundRunId = 'outer-wechat-delivery-run';
+    const outgoing = await harness.inboundHooks.get('message_sending')?.({
+      to: 'owner-user',
+      content: '是',
+      metadata: {
+        channel: 'openclaw-weixin',
+        accountId: 'bot-account',
+        runId: outboundRunId,
+      },
+    }, {
+      channelId: 'openclaw-weixin',
+      accountId: 'bot-account',
+      runId: outboundRunId,
+    });
+
+    assert.equal(outgoing.content, result.content[0].text);
+
+    await harness.inboundHooks.get('message_sent')?.({
+      to: 'owner-user',
+      content: outgoing.content,
+      success: true,
+      runId: outboundRunId,
+    }, {
+      channelId: 'openclaw-weixin',
+      accountId: 'bot-account',
+      runId: outboundRunId,
+    });
+    const afterSuccessfulSend = await harness.inboundHooks.get('message_sending')?.({
+      to: 'owner-user',
+      content: '普通后续消息',
+      metadata: {
+        channel: 'openclaw-weixin',
+        accountId: 'bot-account',
+        runId: outboundRunId,
+      },
+    }, {
+      channelId: 'openclaw-weixin',
+      accountId: 'bot-account',
+      runId: outboundRunId,
+    });
+    assert.equal(afterSuccessfulSend, undefined);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('does not recover an authoritative WeChat reply for a different recipient', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not run for a confirmation');
+  });
+
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭8.8么？',
+      messageId: 'authoritative-wechat-other-recipient',
+    });
+    await harness.prepareExpenseFactory(trustedOwnerContext()).execute(
+      'authoritative-wechat-other-recipient-call',
+      {
+        amount: '8.8',
+        primaryCategory: '食品酒水',
+        subcategory: '早午晚餐',
+        comment: '午饭',
+      },
+    );
+    const outgoing = await harness.inboundHooks.get('message_sending')?.({
+      to: 'different-user',
+      content: '普通回复',
+      metadata: {
+        channel: 'openclaw-weixin',
+        accountId: 'bot-account',
+        runId: 'outer-wechat-other-recipient-run',
+      },
+    }, {
+      channelId: 'openclaw-weixin',
+      accountId: 'bot-account',
+      runId: 'outer-wechat-other-recipient-run',
+    });
+
+    assert.equal(outgoing, undefined);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('does not reuse an outbound reservation for a different recipient with the same run id', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not run for a confirmation');
+  });
+
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭8.8么？',
+      messageId: 'authoritative-wechat-reservation-recipient',
+    });
+    await harness.prepareExpenseFactory(trustedOwnerContext()).execute(
+      'authoritative-wechat-reservation-recipient-call',
+      {
+        amount: '8.8',
+        primaryCategory: '食品酒水',
+        subcategory: '早午晚餐',
+        comment: '午饭',
+      },
+    );
+    const outboundRunId = 'outer-wechat-reused-recipient-run';
+    const first = await harness.inboundHooks.get('message_sending')?.({
+      to: 'owner-user',
+      content: '普通回复',
+      metadata: {
+        channel: 'openclaw-weixin',
+        accountId: 'bot-account',
+        runId: outboundRunId,
+      },
+    }, {
+      channelId: 'openclaw-weixin',
+      accountId: 'bot-account',
+      runId: outboundRunId,
+    });
+    assert.ok(first);
+
+    const second = await harness.inboundHooks.get('message_sending')?.({
+      to: 'different-user',
+      content: '普通回复',
+      metadata: {
+        channel: 'openclaw-weixin',
+        accountId: 'bot-account',
+        runId: outboundRunId,
+      },
+    }, {
+      channelId: 'openclaw-weixin',
+      accountId: 'bot-account',
+      runId: outboundRunId,
+    });
+
+    assert.equal(second, undefined);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('releases an authoritative reply reservation after a failed WeChat send', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not run for a confirmation');
+  });
+
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭8.8么？',
+      messageId: 'authoritative-wechat-failed-delivery',
+    });
+    const result = await harness.prepareExpenseFactory(trustedOwnerContext()).execute(
+      'authoritative-wechat-failed-delivery-call',
+      {
+        amount: '8.8',
+        primaryCategory: '食品酒水',
+        subcategory: '早午晚餐',
+        comment: '午饭',
+      },
+    );
+    const firstRunId = 'outer-wechat-failed-delivery-run';
+    const first = await harness.inboundHooks.get('message_sending')?.({
+      to: 'owner-user',
+      content: '普通回复',
+      metadata: { channel: 'openclaw-weixin', runId: firstRunId },
+    }, {
+      channelId: 'openclaw-weixin',
+      runId: firstRunId,
+    });
+    assert.equal(first.content, result.content[0].text);
+
+    await harness.inboundHooks.get('message_sent')?.({
+      to: 'owner-user',
+      content: first.content,
+      success: false,
+      runId: firstRunId,
+    }, {
+      channelId: 'openclaw-weixin',
+      runId: firstRunId,
+    });
+    const retryRunId = 'outer-wechat-failed-delivery-retry';
+    const retried = await harness.inboundHooks.get('message_sending')?.({
+      to: 'owner-user',
+      content: '普通回复',
+      metadata: { channel: 'openclaw-weixin', runId: retryRunId },
+    }, {
+      channelId: 'openclaw-weixin',
+      runId: retryRunId,
+    });
+
+    assert.equal(retried.content, result.content[0].text);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('recovers an authoritative WeChat reply when outbound account metadata is absent', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not run for a confirmation');
+  });
+
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭8.8么？',
+      messageId: 'authoritative-wechat-missing-outbound-account',
+    });
+    const result = await harness.prepareExpenseFactory(trustedOwnerContext()).execute(
+      'authoritative-wechat-missing-outbound-account-call',
+      {
+        amount: '8.8',
+        primaryCategory: '食品酒水',
+        subcategory: '早午晚餐',
+        comment: '午饭',
+      },
+    );
+    const outgoing = await harness.inboundHooks.get('message_sending')?.({
+      to: 'owner-user',
+      content: '普通回复',
+      metadata: {
+        channel: 'openclaw-weixin',
+        runId: 'outer-wechat-missing-account-run',
+      },
+    }, {
+      channelId: 'openclaw-weixin',
+      runId: 'outer-wechat-missing-account-run',
+    });
+
+    assert.equal(outgoing.content, result.content[0].text);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('recovers an authoritative WeChat reply across isolated plugin instances', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const firstHarness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not run for a confirmation');
+  });
+  let secondHarness;
+
+  try {
+    await receiveTrustedOwnerMessage(firstHarness.inboundHooks, {
+      content: '午饭8.8么？',
+      messageId: 'authoritative-wechat-cross-instance',
+    });
+    const result = await firstHarness.prepareExpenseFactory(trustedOwnerContext()).execute(
+      'authoritative-wechat-cross-instance-call',
+      {
+        amount: '8.8',
+        primaryCategory: '食品酒水',
+        subcategory: '早午晚餐',
+        comment: '午饭',
+      },
+    );
+
+    secondHarness = createPluginHarness(tempDirectory, async () => {
+      throw new Error('HTTP must not run for a confirmation');
+    });
+    const outboundRunId = 'outer-wechat-cross-instance-run';
+    const outgoing = await secondHarness.inboundHooks.get('message_sending')?.({
+      to: 'owner-user',
+      content: '普通回复',
+      metadata: {
+        channel: 'openclaw-weixin',
+        runId: outboundRunId,
+      },
+    }, {
+      channelId: 'openclaw-weixin',
+      runId: outboundRunId,
+    });
+
+    assert.equal(outgoing.content, result.content[0].text);
+
+    await secondHarness.inboundHooks.get('message_sent')?.({
+      to: 'owner-user',
+      content: outgoing.content,
+      success: true,
+      runId: outboundRunId,
+    }, {
+      channelId: 'openclaw-weixin',
+      runId: outboundRunId,
+    });
+    const afterSuccessfulSend = await firstHarness.inboundHooks.get('message_sending')?.({
+      to: 'owner-user',
+      content: '普通后续消息',
+      metadata: {
+        channel: 'openclaw-weixin',
+        runId: 'outer-wechat-cross-instance-later-run',
+      },
+    }, {
+      channelId: 'openclaw-weixin',
+      runId: 'outer-wechat-cross-instance-later-run',
+    });
+    assert.equal(afterSuccessfulSend, undefined);
+  } finally {
+    secondHarness?.restore();
+    firstHarness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('fails cross-run WeChat recovery closed when two replies target the same recipient', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const harness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not run for a confirmation');
+  });
+
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '午饭8.8么？',
+      messageId: 'authoritative-wechat-ambiguous-one',
+    });
+    await harness.prepareExpenseFactory(trustedOwnerContext()).execute(
+      'authoritative-wechat-ambiguous-one-call',
+      {
+        amount: '8.8',
+        primaryCategory: '食品酒水',
+        subcategory: '早午晚餐',
+        comment: '午饭',
+      },
+    );
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '晚饭9.9么？',
+      messageId: 'authoritative-wechat-ambiguous-two',
+    });
+    await harness.prepareExpenseFactory(trustedOwnerContext()).execute(
+      'authoritative-wechat-ambiguous-two-call',
+      {
+        amount: '9.9',
+        primaryCategory: '食品酒水',
+        subcategory: '早午晚餐',
+        comment: '晚饭',
+      },
+    );
+    const outgoing = await harness.inboundHooks.get('message_sending')?.({
+      to: 'owner-user',
+      content: '普通回复',
+      metadata: {
+        channel: 'openclaw-weixin',
+        accountId: 'bot-account',
+        runId: 'outer-wechat-ambiguous-run',
+      },
+    }, {
+      channelId: 'openclaw-weixin',
+      accountId: 'bot-account',
+      runId: 'outer-wechat-ambiguous-run',
+    });
+
+    assert.equal(outgoing, undefined);
   } finally {
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
@@ -1598,6 +2076,58 @@ test('prepares an ambiguous expense, confirms it once, and keeps the original me
     assert.equal(requests.filter(({ url }) => url.endsWith('/transactions/add.json')).length, 1);
   } finally {
     harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('resolves a cancellation after transient hook state is lost across plugin instances', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const firstHarness = createPluginHarness(tempDirectory, async () => {
+    throw new Error('HTTP must not run for a cancellation');
+  });
+  let secondHarness;
+
+  try {
+    await receiveTrustedOwnerMessage(firstHarness.inboundHooks, {
+      content: '午饭8.8么？',
+      messageId: 'durable-confirmation-proposal',
+    });
+    await firstHarness.prepareExpenseFactory(trustedOwnerContext()).execute(
+      'durable-confirmation-proposal-call',
+      {
+        amount: '8.8',
+        primaryCategory: '食品酒水',
+        subcategory: '早午晚餐',
+        comment: '午饭',
+      },
+    );
+
+    const cancellationRunId = 'run-durable-confirmation-cancel';
+    await beginTrustedOwnerTurn(firstHarness.inboundHooks, {
+      content: '不是',
+      messageId: 'durable-confirmation-cancel',
+      runId: cancellationRunId,
+    });
+    await bindToolCallForTurn(firstHarness.inboundHooks, {
+      runId: cancellationRunId,
+      toolCallId: 'durable-confirmation-hook-call',
+      toolName: 'resolve_expense_confirmation',
+      params: { decision: 'cancel' },
+    });
+
+    secondHarness = createPluginHarness(tempDirectory, async () => {
+      throw new Error('HTTP must not run for a cancellation');
+    });
+    const cancelled = await secondHarness.rawResolveExpenseConfirmationFactory(
+      trustedOwnerContext(),
+    ).execute('durable-confirmation-execute-call', { decision: 'cancel' });
+
+    assert.equal(cancelled.details.status, 'cancelled');
+    assert.equal(cancelled.content[0].text, '好哒，已经帮你取消啦～ 这笔没有记到账本里 😊');
+  } finally {
+    secondHarness?.restore();
+    firstHarness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
   }
 });

@@ -31,6 +31,28 @@ test('keeps authoritative tool results terminal and hides internal reasoning', (
   assert.match(prompt, /每条消息最多写入一笔，失败后不重试/u);
 });
 
+test('forbids ledger claims without a current-turn authoritative tool result', () => {
+  assert.match(prompt, /任何账本事实都必须来自当前这一轮成功返回的工具结果/u);
+  assert.match(prompt, /聊天历史里的 assistant 回复不算账本证据/u);
+  assert.match(prompt, /不得手写、补写或重建“已记账”回执/u);
+  assert.match(prompt, /没有拿到工具返回文本/u);
+  assert.match(prompt, /不得声称“已记账”或“没有支出记录”/u);
+});
+
+test('uses directly loaded Codex bookkeeping tools without catalog searches', () => {
+  assert.match(prompt, /直接调用当前可见的账本工具/u);
+  assert.match(prompt, /Code Mode 通过 `exec` 包装调用/u);
+  assert.match(prompt, /不要查询 `ALL_TOOLS` 或搜索工具目录/u);
+  assert.match(prompt, /返回值是字符串时直接输出完整字符串/u);
+  assert.doesNotMatch(prompt, /不要通过 `exec`/u);
+
+  const config = JSON.parse(readFileSync(new URL('../../../config/weixin-bookkeeper-agent.example.json', import.meta.url), 'utf8'));
+  assert.deepEqual(config[0], {
+    path: 'plugins.entries.codex.config.codexDynamicToolsLoading',
+    value: 'direct',
+  });
+});
+
 test('supports deterministic summaries and flexible read-only history questions', () => {
   assert.equal(prompt.includes('summarize_expenses'), true);
   assert.equal(prompt.includes('ezbookkeeping__query_transactions'), true);

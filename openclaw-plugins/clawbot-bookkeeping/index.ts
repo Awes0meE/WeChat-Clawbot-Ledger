@@ -40,6 +40,8 @@ type InboundMessage = {
   observedAt: number;
   timeSource: 'message' | 'received';
   conversationKey: string;
+  deliveryKey: string;
+  recipientKey: string;
 };
 
 type SummaryParams = {
@@ -65,6 +67,11 @@ type RecordExpenseParams = {
 
 type ResolveExpenseConfirmationParams = {
   decision: 'confirm' | 'cancel';
+};
+
+type AuthoritativeToolResponse = {
+  content: Array<{ type: 'text'; text: string }>;
+  details: Record<string, unknown>;
 };
 
 type ToolExecutionContext = {
@@ -130,6 +137,46 @@ function trustedConversationKey({
   if (!channel || !senderId) return undefined;
   return createHash('sha256')
     .update(`conversation\u0000${channel}\u0000${accountId ?? ''}\u0000${senderId}\u0000${sessionKey ?? ''}`, 'utf8')
+    .digest('hex');
+}
+
+function trustedDeliveryKey({
+  channel,
+  accountId,
+  recipientId,
+}: {
+  channel?: string;
+  accountId?: string;
+  recipientId?: string;
+}) {
+  if (!channel || !accountId || !recipientId) return undefined;
+  return createHash('sha256')
+    .update(`delivery\u0000${channel}\u0000${accountId}\u0000${recipientId}`, 'utf8')
+    .digest('hex');
+}
+
+function trustedRecipientKey({
+  channel,
+  recipientId,
+}: {
+  channel?: string;
+  recipientId?: string;
+}) {
+  if (!channel || !recipientId) return undefined;
+  return createHash('sha256')
+    .update(`recipient\u0000${channel}\u0000${recipientId}`, 'utf8')
+    .digest('hex');
+}
+
+function durableToolBridgeLookupKey(toolName: string, recipientKey: string) {
+  return createHash('sha256')
+    .update(`tool-bridge-lookup\u0000${toolName}\u0000${recipientKey}`, 'utf8')
+    .digest('hex');
+}
+
+function durableToolBridgeMessageKey(toolName: string, inbound: InboundMessage) {
+  return createHash('sha256')
+    .update(`tool-bridge-message\u0000${toolName}\u0000${inbound.channel}\u0000${inbound.messageId}`, 'utf8')
     .digest('hex');
 }
 
@@ -250,8 +297,26 @@ export default definePluginEntry({
     const preparedRuns = new Set<string>();
     const inboundByRun = new Map<string, InboundMessage>();
     const unverifiedInboundByRun = new Map<string, InboundMessage>();
-    const authoritativeRepliesByRun = new Map<string, { text: string; touchedAt: number }>();
-    const authoritativeToolResultsByRun = new Map<string, { response: unknown; touchedAt: number }>();
+    const deliveryKeysByRun = new Map<string, {
+      deliveryKey: string;
+      recipientKey: string;
+      touchedAt: number;
+    }>();
+    const authoritativeRepliesByRun = new Map<string, {
+      text: string;
+      touchedAt: number;
+      persisted: boolean;
+      deliveryKey?: string;
+      recipientKey?: string;
+    }>();
+    const authoritativeReplyDeliveriesByRun = new Map<string, {
+      sourceRunKey: string;
+      touchedAt: number;
+    }>();
+    const authoritativeToolResultsByRun = new Map<string, {
+      response: AuthoritativeToolResponse;
+      touchedAt: number;
+    }>();
     const toolCallSlots = new Map<string, {
       runKey: string;
       toolName: string;
@@ -273,10 +338,50 @@ export default definePluginEntry({
           authoritativeRepliesByRun.delete(runKey);
         }
       }
+      for (const [runKey, delivery] of authoritativeReplyDeliveriesByRun) {
+        if (now - delivery.touchedAt > AUTHORITATIVE_REPLY_MAX_AGE_MS) {
+          authoritativeReplyDeliveriesByRun.delete(runKey);
+        }
+      }
+      for (const [runKey, delivery] of deliveryKeysByRun) {
+        if (now - delivery.touchedAt > AUTHORITATIVE_REPLY_MAX_AGE_MS) {
+          deliveryKeysByRun.delete(runKey);
+        }
+      }
       for (const [runKey, result] of authoritativeToolResultsByRun) {
         if (now - result.touchedAt > AUTHORITATIVE_REPLY_MAX_AGE_MS) {
           authoritativeToolResultsByRun.delete(runKey);
         }
+      }
+    };
+    const storeAuthoritativeReply = (
+      runKey: string,
+      text: string,
+      touchedAt = Date.now(),
+    ) => {
+      if (authoritativeRepliesByRun.has(runKey)) return;
+      const delivery = deliveryKeysByRun.get(runKey);
+      const authoritativeReply = {
+        text,
+        touchedAt,
+        persisted: false,
+        ...(delivery ?? {}),
+      };
+      authoritativeRepliesByRun.set(runKey, authoritativeReply);
+      if (!delivery) return;
+      try {
+        receiptStore.storeAuthoritativeReply({
+          replyKey: runKey,
+          deliveryKey: delivery.deliveryKey,
+          recipientKey: delivery.recipientKey,
+          text,
+          expiresAt: touchedAt + AUTHORITATIVE_REPLY_MAX_AGE_MS,
+        });
+        authoritativeReply.persisted = true;
+      } catch {
+        api.logger?.error?.(
+          'clawbot-bookkeeping: failed to persist authoritative reply handoff',
+        );
       }
     };
 
@@ -297,7 +402,9 @@ export default definePluginEntry({
       const senderId = context.senderId ?? event.senderId ?? event.from;
       const accountId = context.accountId;
       const conversationKey = trustedConversationKey({ sessionKey, channel, accountId, senderId });
-      if (!conversationKey) return;
+      const deliveryKey = trustedDeliveryKey({ channel, accountId, recipientId: senderId });
+      const recipientKey = trustedRecipientKey({ channel, recipientId: senderId });
+      if (!conversationKey || !deliveryKey || !recipientKey) return;
       api.logger?.info?.(
         `clawbot-bookkeeping: inbound metadata session=${Boolean(sessionKey)} message=${Boolean(messageId)} sender=${Boolean(senderId)} channel=${Boolean(channel)}`,
       );
@@ -311,6 +418,8 @@ export default definePluginEntry({
         observedAt,
         timeSource: hasMessageTimestamp ? 'message' : 'received',
         conversationKey,
+        deliveryKey,
+        recipientKey,
       } satisfies InboundMessage;
       const lookupKeys = trustedInboundLookupKeys({ sessionKey, channel, senderId });
       lookupKeys.push(trustedInboundLookupKey(
@@ -375,6 +484,11 @@ export default definePluginEntry({
           receiptStore.discardPendingExpenseConfirmation(inbound.conversationKey);
         }
         inboundByRun.set(runKey, inbound);
+        deliveryKeysByRun.set(runKey, {
+          deliveryKey: inbound.deliveryKey,
+          recipientKey: inbound.recipientKey,
+          touchedAt: Date.now(),
+        });
       }
       if (context.trigger === 'user' && event.senderIsOwner === true) {
         api.logger?.info?.(
@@ -419,7 +533,14 @@ export default definePluginEntry({
         },
         now,
       ) as InboundMessage | undefined;
-      if (inbound) unverifiedInboundByRun.set(runKey, inbound);
+      if (inbound) {
+        unverifiedInboundByRun.set(runKey, inbound);
+        deliveryKeysByRun.set(runKey, {
+          deliveryKey: inbound.deliveryKey,
+          recipientKey: inbound.recipientKey,
+          touchedAt: Date.now(),
+        });
+      }
       api.logger?.info?.(
         `clawbot-bookkeeping: llm input correlation run=true user=true channel=true sender=${Boolean(senderId)} matched=${Boolean(inbound)}`,
       );
@@ -455,10 +576,11 @@ export default definePluginEntry({
           inboundByRun.delete(runKey);
           for (const conflictingRunKey of existingSlot.conflictingRunKeys) {
             if (!authoritativeRepliesByRun.has(conflictingRunKey)) {
-              authoritativeRepliesByRun.set(conflictingRunKey, {
-                text: '这次没记成功，账本里没有新增记录～ 请重新发一条新消息吧。',
-                touchedAt: now,
-              });
+              storeAuthoritativeReply(
+                conflictingRunKey,
+                '这次没记成功，账本里没有新增记录～ 请重新发一条新消息吧。',
+                now,
+              );
             }
           }
         }
@@ -491,6 +613,19 @@ export default definePluginEntry({
         ambiguous: false,
         touchedAt: now,
       });
+      if (inbound) {
+        deliveryKeysByRun.set(runKey, {
+          deliveryKey: inbound.deliveryKey,
+          recipientKey: inbound.recipientKey,
+          touchedAt: now,
+        });
+        receiptStore.enqueueTrustedInbound(
+          [durableToolBridgeLookupKey(event.toolName, inbound.recipientKey)],
+          durableToolBridgeMessageKey(event.toolName, inbound),
+          inbound,
+          now + TRUSTED_PROMPT_CORRELATION_MAX_AGE_MS,
+        );
+      }
       if (inbound) inboundByRun.delete(runKey);
       if (inbound) unverifiedInboundByRun.delete(runKey);
     });
@@ -521,10 +656,7 @@ export default definePluginEntry({
         }
       }
       if (!authoritativeText) return;
-      authoritativeRepliesByRun.set(runKey, {
-        text: authoritativeText,
-        touchedAt: Date.now(),
-      });
+      storeAuthoritativeReply(runKey, authoritativeText);
     });
 
     api.on('reply_payload_sending', (event, context) => {
@@ -553,20 +685,77 @@ export default definePluginEntry({
         ? event.metadata.runId
         : context.runId;
       const runKey = runId ? transientBindingKey('run', runId) : undefined;
-      const authoritative = runKey ? authoritativeRepliesByRun.get(runKey) : undefined;
+      const accountId = context.accountId
+        ?? (typeof event.metadata?.accountId === 'string' ? event.metadata.accountId : undefined);
+      const recipientId = typeof event.to === 'string' ? event.to : undefined;
+      const deliveryKey = trustedDeliveryKey({ channel, accountId, recipientId });
+      const recipientKey = trustedRecipientKey({ channel, recipientId });
+      let sourceRunKey: string | undefined;
+      let authoritativeText: string | undefined;
+      let recoveredByDelivery = false;
+      if (runKey && recipientKey) {
+        try {
+          const reserved = receiptStore.reserveUniqueAuthoritativeReply({
+            deliveryKey,
+            recipientKey,
+            outboundRunKey: runKey,
+          });
+          if (reserved) {
+            sourceRunKey = reserved.reply_key;
+            authoritativeText = reserved.text;
+            recoveredByDelivery = sourceRunKey !== runKey;
+          }
+        } catch {
+          api.logger?.error?.(
+            'clawbot-bookkeeping: failed to reserve authoritative reply handoff',
+          );
+        }
+      }
+      if (!authoritativeText && runKey) {
+        const exactRunReply = authoritativeRepliesByRun.get(runKey);
+        if (exactRunReply?.persisted === false) {
+          sourceRunKey = runKey;
+          authoritativeText = exactRunReply.text;
+        }
+      }
       api.logger?.info?.(
-        `clawbot-bookkeeping: WeChat send authority run=${Boolean(runId)} matched=${Boolean(authoritative)}`,
+        `clawbot-bookkeeping: WeChat send authority run=${Boolean(runId)} account=${Boolean(accountId)} matched=${Boolean(authoritativeText)} recovered=${recoveredByDelivery}`,
       );
-      if (!runKey || !authoritative) return;
-      return { content: authoritative.text };
+      if (!runKey || !sourceRunKey || !authoritativeText) return;
+      authoritativeReplyDeliveriesByRun.set(runKey, {
+        sourceRunKey,
+        touchedAt: Date.now(),
+      });
+      return { content: authoritativeText };
     });
 
     api.on('message_sent', (event, context) => {
       const channel = context.channelId;
-      if (channel !== 'openclaw-weixin' || event.success !== true) return;
+      if (channel !== 'openclaw-weixin' || typeof event.success !== 'boolean') return;
       const runId = context.runId ?? event.runId;
       const runKey = runId ? transientBindingKey('run', runId) : undefined;
-      if (runKey) authoritativeRepliesByRun.delete(runKey);
+      if (!runKey) return;
+      const sourceRunKey = authoritativeReplyDeliveriesByRun.get(runKey)?.sourceRunKey ?? runKey;
+      let completedReplyKeys: string[] = [];
+      try {
+        completedReplyKeys = receiptStore.finishAuthoritativeReplyDelivery(runKey, event.success);
+      } catch {
+        api.logger?.error?.(
+          'clawbot-bookkeeping: failed to finish authoritative reply handoff',
+        );
+      }
+      if (event.success) {
+        const replyKeys = new Set([sourceRunKey, ...completedReplyKeys]);
+        for (const replyKey of replyKeys) {
+          authoritativeRepliesByRun.delete(replyKey);
+          deliveryKeysByRun.delete(replyKey);
+        }
+      }
+      for (const [outboundRunKey, delivery] of authoritativeReplyDeliveriesByRun) {
+        if (outboundRunKey === runKey || delivery.sourceRunKey === sourceRunKey) {
+          authoritativeReplyDeliveriesByRun.delete(outboundRunKey);
+        }
+      }
     });
 
     api.on('agent_end', (event, context) => {
@@ -592,7 +781,9 @@ export default definePluginEntry({
       inboundByRun.clear();
       unverifiedInboundByRun.clear();
       toolCallSlots.clear();
+      deliveryKeysByRun.clear();
       authoritativeRepliesByRun.clear();
+      authoritativeReplyDeliveriesByRun.clear();
       authoritativeToolResultsByRun.clear();
       receiptStore.close();
     });
@@ -601,8 +792,10 @@ export default definePluginEntry({
       _id: unknown,
       toolName: string,
       toolContext: ToolExecutionContext,
+      params: unknown,
     ) => {
-      pruneExpiredToolCallSlots();
+      const now = Date.now();
+      pruneExpiredToolCallSlots(now);
       const toolCallKey = typeof _id === 'string'
         ? transientBindingKey('tool-call', _id)
         : undefined;
@@ -632,13 +825,72 @@ export default definePluginEntry({
           const candidates = sameSessionCandidates.filter(([, candidate]) => (
             candidate.requesterConversationKey === executionConversationKey
           ));
+          api.logger?.info?.(
+            `clawbot-bookkeeping: recovery candidates available=${availableCandidates.length} tool=${sameToolCandidates.length} session=${sameSessionCandidates.length} conversation=${candidates.length}`,
+          );
           const candidateRunKeys = new Set(candidates.map(([, candidate]) => candidate.runKey));
-          if (candidateRunKeys.size === 1) {
-            const selected = candidates.find(([, candidate]) => Boolean(candidate.inbound))
-              ?? candidates[0];
+          const sameToolRunKeys = new Set(sameToolCandidates.map(([, candidate]) => candidate.runKey));
+          const recoveryCandidates = candidateRunKeys.size === 1
+            ? candidates
+            : sameToolRunKeys.size === 1
+              ? sameToolCandidates
+              : [];
+          if (recoveryCandidates.length > 0) {
+            const selected = recoveryCandidates.find(([, candidate]) => Boolean(candidate.inbound))
+              ?? recoveryCandidates[0];
             [resolvedToolCallKey, slot] = selected;
             recoveredByExecutionContext = true;
           }
+        }
+      }
+      let recoveredByDurableBridge = false;
+      if (!slot && toolCallKey && toolContext.senderIsOwner === true) {
+        const recipientKey = trustedRecipientKey({
+          channel: toolContext.messageChannel,
+          recipientId: toolContext.requesterSenderId,
+        });
+        const durableInbound = recipientKey
+          ? receiptStore.claimUniqueTrustedInboundMatching(
+            [durableToolBridgeLookupKey(toolName, recipientKey)],
+            (candidate: unknown) => {
+              if (!candidate || typeof candidate !== 'object') return false;
+              const trusted = candidate as Partial<InboundMessage>;
+              if (trusted.recipientKey !== recipientKey
+                || typeof trusted.observedAt !== 'number'
+                || now - trusted.observedAt < 0
+                || now - trusted.observedAt > TRUSTED_PROMPT_CORRELATION_MAX_AGE_MS) return false;
+              if (toolName !== 'resolve_expense_confirmation') return true;
+              const decision = params && typeof params === 'object'
+                ? (params as { decision?: unknown }).decision
+                : undefined;
+              return (decision === 'confirm' || decision === 'cancel')
+                && typeof trusted.content === 'string'
+                && confirmationDecision(trusted.content) === decision;
+            },
+            now,
+          ) as InboundMessage | undefined
+          : undefined;
+        if (durableInbound) {
+          const durableRunKey = transientBindingKey(
+            'run',
+            `tool-bridge\u0000${toolName}\u0000${durableInbound.channel}\u0000${durableInbound.messageId}`,
+          );
+          slot = {
+            runKey: durableRunKey,
+            toolName,
+            requesterConversationKey: durableInbound.conversationKey,
+            inbound: durableInbound,
+            ambiguous: false,
+            touchedAt: now,
+          };
+          resolvedToolCallKey = toolCallKey;
+          toolCallSlots.set(toolCallKey, slot);
+          deliveryKeysByRun.set(durableRunKey, {
+            deliveryKey: durableInbound.deliveryKey,
+            recipientKey: durableInbound.recipientKey,
+            touchedAt: now,
+          });
+          recoveredByDurableBridge = true;
         }
       }
       const inbound = slot?.ambiguous === false ? slot.inbound : undefined;
@@ -646,32 +898,41 @@ export default definePluginEntry({
         ? authoritativeToolResultsByRun.get(slot.runKey)?.response
         : undefined;
       api.logger?.info?.(
-        `clawbot-bookkeeping: take tool binding tool=${toolName} id=${Boolean(toolCallKey)} owner=${toolContext.senderIsOwner === true} session=${Boolean(toolContext.sessionKey)} channel=${Boolean(toolContext.messageChannel)} account=${Boolean(toolContext.agentAccountId)} sender=${Boolean(toolContext.requesterSenderId)} slot=${Boolean(slot)} recovered=${recoveredByExecutionContext} ambiguous=${slot?.ambiguous === true} inbound=${Boolean(inbound)} cached=${Boolean(cachedResponse)}`,
+        `clawbot-bookkeeping: take tool binding tool=${toolName} id=${Boolean(toolCallKey)} owner=${toolContext.senderIsOwner === true} session=${Boolean(toolContext.sessionKey)} channel=${Boolean(toolContext.messageChannel)} account=${Boolean(toolContext.agentAccountId)} sender=${Boolean(toolContext.requesterSenderId)} slot=${Boolean(slot)} recovered=${recoveredByExecutionContext} durable=${recoveredByDurableBridge} ambiguous=${slot?.ambiguous === true} inbound=${Boolean(inbound)} cached=${Boolean(cachedResponse)}`,
       );
       if (cachedResponse !== undefined) return { cachedResponse };
+      if (inbound && !recoveredByDurableBridge) {
+        receiptStore.claimUniqueTrustedInboundMatching(
+          [durableToolBridgeLookupKey(toolName, inbound.recipientKey)],
+          (candidate: unknown) => Boolean(candidate
+            && typeof candidate === 'object'
+            && (candidate as Partial<InboundMessage>).messageId === inbound.messageId),
+          now,
+        );
+      }
       if (slot) delete slot.inbound;
       if (!slot || !inbound || !resolvedToolCallKey) {
         if (slot?.runKey && !authoritativeRepliesByRun.has(slot.runKey)) {
-          authoritativeRepliesByRun.set(slot.runKey, {
-            text: '这次没记成功，账本里没有新增记录～ 请重新发一条新消息吧。',
-            touchedAt: Date.now(),
-          });
+          storeAuthoritativeReply(
+            slot.runKey,
+            '这次没记成功，账本里没有新增记录～ 请重新发一条新消息吧。',
+          );
         }
         throw new Error(MISSING_TRUSTED_INBOUND_ERROR);
       }
       if (Date.now() - inbound.observedAt > TRUSTED_INBOUND_MAX_AGE_MS) {
         if (!authoritativeRepliesByRun.has(slot.runKey)) {
-          authoritativeRepliesByRun.set(slot.runKey, {
-            text: '这次没记成功，账本里没有新增记录～ 请重新发一条新消息吧。',
-            touchedAt: Date.now(),
-          });
+          storeAuthoritativeReply(
+            slot.runKey,
+            '这次没记成功，账本里没有新增记录～ 请重新发一条新消息吧。',
+          );
         }
         throw new Error('当前微信消息的可信元数据已过期，已拒绝操作账本。');
       }
       const boundRunKey = slot.runKey;
       return {
         inbound,
-        authoritativeResponse: <Response extends { content?: unknown }>(response: Response) => {
+        authoritativeResponse: <Response extends AuthoritativeToolResponse>(response: Response) => {
           const text = Array.isArray(response.content)
             ? response.content.find((item) => item
               && typeof item === 'object'
@@ -679,10 +940,7 @@ export default definePluginEntry({
               && typeof (item as { text?: unknown }).text === 'string') as { text: string } | undefined
             : undefined;
           if (text && !authoritativeRepliesByRun.has(boundRunKey)) {
-            authoritativeRepliesByRun.set(boundRunKey, {
-              text: text.text,
-              touchedAt: Date.now(),
-            });
+            storeAuthoritativeReply(boundRunKey, text.text);
           }
           if (!authoritativeToolResultsByRun.has(boundRunKey)) {
             authoritativeToolResultsByRun.set(boundRunKey, {
@@ -786,7 +1044,7 @@ export default definePluginEntry({
         async execute(_id, params: SummaryParams) {
           if (toolContext.senderIsOwner !== true) {
             try {
-              const binding = takeToolCallBinding(_id, 'summarize_expenses', toolContext);
+              const binding = takeToolCallBinding(_id, 'summarize_expenses', toolContext, params);
               if ('cachedResponse' in binding) return binding.cachedResponse;
             } catch {
               throw new Error('无法确认消息发送者为账本 owner，已拒绝查询。');
@@ -861,7 +1119,7 @@ export default definePluginEntry({
           ].join('\n'),
           parameters: EXPENSE_PARAMETERS,
           async execute(_id, params: RecordExpenseParams) {
-            const binding = takeToolCallBinding(_id, 'record_expense', toolContext);
+            const binding = takeToolCallBinding(_id, 'record_expense', toolContext, params);
             if ('cachedResponse' in binding) return binding.cachedResponse;
             const { inbound, isStillAuthorized, authoritativeResponse } = binding;
             const normalizedInput = {
@@ -943,7 +1201,7 @@ export default definePluginEntry({
         ].join('\n'),
         parameters: EXPENSE_PARAMETERS,
         async execute(_id, params: RecordExpenseParams) {
-          const binding = takeToolCallBinding(_id, 'prepare_expense', toolContext);
+          const binding = takeToolCallBinding(_id, 'prepare_expense', toolContext, params);
           if ('cachedResponse' in binding) return binding.cachedResponse;
           const { inbound, isStillAuthorized, authoritativeResponse } = binding;
           const normalizedInput = {
@@ -1008,7 +1266,7 @@ export default definePluginEntry({
           decision: Type.Union([Type.Literal('confirm'), Type.Literal('cancel')]),
         }, { additionalProperties: false }),
         async execute(_id, params: ResolveExpenseConfirmationParams) {
-          const binding = takeToolCallBinding(_id, 'resolve_expense_confirmation', toolContext);
+          const binding = takeToolCallBinding(_id, 'resolve_expense_confirmation', toolContext, params);
           if ('cachedResponse' in binding) return binding.cachedResponse;
           const { inbound, isStillAuthorized, authoritativeResponse } = binding;
           const trustedDecision = confirmationDecision(inbound.content);

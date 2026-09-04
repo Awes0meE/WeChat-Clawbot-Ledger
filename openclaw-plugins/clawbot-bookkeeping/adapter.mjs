@@ -164,6 +164,19 @@ export class SqliteReceiptStore {
         expires_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS pending_authoritative_replies (
+        reply_key TEXT PRIMARY KEY,
+        delivery_key TEXT NOT NULL,
+        recipient_key TEXT NOT NULL,
+        text TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        reserved_by TEXT,
+        reserved_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS pending_authoritative_replies_delivery
+      ON pending_authoritative_replies (delivery_key, expires_at, reserved_by);
+      CREATE INDEX IF NOT EXISTS pending_authoritative_replies_recipient
+      ON pending_authoritative_replies (recipient_key, expires_at, reserved_by);
     `);
     this.#migrateLegacyTrustedInboundMessages();
     this.insertPending = this.database.prepare(`
@@ -229,6 +242,53 @@ export class SqliteReceiptStore {
       DELETE FROM pending_expense_confirmations
       WHERE conversation_key = ?
     `);
+    this.insertAuthoritativeReply = this.database.prepare(`
+      INSERT OR IGNORE INTO pending_authoritative_replies
+        (reply_key, delivery_key, recipient_key, text, expires_at)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    this.deleteExpiredAuthoritativeReplies = this.database.prepare(`
+      DELETE FROM pending_authoritative_replies
+      WHERE expires_at < ?
+    `);
+    this.selectReservedAuthoritativeReplies = this.database.prepare(`
+      SELECT reply_key, delivery_key, recipient_key, text
+      FROM pending_authoritative_replies
+      WHERE reserved_by = ? AND expires_at >= ?
+      ORDER BY reply_key
+    `);
+    this.selectAuthoritativeRepliesByDelivery = this.database.prepare(`
+      SELECT reply_key, text
+      FROM pending_authoritative_replies
+      WHERE delivery_key = ? AND reserved_by IS NULL AND expires_at >= ?
+      ORDER BY reply_key
+    `);
+    this.selectAuthoritativeRepliesByRecipient = this.database.prepare(`
+      SELECT reply_key, text
+      FROM pending_authoritative_replies
+      WHERE recipient_key = ? AND reserved_by IS NULL AND expires_at >= ?
+      ORDER BY reply_key
+    `);
+    this.reserveAuthoritativeReply = this.database.prepare(`
+      UPDATE pending_authoritative_replies
+      SET reserved_by = ?, reserved_at = ?
+      WHERE reply_key = ? AND reserved_by IS NULL AND expires_at >= ?
+    `);
+    this.selectCompletedAuthoritativeReplies = this.database.prepare(`
+      SELECT reply_key
+      FROM pending_authoritative_replies
+      WHERE reserved_by = ?
+      ORDER BY reply_key
+    `);
+    this.deleteCompletedAuthoritativeReplies = this.database.prepare(`
+      DELETE FROM pending_authoritative_replies
+      WHERE reserved_by = ?
+    `);
+    this.releaseAuthoritativeReplies = this.database.prepare(`
+      UPDATE pending_authoritative_replies
+      SET reserved_by = NULL, reserved_at = NULL
+      WHERE reserved_by = ?
+    `);
   }
 
   claim(key) {
@@ -293,6 +353,70 @@ export class SqliteReceiptStore {
       throw new Error('pending expense confirmation lookup is invalid');
     }
     return Number(this.deletePendingExpenseConfirmation.run(conversationKey).changes) === 1;
+  }
+
+  storeAuthoritativeReply({ replyKey, deliveryKey, recipientKey, text, expiresAt }) {
+    if (!HASH_KEY_PATTERN.test(String(replyKey ?? ''))
+      || !HASH_KEY_PATTERN.test(String(deliveryKey ?? ''))
+      || !HASH_KEY_PATTERN.test(String(recipientKey ?? ''))
+      || typeof text !== 'string' || text.length === 0
+      || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) {
+      throw new Error('authoritative reply is invalid');
+    }
+    this.#withImmediateTransaction(() => {
+      this.deleteExpiredAuthoritativeReplies.run(Date.now());
+      this.insertAuthoritativeReply.run(replyKey, deliveryKey, recipientKey, text, expiresAt);
+    });
+  }
+
+  reserveUniqueAuthoritativeReply({ deliveryKey, recipientKey, outboundRunKey }, now = Date.now()) {
+    if ((deliveryKey !== undefined && !HASH_KEY_PATTERN.test(String(deliveryKey)))
+      || !HASH_KEY_PATTERN.test(String(recipientKey ?? ''))
+      || !HASH_KEY_PATTERN.test(String(outboundRunKey ?? ''))
+      || !Number.isSafeInteger(now) || now <= 0) {
+      throw new Error('authoritative reply reservation is invalid');
+    }
+    return this.#withImmediateTransaction(() => {
+      this.deleteExpiredAuthoritativeReplies.run(now);
+      const existing = this.selectReservedAuthoritativeReplies.all(outboundRunKey, now);
+      if (existing.length === 1) {
+        const [reserved] = existing;
+        const matchesRecipient = deliveryKey === undefined
+          ? reserved.recipient_key === recipientKey
+          : reserved.delivery_key === deliveryKey;
+        return matchesRecipient
+          ? { reply_key: reserved.reply_key, text: reserved.text }
+          : undefined;
+      }
+      if (existing.length > 1) return undefined;
+      const candidates = deliveryKey === undefined
+        ? this.selectAuthoritativeRepliesByRecipient.all(recipientKey, now)
+        : this.selectAuthoritativeRepliesByDelivery.all(deliveryKey, now);
+      if (candidates.length !== 1) return undefined;
+      const [candidate] = candidates;
+      const reserved = this.reserveAuthoritativeReply.run(
+        outboundRunKey,
+        now,
+        candidate.reply_key,
+        now,
+      );
+      return Number(reserved.changes) === 1 ? candidate : undefined;
+    });
+  }
+
+  finishAuthoritativeReplyDelivery(outboundRunKey, success) {
+    if (!HASH_KEY_PATTERN.test(String(outboundRunKey ?? '')) || typeof success !== 'boolean') {
+      throw new Error('authoritative reply completion is invalid');
+    }
+    return this.#withImmediateTransaction(() => {
+      if (!success) {
+        this.releaseAuthoritativeReplies.run(outboundRunKey);
+        return [];
+      }
+      const completed = this.selectCompletedAuthoritativeReplies.all(outboundRunKey);
+      this.deleteCompletedAuthoritativeReplies.run(outboundRunKey);
+      return completed.map((row) => row.reply_key);
+    });
   }
 
   enqueueTrustedInbound(lookupKeys, messageKey, payload, expiresAt) {
