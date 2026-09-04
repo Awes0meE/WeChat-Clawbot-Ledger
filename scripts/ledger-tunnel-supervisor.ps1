@@ -585,7 +585,7 @@ function Assert-TunnelProductionConfiguration {
         'server.root_url' = 'https://ledger.66ccff-labs.com/'
         'mcp.mcp_allowed_remote_ips' = '127.0.0.1'
         'database.type' = 'sqlite3'
-        'security.trusted_proxy_ips' = '127.0.0.1'
+        'security.trusted_proxy_ips' = '127.0.0.1/32'
         'security.enable_api_token' = 'true'
         'security.api_token_allowed_remote_ips' = '127.0.0.1'
         'security.max_failures_per_ip_per_minute' = '5'

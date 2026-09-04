@@ -275,7 +275,7 @@ try {
         'server.domain' = 'ledger.66ccff-labs.com'
         'server.root_url' = 'https://ledger.66ccff-labs.com/'
         'mcp.mcp_allowed_remote_ips' = '127.0.0.1'
-        'security.trusted_proxy_ips' = '127.0.0.1'
+        'security.trusted_proxy_ips' = '127.0.0.1/32'
         'security.token_expired_time' = '604800'
         'security.token_min_refresh_interval' = '86400'
         'security.enable_api_token' = 'true'

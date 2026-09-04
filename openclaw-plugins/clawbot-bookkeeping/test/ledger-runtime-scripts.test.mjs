@@ -630,7 +630,7 @@ type = local_filesystem
 local_filesystem_path = ${join(installDirectory, 'storage')}
 [security]
 secret_key = local-test-secret-value
-trusted_proxy_ips = 127.0.0.1
+trusted_proxy_ips = 127.0.0.1/32
 token_expired_time = 604800
 token_min_refresh_interval = 86400
 enable_api_token = true
@@ -787,7 +787,7 @@ test('sanitized production and test templates encode the complete runtime bounda
     assert.match(source, new RegExp(`domain\\s*=\\s*${domain.replaceAll('.', '\\.')}`));
     assert.ok(source.includes(`root_url = ${rootUrl}`));
     assert.match(source, /mcp_allowed_remote_ips\s*=\s*127\.0\.0\.1/u);
-    assert.match(source, /trusted_proxy_ips\s*=\s*127\.0\.0\.1/u);
+    assert.match(source, /^trusted_proxy_ips\s*=\s*127\.0\.0\.1\/32$/mu);
     assert.match(source, /enable_api_token\s*=\s*true/u);
     assert.match(source, /api_token_allowed_remote_ips\s*=\s*127\.0\.0\.1/u);
     assert.match(source, /token_expired_time\s*=\s*604800/u);
@@ -854,7 +854,7 @@ log_path = ${join(installDirectory, 'log', 'ezbookkeeping-test.log')}
 local_filesystem_path = ${join(installDirectory, 'storage')}
 [security]
 secret_key = generated-test-secret
-trusted_proxy_ips = 127.0.0.1
+trusted_proxy_ips = 127.0.0.1/32
 token_expired_time = 604800
 token_min_refresh_interval = 86400
 enable_api_token = true
@@ -891,6 +891,7 @@ data_source = euro_central_bank
 
     const valid = `${base}[uuid]\ngenerator_type = internal\nserver_id = 1\n`;
     for (const [setting, invalid] of [
+      ['trusted_proxy_ips = 127.0.0.1/32', 'trusted_proxy_ips = 127.0.0.1'],
       ['checker_type = in_memory', 'checker_type = unsupported'],
       ['cleanup_interval = 60', 'cleanup_interval = 61'],
       ['duplicate_submissions_interval = 300', 'duplicate_submissions_interval = 0'],
@@ -1223,7 +1224,7 @@ test('production migration makes a verified SQLite backup and installs the exact
       'domain = ledger.66ccff-labs.com',
       'root_url = https://ledger.66ccff-labs.com/',
       'mcp_allowed_remote_ips = 127.0.0.1',
-      'trusted_proxy_ips = 127.0.0.1',
+      'trusted_proxy_ips = 127.0.0.1/32',
       'token_expired_time = 604800',
       'api_token_allowed_remote_ips = 127.0.0.1',
       'enable_forget_password = false',

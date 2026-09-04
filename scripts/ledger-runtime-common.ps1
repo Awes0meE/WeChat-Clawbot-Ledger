@@ -382,7 +382,7 @@ function Assert-LedgerTestConfiguration {
         'mcp.enable_mcp' = 'false'
         'mcp.mcp_allowed_remote_ips' = '127.0.0.1'
         'database.type' = 'sqlite3'
-        'security.trusted_proxy_ips' = '127.0.0.1'
+        'security.trusted_proxy_ips' = '127.0.0.1/32'
         'security.token_expired_time' = '604800'
         'security.token_min_refresh_interval' = '86400'
         'security.enable_api_token' = 'true'

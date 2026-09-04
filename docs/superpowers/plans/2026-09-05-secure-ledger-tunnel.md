@@ -85,7 +85,7 @@
   mcp_allowed_remote_ips = 127.0.0.1
 
   [security]
-  trusted_proxy_ips = 127.0.0.1
+  trusted_proxy_ips = 127.0.0.1/32
   enable_api_token = true
   api_token_allowed_remote_ips = 127.0.0.1
   token_expired_time = 604800

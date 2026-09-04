@@ -141,7 +141,7 @@ enable_register = false
 
 ```ini
 [security]
-trusted_proxy_ips = 127.0.0.1
+trusted_proxy_ips = 127.0.0.1/32
 token_expired_time = 604800
 token_min_refresh_interval = 86400
 max_failures_per_ip_per_minute = 5
@@ -163,7 +163,7 @@ api_token_allowed_remote_ips = 127.0.0.1
 mcp_allowed_remote_ips = 127.0.0.1
 ```
 
-- `trusted_proxy_ips` 缩小为精确的 `127.0.0.1`，不再保留全部私有网段默认值。
+- `trusted_proxy_ips` 使用 ezBookkeeping 所需的 CIDR 语法缩小为精确的 `127.0.0.1/32`，不再保留全部私有网段默认值。
 - API token 和 MCP token 继续分离，并只从受限的本机秘密文件读取。
 - `enable_mcp` 的当前启用状态由既有 MCP 激活流程决定，本设计不擅自切换；无论是否启用，公网来源都不能使用 MCP。
 - 上线验收必须实际证明：本机 Clawbot 可继续访问 API，而通过 Ledger 公网域名使用 API token 或 MCP token 会被拒绝。

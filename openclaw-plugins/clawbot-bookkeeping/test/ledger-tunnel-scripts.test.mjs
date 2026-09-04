@@ -104,7 +104,7 @@ log_path = D:\\fixture\\production.log
 local_filesystem_path = D:\\fixture\\storage
 [security]
 secret_key = SENSITIVE-PRODUCTION-SECRET
-trusted_proxy_ips = 127.0.0.1
+trusted_proxy_ips = 127.0.0.1/32
 token_expired_time = 604800
 token_min_refresh_interval = 86400
 enable_api_token = true
@@ -155,7 +155,7 @@ log_path = ${join(root, 'log', 'test.log')}
 local_filesystem_path = ${join(root, 'storage')}
 [security]
 secret_key = SENSITIVE-TEST-SECRET
-trusted_proxy_ips = 127.0.0.1
+trusted_proxy_ips = 127.0.0.1/32
 token_expired_time = 604800
 token_min_refresh_interval = 86400
 enable_api_token = true
