@@ -381,14 +381,34 @@ openclaw models status --agent bookkeeper --json
 如 ezBookkeeping 不健康，先以只读方式核验任务动作和端口 owner。安装脚本不会替换漂移任务；不要由模型启动服务，也不要直接重启未经验证的同名任务：
 
 ```powershell
-.\scripts\install-ezbookkeeping-task.ps1 -WhatIf
-.\scripts\install-ezbookkeeping-task.ps1
-$tasks = @(Get-ScheduledTask -ErrorAction Stop | Where-Object {
-    $_.TaskName -eq 'Clawbot ezBookkeeping' -and $_.TaskPath -eq '\'
-})
-if ($tasks.Count -ne 1) { throw 'Expected exactly one root Clawbot ezBookkeeping task.' }
-Start-ScheduledTask -InputObject $tasks[0] -ErrorAction Stop
-Invoke-RestMethod http://127.0.0.1:8888/healthz.json
+$ErrorActionPreference = 'Stop'
+try {
+    .\scripts\install-ezbookkeeping-task.ps1 -WhatIf
+    $null = .\scripts\install-ezbookkeeping-task.ps1
+    . .\scripts\ledger-runtime-common.ps1
+
+    $installDirectory = 'D:\Clawbot\ezbookkeeping'
+    $configPath = 'D:\Clawbot\ezbookkeeping\conf\ezbookkeeping.ini'
+    $executable = 'D:\Clawbot\ezbookkeeping\ezbookkeeping.exe'
+    $task = Get-LedgerExpectedTask `
+        -TaskName 'Clawbot ezBookkeeping' `
+        -InstallDirectory $installDirectory `
+        -ExpectedExecutable $executable `
+        -ConfigPath $configPath `
+        -Mode Explicit
+    if ([string]$task.State -ne 'Running') {
+        if (@(Get-NetTCPConnection -State Listen -LocalPort 8888 -ErrorAction SilentlyContinue).Count -ne 0) {
+            throw 'Port 8888 is already occupied; the validated task was not started.'
+        }
+        Start-ScheduledTask -InputObject $task -ErrorAction Stop
+    }
+    Start-Sleep -Seconds 2
+    $null = Get-LedgerListenerOwner -Port 8888 -ExpectedExecutable $executable -ExpectedConfigPath $configPath
+    $health = Invoke-RestMethod http://127.0.0.1:8888/healthz.json -MaximumRedirection 0 -TimeoutSec 10
+    if ($health.success -ne $true) { throw 'ezBookkeeping health validation failed.' }
+} catch {
+    throw 'The exact production task could not be validated and started safely.'
+}
 ```
 
 重新运行安装脚本只会创建缺失任务或确认既有动作完全一致；任何漂移都失败关闭。不要删除或覆盖冲突任务来绕过检查。

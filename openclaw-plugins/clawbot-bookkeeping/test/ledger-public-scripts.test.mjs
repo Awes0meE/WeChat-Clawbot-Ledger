@@ -12,6 +12,7 @@ const publicHelperPath = join(projectDirectory, 'scripts', 'test-ledger-public.m
 const restartTestPath = join(projectDirectory, 'scripts', 'test-ledger-restart.ps1');
 const runbookPath = join(projectDirectory, 'docs', 'ledger-cloudflare-runbook.md');
 const readmePath = join(projectDirectory, 'README.md');
+const windowsHandoffPath = join(projectDirectory, 'WINDOWS-HANDOFF.md');
 const ledgerHost = 'ledger.66ccff-labs.com';
 
 function readRequired(path) {
@@ -326,6 +327,16 @@ test('runbook documents ordered host-scoped Cloudflare mutations and real reboot
   assert.match(source, /API readback[\s\S]*cfargotunnel\.com/iu);
   assert.doesNotMatch(source, /\$cloudflaredSha256\s*=\s*\(Get-FileHash/iu);
   assert.match(source, /approvedCloudflaredSha256[\s\S]*Get-FileHash[\s\S]*(?:-cne|-ne)/iu);
+});
+
+test('Windows handoff revalidates the complete production task before starting it', () => {
+  const source = readRequired(windowsHandoffPath);
+
+  assert.match(
+    source,
+    /try\s*\{[\s\S]*?install-ezbookkeeping-task\.ps1[\s\S]*?Get-LedgerExpectedTask[\s\S]*?-Mode\s+Explicit[\s\S]*?Start-ScheduledTask[\s\S]*?\}\s*catch/iu,
+  );
+  assert.doesNotMatch(source, /\$tasks\s*=\s*@\(Get-ScheduledTask[\s\S]*?Start-ScheduledTask\s+-InputObject\s+\$tasks\[0\]/iu);
 });
 
 test('README quick commands pass the required release, Tunnel, and local-acceptance identities', () => {
