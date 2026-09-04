@@ -220,8 +220,8 @@ if ($global:unexpectedTaskControl) { throw 'Task controls were reached for a mis
   }
 });
 
-test('configure rejects MCP token paths aliased to protected production files before task control', () => {
-  for (const targetName of ['config', 'database', 'openclaw', 'api-token', 'backup']) {
+test('configure rejects token paths inside the install tree or MCP aliases to protected production files before task control', () => {
+  for (const targetName of ['mcp-install-tree', 'api-install-tree', 'config', 'database', 'openclaw', 'api-token', 'backup']) {
     const temporaryDirectory = mkdtempSync(join(tmpdir(), 'clawbot-runtime-token-alias-'));
     try {
       const installDirectory = join(temporaryDirectory, 'ezbookkeeping');
@@ -232,16 +232,23 @@ test('configure rejects MCP token paths aliased to protected production files be
       const configPath = join(configDirectory, 'ezbookkeeping.ini');
       const databasePath = join(dataDirectory, 'ezbookkeeping.db');
       const openClawConfigPath = join(temporaryDirectory, 'openclaw.json');
-      const apiTokenPath = join(secretsDirectory, 'ezbookkeeping-token.txt');
+      const apiTokenPath = targetName === 'api-install-tree'
+        ? join(installDirectory, 'public', 'api-token.txt')
+        : join(secretsDirectory, 'ezbookkeeping-token.txt');
       const backupPath = join(backupRoot, 'snapshot', 'ezbookkeeping.ini');
-      const mcpTokenPath = targetName === 'config' ? configPath : join(secretsDirectory, `mcp-${targetName}.txt`);
+      const mcpTokenPath = targetName === 'mcp-install-tree'
+        ? join(installDirectory, 'public', 'mcp-token.txt')
+        : targetName === 'config'
+          ? configPath
+          : join(secretsDirectory, `mcp-${targetName}.txt`);
       const executablePath = join(installDirectory, 'ezbookkeeping.exe');
       const wrapperPath = join(temporaryDirectory, 'run-token-alias-shim.ps1');
       mkdirSync(configDirectory, { recursive: true });
       mkdirSync(dataDirectory, { recursive: true });
+      mkdirSync(join(installDirectory, 'public'), { recursive: true });
       mkdirSync(secretsDirectory, { recursive: true });
       mkdirSync(dirname(backupPath), { recursive: true });
-      const originalIni = '[mcp]\nenable_mcp = false\nmcp_allowed_remote_ips = 10.0.0.1\n[database]\ntype = sqlite3\ndb_path = data/ezbookkeeping.db\n';
+      const originalIni = '[server]\nstatic_root_path = public\n[mcp]\nenable_mcp = false\nmcp_allowed_remote_ips = 10.0.0.1\n[database]\ntype = sqlite3\ndb_path = data/ezbookkeeping.db\n';
       writeFileSync(configPath, originalIni, 'utf8');
       writeFileSync(databasePath, 'database-sentinel', 'utf8');
       writeFileSync(openClawConfigPath, '{"sentinel":true}\n', 'utf8');
@@ -254,7 +261,9 @@ test('configure rejects MCP token paths aliased to protected production files be
         'api-token': apiTokenPath,
         backup: backupPath,
       };
-      if (targetName !== 'config') linkSync(protectedTargets[targetName], mcpTokenPath);
+      if (!['config', 'mcp-install-tree', 'api-install-tree'].includes(targetName)) {
+        linkSync(protectedTargets[targetName], mcpTokenPath);
+      }
       writeFileSync(wrapperPath, `
 $global:taskControlReached = $false
 function Get-ScheduledTask { [CmdletBinding()] param() $global:taskControlReached = $true; throw 'Task lookup must not run for a protected token alias.' }
@@ -564,14 +573,16 @@ test('configure source uses atomic backups, strict task actions, and normalized 
 
 test('configure script accepts the nested conf layout and performs the secured happy path in order', () => {
   const temporaryDirectory = mkdtempSync(join(tmpdir(), 'clawbot-runtime-happy-shim-'));
+  const secretsDirectory = `${temporaryDirectory}-secrets`;
   try {
     const configDirectory = join(temporaryDirectory, 'conf');
     const configPath = join(configDirectory, 'ezbookkeeping.ini');
     const executablePath = join(temporaryDirectory, 'ezbookkeeping.exe');
-    const apiTokenPath = join(temporaryDirectory, 'api-token.txt');
-    const mcpTokenPath = join(temporaryDirectory, 'secrets', 'mcp-token.txt');
+    const apiTokenPath = join(secretsDirectory, 'api-token.txt');
+    const mcpTokenPath = join(secretsDirectory, 'mcp-token.txt');
     const wrapperPath = join(temporaryDirectory, 'run-happy-shim.ps1');
     mkdirSync(configDirectory);
+    mkdirSync(secretsDirectory);
     writeFileSync(configPath, '[mcp]\nenable_mcp = false\nmcp_allowed_remote_ips = 10.0.0.1\n', 'utf8');
     writeFileSync(executablePath, '', 'utf8');
     writeFileSync(apiTokenPath, 'temporary-api-token', 'utf8');
@@ -633,19 +644,23 @@ if (@($global:trace | Where-Object { $_ -eq 'acl' }).Count -lt 6) { throw ('Expe
     assert.deepEqual(readFileSync(mcpTokenPath), Buffer.from('normalized-test-token', 'utf8'));
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true });
+    rmSync(secretsDirectory, { recursive: true, force: true });
   }
 });
 
 test('configure script rolls back the INI and running task state when token generation fails', () => {
   const temporaryDirectory = mkdtempSync(join(tmpdir(), 'clawbot-runtime-rollback-shim-'));
+  const secretsDirectory = `${temporaryDirectory}-secrets`;
   try {
     const configDirectory = join(temporaryDirectory, 'conf');
     const configPath = join(configDirectory, 'ezbookkeeping.ini');
     const executablePath = join(temporaryDirectory, 'ezbookkeeping.exe');
-    const apiTokenPath = join(temporaryDirectory, 'api.txt');
+    const apiTokenPath = join(secretsDirectory, 'api.txt');
+    const mcpTokenPath = join(secretsDirectory, 'mcp.txt');
     const wrapperPath = join(temporaryDirectory, 'run-rollback-shim.ps1');
     const originalIni = '[mcp]\nenable_mcp = false\nmcp_allowed_remote_ips = 10.0.0.1\n';
     mkdirSync(configDirectory);
+    mkdirSync(secretsDirectory);
     writeFileSync(configPath, originalIni, 'utf8');
     writeFileSync(executablePath, '', 'utf8');
     writeFileSync(apiTokenPath, 'temporary-api-token', 'utf8');
@@ -680,22 +695,27 @@ $nonAclTrace = @($global:trace | Where-Object { $_ -ne 'acl' }) -join ','
 if ($nonAclTrace -ne 'health,stop,start,health,password,token,stop,start') { throw ('Unexpected rollback order: ' + ($global:trace -join ',')) }
 if (@($global:trace | Where-Object { $_ -eq 'acl' }).Count -lt 6) { throw ('Expected backup, live config, and rollback ACL hardening: ' + ($global:trace -join ',')) }
 `, 'utf8');
-    runPowerShell(['-File', wrapperPath, configureScript, configPath, temporaryDirectory, apiTokenPath, join(temporaryDirectory, 'mcp.txt'), executablePath]);
+    runPowerShell(['-File', wrapperPath, configureScript, configPath, temporaryDirectory, apiTokenPath, mcpTokenPath, executablePath]);
     assert.equal(readFileSync(configPath, 'utf8'), originalIni);
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true });
+    rmSync(secretsDirectory, { recursive: true, force: true });
   }
 });
 
 test('a locked replace leaves the original INI and atomic backup intact without temporary residue', () => {
   const temporaryDirectory = mkdtempSync(join(tmpdir(), 'clawbot-runtime-replace-fault-'));
+  const secretsDirectory = `${temporaryDirectory}-secrets`;
   try {
     const configDirectory = join(temporaryDirectory, 'conf');
     const configPath = join(configDirectory, 'ezbookkeeping.ini');
     const executablePath = join(temporaryDirectory, 'ezbookkeeping.exe');
+    const apiTokenPath = join(secretsDirectory, 'api.txt');
+    const mcpTokenPath = join(secretsDirectory, 'mcp.txt');
     const wrapperPath = join(temporaryDirectory, 'run-replace-fault-shim.ps1');
     const originalIni = '[mcp]\nenable_mcp = false\nmcp_allowed_remote_ips = 10.0.0.1\n';
     mkdirSync(configDirectory);
+    mkdirSync(secretsDirectory);
     writeFileSync(configPath, originalIni, 'utf8');
     writeFileSync(executablePath, '', 'utf8');
     writeFileSync(wrapperPath, `
@@ -718,9 +738,9 @@ function Get-Acl {
     Access = @([pscustomobject]@{ IdentityReference = [pscustomobject]@{ Value = $identity }; AccessControlType = 'Allow'; FileSystemRights = 'FullControl' })
   }
 }
-try { & $args[0] -ConfigPath $args[1] -InstallDirectory $args[2] -ApiTokenPath $args[3] -McpTokenPath (Join-Path $args[2] 'mcp.txt') -BackupRoot (Join-Path $args[2] 'backups') -TaskName 'Clawbot replace fault' -Confirm:$false; throw 'Expected locked replace failure.' } catch { if ($_.Exception.Message -notmatch 'Could not complete local ezBookkeeping MCP setup') { throw } } finally { if ($global:configLock) { $global:configLock.Dispose() } }
+try { & $args[0] -ConfigPath $args[1] -InstallDirectory $args[2] -ApiTokenPath $args[3] -McpTokenPath $args[5] -BackupRoot (Join-Path $args[2] 'backups') -TaskName 'Clawbot replace fault' -Confirm:$false; throw 'Expected locked replace failure.' } catch { if ($_.Exception.Message -notmatch 'Could not complete local ezBookkeeping MCP setup') { throw } } finally { if ($global:configLock) { $global:configLock.Dispose() } }
 `, 'utf8');
-    runPowerShell(['-File', wrapperPath, configureScript, configPath, temporaryDirectory, join(temporaryDirectory, 'api.txt'), executablePath]);
+    runPowerShell(['-File', wrapperPath, configureScript, configPath, temporaryDirectory, apiTokenPath, executablePath, mcpTokenPath]);
     assert.equal(readFileSync(configPath, 'utf8'), originalIni);
     const names = readdirSync(configDirectory);
     const backups = names.filter((name) => name.includes('.before-mcp-'));
@@ -729,5 +749,6 @@ try { & $args[0] -ConfigPath $args[1] -InstallDirectory $args[2] -ApiTokenPath $
     assert.equal(names.some((name) => name.endsWith('.tmp')), false);
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true });
+    rmSync(secretsDirectory, { recursive: true, force: true });
   }
 });

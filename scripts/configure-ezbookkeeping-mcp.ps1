@@ -135,6 +135,21 @@ function Assert-McpTokenDestination {
     )
 
     $document = Get-LedgerIniDocument -Path $ConfigurationPath
+    $tokenDestinations = @($TokenPath, $ProductionTokenPath)
+    foreach ($tokenDestination in $tokenDestinations) {
+        if (Test-LedgerPathInside -Candidate $tokenDestination -Root $InstallRoot) {
+            throw 'Bookkeeping token destinations must be outside the ezBookkeeping install tree.'
+        }
+    }
+    $staticRootEntry = $document.Values['server.static_root_path']
+    if ($null -ne $staticRootEntry -and -not [string]::IsNullOrWhiteSpace([string]$staticRootEntry)) {
+        $staticRoot = Resolve-LedgerDataPath -InstallDirectory $InstallRoot -ConfiguredPath ([string]$staticRootEntry)
+        foreach ($tokenDestination in $tokenDestinations) {
+            if (Test-LedgerPathInside -Candidate $tokenDestination -Root $staticRoot) {
+                throw 'Bookkeeping token destinations must be outside the configured static content root.'
+            }
+        }
+    }
     $protectedPaths = New-Object 'System.Collections.Generic.List[string]'
     foreach ($path in @($ConfigurationPath, $ProductionTokenPath, $OpenClawPath)) {
         $protectedPaths.Add((Get-LedgerNormalizedPath -Path $path))
