@@ -765,8 +765,11 @@ function Assert-OfficialCodexPin {
 
     try {
         $bookkeeper = $Config.agents.entries.bookkeeper
+        $fallbackProperties = @($bookkeeper.model.PSObject.Properties | Where-Object { $_.Name -ceq 'fallbacks' })
         if ($bookkeeper.model.primary -cne 'openai/gpt-5.6-sol' -or
-            $bookkeeper.models.'openai/gpt-5.6-sol'.agentRuntime.id -cne 'codex') {
+            $bookkeeper.models.'openai/gpt-5.6-sol'.agentRuntime.id -cne 'codex' -or
+            $fallbackProperties.Count -gt 1 -or
+            ($fallbackProperties.Count -eq 1 -and @($fallbackProperties[0].Value).Count -ne 0)) {
             throw 'invalid'
         }
     } catch {

@@ -697,6 +697,43 @@ test('live publication requires a clean source and a full hexadecimal commit', (
   }
 });
 
+test('rejects every bookkeeper model fallback before touching OpenClaw', () => {
+  const fixture = createFixture();
+  try {
+    const config = structuredClone(fixture.config);
+    config.agents.entries.bookkeeper.model.fallbacks = ['unauthorized/example-model'];
+    write(fixture.configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+    const result = runPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-SwitchOpenClaw']),
+      fixture.env,
+    );
+
+    assertFailed(result, /approved|codex|fallback|pinned/iu);
+    assert.deepEqual(normalizedOpenClawTrace(fixture), []);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('accepts an explicit empty bookkeeper fallback list', () => {
+  const fixture = createFixture();
+  try {
+    const config = structuredClone(fixture.config);
+    config.agents.entries.bookkeeper.model.fallbacks = [];
+    write(fixture.configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+    assertSucceeded(runPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-SwitchOpenClaw']),
+      fixture.env,
+    ));
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test('switches atomically from one verified release to a newer release in the same root', () => {
   const fixture = createFixture();
   try {
