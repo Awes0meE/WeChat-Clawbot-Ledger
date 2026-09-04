@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "hostname": "ledger.66ccff-labs.com",
+  "origin": "http://127.0.0.1:8888",
+  "access": {
+    "enabled": false,
+    "reason": "single ezBookkeeping login only"
+  },
+  "dns": {
+    "hostname": "ledger.66ccff-labs.com",
+    "recordType": "CNAME",
+    "targetTemplate": "<TUNNEL_UUID>.cfargotunnel.com",
+    "proxied": true,
+    "createLast": true
+  },
+  "rules": {
+    "singleRedirect": {
+      "expression": "http.host eq \"ledger.66ccff-labs.com\" and http.request.full_uri wildcard r\"http://*\"",
+      "statusCode": 301,
+      "targetExpression": "concat(\"https://ledger.66ccff-labs.com\", http.request.uri.path)",
+      "preserveQueryString": true,
+      "preservePath": true,
+      "preserveQuery": true
+    },
+    "cacheBypass": {
+      "expression": "http.host eq \"ledger.66ccff-labs.com\"",
+      "cache": false
+    },
+    "responseHeaders": {
+      "expression": "http.host eq \"ledger.66ccff-labs.com\"",
+      "set": {
+        "Strict-Transport-Security": "max-age=86400",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "no-referrer",
+        "X-Robots-Tag": "noindex, nofollow, noarchive"
+      },
+      "hstsActivationGate": "activate only after public HTTPS validation",
+      "hstsIncludeSubDomains": false,
+      "hstsPreload": false
+    },
+    "wafBlock": {
+      "expression": "http.host eq \"ledger.66ccff-labs.com\" and (http.request.method eq \"TRACE\" or (http.request.method eq \"POST\" and http.request.uri.path eq \"/api/register.json\"))",
+      "action": "block"
+    },
+    "loginRateLimit": {
+      "paidPlan": {
+        "expression": "http.host eq \"ledger.66ccff-labs.com\" and http.request.uri.path eq \"/api/authorize.json\" and http.request.method eq \"POST\"",
+        "action": "block",
+        "ratelimit": {
+          "characteristics": [
+            "cf.colo.id",
+            "ip.src"
+          ],
+          "period": 10,
+          "requests_per_period": 5,
+          "mitigation_timeout": 10
+        }
+      },
+      "freePlanFallback": {
+        "expression": "http.request.uri.path eq \"/api/authorize.json\"",
+        "action": "block",
+        "ratelimit": {
+          "characteristics": [
+            "cf.colo.id",
+            "ip.src"
+          ],
+          "period": 10,
+          "requests_per_period": 5,
+          "mitigation_timeout": 10
+        },
+        "activationGates": {
+          "apexCollisionProbeRequired": true,
+          "wwwCollisionProbeRequired": true,
+          "sanitizedApiReadbackRequired": true,
+          "refuseWhenAnyGateIsUnknownOrFalse": true
+        }
+      }
+    }
+  }
+}

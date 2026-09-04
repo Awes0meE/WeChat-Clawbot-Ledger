@@ -1,21 +1,24 @@
 # 微信账本助理部署方案
 
-更新时间：2026-09-04。当前发布由 Windows 托管；Mac 接收端已停止，Vercel 和家庭网页登录尚未进入本轮范围。
+更新时间：2026-09-05。当前发布由 Windows 托管；Mac 接收端已停止。家庭网页复用现有 ezBookkeeping UI，通过专用 Cloudflare Tunnel 发布，不迁移 SQLite，不部署账本 Vercel。
 
 ## 已定方案
 
 ```text
-WeChat -> OpenClaw owner-bound OpenAI GPT-5.6 Sol (official Codex harness)
+WeChat -> OpenClaw immutable release -> owner-bound OpenAI GPT-5.6 Sol (official Codex harness)
   -> record_expense | prepare_expense | resolve_expense_confirmation
-     -> trusted write/confirmation adapter -> ezBookkeeping HTTP API
+     -> trusted write/confirmation adapter -> 127.0.0.1:8888 ezBookkeeping HTTP API
   -> summarize_expenses -> deterministic read adapter -> ezBookkeeping HTTP API
   -> ezbookkeeping__query_transactions -> requester-scoped read-only MCP
      (code-ready; local MCP activation still pending)
+
+Browser -> https://ledger.66ccff-labs.com -> Cloudflare Tunnel
+  -> health-gated 127.0.0.1:8888 -> the same ezBookkeeping and SQLite
 ```
 
-手机微信是输入与回复入口，腾讯 iLink 将消息交给 Windows OpenClaw。专用 `bookkeeper` 使用 OpenAI `gpt-5.6-sol`，并通过官方 `@openclaw/codex` harness 和 ChatGPT OAuth 理解账本意图；ezBookkeeping 1.6.1 在 `127.0.0.1:8180` 保存和查询本地 SQLite 数据。Gateway 也只绑定 loopback。该云端模型处理已获用户明确授权；账本请求与必要的查询结果只可进入当前已授权的 Codex 会话，本机 token、微信身份、消息 ID、SQLite 和 OpenClaw 状态不得上传。
+手机微信是输入与回复入口，腾讯 iLink 将消息交给 Windows OpenClaw。专用 `bookkeeper` 使用 OpenAI `gpt-5.6-sol`，并通过官方 `@openclaw/codex` harness 和 ChatGPT OAuth 理解账本意图；ezBookkeeping 1.6.1 在 `127.0.0.1:8888` 保存和查询本地 SQLite 数据，测试实例单独使用 `127.0.0.1:18888` 和独立 SQLite。Gateway 也只绑定 loopback。该云端模型处理已获用户明确授权；本机 token、Cloudflare 身份、微信身份、消息 ID、SQLite、交易内容、日志和 OpenClaw 状态不得上传。
 
-当前实时状态（2026-09-04）：HTTP 写入、对话确认和确定性汇总已上线；ezBookkeeping 原生 MCP 仍为 `enable_mcp=false`，独立 MCP token 尚未生成。因此 `query_transactions` 是代码就绪、待交互式安全激活的能力，不得当作已通过端到端验收的功能。
+HTTP 写入、对话确认和确定性汇总已经建立。ezBookkeeping 原生 MCP 是否启用、独立 MCP token 是否存在以及 Ledger 公网入口是否完成，必须以本机/公网实时验收为准；代码或文档存在不能替代端到端证据。
 
 配置中的正式账户为唯一可见 SGD 账户 `日常支出`，微信回执显示账本名 `日常账本`。运行时以 `openclaw-plugins/clawbot-bookkeeping/categories.mjs` 中不可变的 `CATEGORY_DEFINITIONS` 为权威分类契约，固定为 11 个一级分类、45 个二级分类；`config/expense-categories.json` 只是脱敏的导入与部署目录快照。
 
@@ -106,12 +109,19 @@ API token 与 MCP token 必须分开：
 
 ## Windows 服务与配置
 
-ezBookkeeping 默认目录为 `D:\Clawbot\ezbookkeeping`，配置文件使用真实嵌套路径 `D:\Clawbot\ezbookkeeping\conf\ezbookkeeping.ini`。后台任务必须登录后自动启动、隐藏运行、异常重启、没有默认执行时限，并允许在电池状态下继续。隐藏运行由精确的 Windows PowerShell 5.1 启动器实现：系统 `powershell.exe` 使用 `-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden` 包装规范化后的 `ezbookkeeping.exe server run`。
+ezBookkeeping 正式目录为 `D:\Clawbot\ezbookkeeping`，配置文件为 `D:\Clawbot\ezbookkeeping\conf\ezbookkeeping.ini`。正式任务只接受精确动作 `ezbookkeeping.exe --conf-path "...\ezbookkeeping.ini" server run`；未知同名任务不能被 `-Force` 覆盖。迁移前必须重新验证旧任务、PID、创建时间、程序路径、完整命令行、`8180` owner 与 health，然后在仓库外备份并验证任务定义、INI 和 WAL-safe SQLite 快照。
+
+正式配置固定 loopback `8888`，服务端关闭注册和无效密码找回，失败登录限制保留为每 IP/用户每分钟 5 次，API token、MCP 与 trusted proxy allowlist 只接受 `127.0.0.1`。`enable_mcp` 保留部署前实际选择。Process/User/Machine 范围任何能覆盖这些 INI 键的 `EBK_CONF_PATH`、`EBK_*` 或 `EBKCFP_*` 都使迁移失败关闭。
+
+测试目录 `D:\Clawbot\ezbookkeeping-test` 只白名单复制程序资产，使用 `18888`、独立 config/storage/log/secret/token/SQLite 和受控 marker；不得复制正式数据。初始化密码只在 visible terminal 以 `Read-Host -AsSecureString` 输入。
 
 先用 `-WhatIf` 预演；预演不得修改配置、计划任务、服务或 token，也不会询问密码：
 
 ```powershell
 .\scripts\install-ezbookkeeping-task.ps1 -WhatIf
+.\scripts\install-ledger-test-instance.ps1 -WhatIf
+.\scripts\migrate-ledger-production.ps1 -WhatIf
+.\scripts\publish-openclaw-release.ps1 -ReleaseOnly -WhatIf
 .\scripts\configure-ezbookkeeping-mcp.ps1 -WhatIf
 ```
 
@@ -119,18 +129,33 @@ ezBookkeeping 默认目录为 `D:\Clawbot\ezbookkeeping`，配置文件使用真
 
 ```powershell
 .\scripts\install-ezbookkeeping-task.ps1
+.\scripts\install-ledger-test-instance.ps1
+.\scripts\migrate-ledger-production.ps1
+.\scripts\publish-openclaw-release.ps1 -SwitchOpenClaw
 .\scripts\configure-ezbookkeeping-mcp.ps1
 ```
 
-安装脚本创建 `Clawbot ezBookkeeping` 登录任务及上述精确隐藏动作；配置脚本在任何任务控制前验证同一启动器、参数和工作目录。MCP 配置脚本会：
+生产 OpenClaw 不再加载 Git checkout。发布器从干净且 HEAD 不变的提交创建 immutable release，使用 lockfile 安装运行依赖，对全部 payload 记录长度和 SHA-256，并拒绝 missing/extra/changed/reparse/out-of-root。切换前只生成不含 token/owner/channel 的最小 patch，先 dry-run；任何 post-patch 失败恢复 owner-only 配置备份并重启 Gateway。
+
+MCP 配置脚本会：
 
 1. 解析 `[mcp]` 并只把 `enable_mcp` 与 `mcp_allowed_remote_ips` 改为 `true` 和 `127.0.0.1`；
 2. 原子创建不覆盖的时间戳备份，并原子替换配置；
-3. 校验根目录中恰好一个同名任务，且 Windows PowerShell 5.1 启动器、完整隐藏参数、其中包装的账本可执行文件和工作目录完全匹配；
-4. 只停止预期安装路径的 ezBookkeeping 进程，重启任务并等待 `/healthz.json` 返回 `success=true`；
+3. 校验根目录中恰好一个同名任务，且可执行文件、显式配置参数和工作目录完全匹配；
+4. 停止前复核 PID/创建时间/路径/命令行/端口 owner，只控制已识别进程，重启任务并等待 `8888` `/healthz.json` 返回 `success=true`；
 5. 在控制台安全读取密码，通过现有 API token 生成独立 MCP token，并写入仅当前用户可读的文件。
 
 中途失败会尝试恢复原配置和先前服务状态。若自动回滚也失败，脚本错误会给出应手工恢复的备份路径；恢复后再重新运行。脚本不会打印密码、请求体、Authorization header 或 token。
+
+## Ledger Cloudflare Tunnel
+
+`ledger.66ccff-labs.com` 是唯一公网 hostname；origin 固定 `http://127.0.0.1:8888`，最后一条 ingress 必须是 `http_status:404`。只保留 ezBookkeeping 登录，不启用 Cloudflare Access。`66ccff-labs.com` 与 `www.66ccff-labs.com` 的作品集 DNS、Vercel 路由和页面均不修改。
+
+本机 supervisor 在启动 cloudflared 前连续验证唯一 loopback listener、PID/创建时间、预期 ezBookkeeping 可执行路径、显式 production config、health JSON 和登录页指纹。运行中任何条件退化都只停止自己创建且身份仍匹配的 cloudflared child，公网 fail closed；未知端口 owner 或未知 cloudflared 不会被终止、采用或替换。
+
+Cloudflare 使用 Ledger-only Single Redirect、Cache Bypass、Response Header Transform、registration/TRACE WAF 和套餐支持的登录限速。不设置 zone-wide Always Use HTTPS/HSTS，不启用 Access。Free plan path-only 限速只有在实时证明 apex/`www` 均不使用 `/api/authorize.json` 且唯一规则槽空闲时才可启用；否则跳过并记录。Universal SSL、规则和 Tunnel 都通过后 DNS cutover last。
+
+需要 Cloudflare 登录时只打开 visible terminal/browser 让用户本机授权，不索取或回显凭据。真实 Tunnel config/JSON、备份、SQLite 和脱敏 evidence 均位于 Git/仓库/OneDrive 之外。完整步骤、表达式、验收和 rollback 见 `docs/ledger-cloudflare-runbook.md`。
 
 ## 验证
 
@@ -145,12 +170,18 @@ node --test test\inbound-message-id.test.mjs
 openclaw gateway status
 openclaw channels status --probe
 openclaw plugins info clawbot-bookkeeping
+
+.\scripts\test-ledger-local.ps1 -ReleasePath '<VERIFIED_LOCAL_RELEASE>'
+.\scripts\test-ledger-public.ps1 -ComparePortfolioBaseline -PortfolioBaselinePath '<OUTSIDE_GIT_BASELINE>'
+.\scripts\test-ledger-restart.ps1 -ReleasePath '<VERIFIED_LOCAL_RELEASE>' -PortfolioBaselinePath '<OUTSIDE_GIT_BASELINE>' -WhatIf
 ```
 
 动态 MCP 只由插件 manifest 和 requester-scoped resolver 声明，不得为诊断方便新增顶层 `mcp.servers` 静态连接。任何运行时配置或部署变更前，必须先执行 `WINDOWS-HANDOFF.md` 的只读属性名断言；若顶层 `mcp.servers` 下存在 `ezbookkeeping`，停止部署并另行审核移除，不能自动删除或显示其内容。该断言与账本插件自动化测试共同证明没有静态后备项，且 manifest、resolver 和代理 allowlist 只允许 `query_transactions`、源码和测试明确排除 `add_transaction`；stable-ID 插件另有独立测试。最后由所有者在微信发起真实历史查询，闭合可信上下文中的端到端证据链，并核对写入、确认、汇总和查询不会越权。
 
 仓库秘密扫描不得跳过测试或示例目录。若从包含多个 worktree 的上级仓库运行，应只排除嵌套 `.worktrees` 副本以避免重复结果；每一条匹配仍须人工核验，不能因它位于 fixture/example 中就自动视为安全。具体命令和处置标准见 `WINDOWS-HANDOFF.md`。
 
-## 延后事项
+## 明确排除与后续事项
 
-本轮不部署 Vercel、不开放公网端口、不实现家庭网页登录。经用户明确授权，账本请求与必要查询结果可进入当前 ChatGPT OAuth 下的 Codex 会话；不得发送到其他云端模型或服务。家庭查看功能必须另行设计安全同步、认证、授权、备份和审计，不能直接把本地 ezBookkeeping 或 MCP 暴露到公网。
+本轮不把账本部署到 Vercel/云数据库，不开放 origin 端口，不同步 SQLite/交易到 Git，不建立 Cloudflare Access 双重登录，也不实现家庭多用户或共享权限。经用户明确授权，账本请求与必要查询结果可进入当前 ChatGPT OAuth 下的 Codex 会话；不得发送到其他云端模型或服务。
+
+上线后仍需定期更新 ezBookkeeping 和 cloudflared；每次更新先备份并在 `18888` 验证。建议用户在稳定后启用 ezBookkeeping 原生 2FA/WebAuthn，它仍属于同一次应用登录。正式 SQLite 另保留不经过 Git 的加密离机备份；数据库恢复永不自动执行。
