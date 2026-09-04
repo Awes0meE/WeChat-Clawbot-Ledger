@@ -232,7 +232,7 @@ function Restore-ConfigurationAndService {
             throw 'The restarted ezBookkeeping task is not running during rollback.'
         }
         $rollbackIdentity = $null
-        if (@(Get-NetTCPConnection -State Listen -LocalPort 8888 -ErrorAction Stop).Count -gt 0) {
+        if (@(Get-LedgerListeningTcpConnections -Port 8888).Count -gt 0) {
             $rollbackIdentity = Get-LedgerListenerOwner -Port 8888 -ExpectedExecutable $ExpectedExecutable -ExpectedConfigPath $ExpectedConfigPath
         }
         Stop-ScheduledTask -InputObject $verifiedTask -ErrorAction Stop

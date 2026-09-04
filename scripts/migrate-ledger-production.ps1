@@ -102,7 +102,7 @@ if (-not (Test-LedgerSamePath -Left $databasePath -Right $expectedDatabasePath))
 if (-not (Test-Path -LiteralPath $databasePath -PathType Leaf)) {
     throw 'The production SQLite database was not found.'
 }
-if (@(Get-NetTCPConnection -State Listen -LocalPort 8888 -ErrorAction Stop).Count -ne 0) {
+if (@(Get-LedgerListeningTcpConnections -Port 8888).Count -ne 0) {
     throw 'Production port 8888 is already occupied.'
 }
 $task = Get-LedgerExpectedTask -TaskName $TaskName -InstallDirectory $install -ExpectedExecutable $executablePath -ConfigPath $configPath -Mode Legacy
@@ -137,7 +137,7 @@ $taskStarted = $false
 
 try {
     Assert-LedgerNoConfigurationOverrides -SettingNames $migratedSettingNames
-    if (@(Get-NetTCPConnection -State Listen -LocalPort 8888 -ErrorAction Stop).Count -ne 0) {
+    if (@(Get-LedgerListeningTcpConnections -Port 8888).Count -ne 0) {
         throw 'Production port 8888 became occupied after migration preflight.'
     }
     $task = Get-LedgerExpectedTask -TaskName $TaskName -InstallDirectory $install -ExpectedExecutable $executablePath -ConfigPath $configPath -Mode Legacy
@@ -161,7 +161,7 @@ try {
     Stop-ScheduledTask -InputObject $task -ErrorAction Stop
     $taskStopped = $true
     Wait-LedgerListenerExit -Identity $legacyOwner -Port 8180 -ExpectedExecutable $executablePath -ExpectedConfigPath $configPath -Legacy
-    if (@(Get-NetTCPConnection -State Listen -LocalPort 8888 -ErrorAction Stop).Count -ne 0) {
+    if (@(Get-LedgerListeningTcpConnections -Port 8888).Count -ne 0) {
         throw 'Production port 8888 became occupied before migration files were changed.'
     }
     if ((Get-LedgerFileSha256 -Path $configPath) -cne $preflightConfigHash) {
@@ -311,7 +311,7 @@ try {
     if (-not $ready) {
         throw 'The migrated production origin did not become healthy.'
     }
-    if (@(Get-NetTCPConnection -State Listen -LocalPort 8180 -ErrorAction Stop).Count -ne 0) {
+    if (@(Get-LedgerListeningTcpConnections -Port 8180).Count -ne 0) {
         throw 'The legacy production port is still listening.'
     }
 
@@ -367,7 +367,7 @@ try {
             }
         }
         if ($taskWasRunning -and $taskStopped) {
-            if (@(Get-NetTCPConnection -State Listen -LocalPort 8180 -ErrorAction Stop).Count -ne 0) {
+            if (@(Get-LedgerListeningTcpConnections -Port 8180).Count -ne 0) {
                 throw 'The legacy port is not clear for rollback.'
             }
             Start-ScheduledTask -InputObject $task -ErrorAction Stop

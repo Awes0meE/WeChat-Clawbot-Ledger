@@ -283,6 +283,19 @@ function Get-LedgerExplicitServiceArguments {
     return '--conf-path "' + $normalizedConfig + '" server run'
 }
 
+function Get-LedgerListeningTcpConnections {
+    param([Parameter(Mandatory = $true)][int]$Port)
+
+    try {
+        return @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop)
+    } catch {
+        if ([string]$_.FullyQualifiedErrorId -like 'CmdletizationQuery_NotFound*') {
+            return @()
+        }
+        throw
+    }
+}
+
 function Get-LedgerListenerOwner {
     param(
         [Parameter(Mandatory = $true)][int]$Port,
@@ -290,7 +303,7 @@ function Get-LedgerListenerOwner {
         [Parameter(Mandatory = $true)][string]$ExpectedConfigPath
     )
 
-    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop)
+    $listeners = @(Get-LedgerListeningTcpConnections -Port $Port)
     if ($listeners.Count -ne 1 -or [string]$listeners[0].LocalAddress -cne '127.0.0.1') {
         throw 'The expected loopback listener was not found exactly once.'
     }
@@ -446,7 +459,7 @@ function Get-LedgerLegacyListenerOwner {
         [Parameter(Mandatory = $true)][string]$ExpectedExecutable
     )
 
-    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop)
+    $listeners = @(Get-LedgerListeningTcpConnections -Port $Port)
     $localAddress = if ($listeners.Count -eq 1) { [string]$listeners[0].LocalAddress } else { '' }
     if ($listeners.Count -ne 1 -or $localAddress -cne '127.0.0.1') {
         throw 'The expected legacy loopback listener was not found exactly once.'
@@ -490,7 +503,7 @@ function Wait-LedgerListenerExit {
     )
 
     for ($attempt = 0; $attempt -lt $Attempts; $attempt++) {
-        $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop)
+        $listeners = @(Get-LedgerListeningTcpConnections -Port $Port)
         if ($listeners.Count -eq 0) { return }
         if ($null -eq $Identity) {
             throw 'A listener appeared after the exact scheduled task was stopped.'

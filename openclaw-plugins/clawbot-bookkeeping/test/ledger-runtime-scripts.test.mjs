@@ -99,6 +99,23 @@ function runPowerShell(arguments_) {
   return run('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...arguments_]);
 }
 
+test('listener queries treat the Windows no-match CIM error as an empty result only', () => {
+  const commonPath = join(scriptsDirectory, 'ledger-runtime-common.ps1').replaceAll("'", "''");
+  const noMatch = runPowerShell([
+    '-Command',
+    `function Get-NetTCPConnection { [CmdletBinding()] param([string]$State, [int]$LocalPort) $record = New-Object System.Management.Automation.ErrorRecord((New-Object InvalidOperationException('no rows')), 'CmdletizationQuery_NotFound', ([Management.Automation.ErrorCategory]::ObjectNotFound), $null); $PSCmdlet.ThrowTerminatingError($record) }; . '${commonPath}'; $ErrorActionPreference = 'Stop'; if (-not (Get-Command Get-LedgerListeningTcpConnections -ErrorAction SilentlyContinue)) { exit 4 }; $listeners = @(Get-LedgerListeningTcpConnections -Port 18888); if ($listeners.Count -ne 0) { exit 2 }; 'NO_LISTENER_OK'`,
+  ]);
+  assert.equal(noMatch.status, 0, noMatch.stderr || noMatch.stdout);
+  assert.match(noMatch.stdout, /NO_LISTENER_OK/u);
+
+  const transportFailure = runPowerShell([
+    '-Command',
+    `function Get-NetTCPConnection { [CmdletBinding()] param([string]$State, [int]$LocalPort) throw 'transport failure' }; . '${commonPath}'; $ErrorActionPreference = 'Stop'; if (-not (Get-Command Get-LedgerListeningTcpConnections -ErrorAction SilentlyContinue)) { exit 4 }; try { $null = @(Get-LedgerListeningTcpConnections -Port 18888); exit 3 } catch { 'OTHER_ERROR_PROPAGATED' }`,
+  ]);
+  assert.equal(transportFailure.status, 0, transportFailure.stderr || transportFailure.stdout);
+  assert.match(transportFailure.stdout, /OTHER_ERROR_PROPAGATED/u);
+});
+
 function sha256(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }

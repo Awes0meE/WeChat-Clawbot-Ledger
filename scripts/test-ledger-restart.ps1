@@ -184,7 +184,7 @@ function Get-ExactProductionTask {
 }
 
 function Assert-ProductionPortClearBeforeStart {
-    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort 8888 -ErrorAction SilentlyContinue)
+    $listeners = @(Get-LedgerListeningTcpConnections -Port 8888)
     if ($listeners.Count -ne 0) {
         throw 'RECOVERY_INCOMPLETE: port 8888 is still occupied; the production task was not started.'
     }
@@ -512,7 +512,7 @@ try {
     $productionStopped = $true
     $stateMutated = $true
     Wait-Until -FailureMessage 'The exact production task stopped but its listener remained.' -Condition {
-        return @(Get-NetTCPConnection -State Listen -LocalPort 8888 -ErrorAction SilentlyContinue).Count -eq 0
+        return @(Get-LedgerListeningTcpConnections -Port 8888).Count -eq 0
     }
     Wait-Until -FailureMessage 'The Ledger Tunnel did not fail closed after origin loss.' -Condition {
         $child = Get-ExpectedCloudflaredChild -Cloudflared $cloudflared -TunnelConfig $tunnelConfig -AllowAbsent

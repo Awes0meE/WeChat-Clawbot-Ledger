@@ -193,7 +193,7 @@ function Stop-LedgerTestService {
     )
 
     $identity = $null
-    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort 18888 -ErrorAction Stop)
+    $listeners = @(Get-LedgerListeningTcpConnections -Port 18888)
     if ($listeners.Count -gt 0) {
         $identity = Get-LedgerListenerOwner -Port 18888 -ExpectedExecutable $ExecutablePath -ExpectedConfigPath $ConfigPath
     }
@@ -390,7 +390,7 @@ if ($installEntries.Count -gt 0) {
     if (Test-Path -LiteralPath $tokenPath) {
         throw 'The isolated test token path is already occupied during bootstrap.'
     }
-    $retryListeners = @(Get-NetTCPConnection -State Listen -LocalPort 18888 -ErrorAction Stop)
+    $retryListeners = @(Get-LedgerListeningTcpConnections -Port 18888)
     if ($retryListeners.Count -gt 0) {
         $retryListenerIdentity = Get-LedgerListenerOwner -Port 18888 -ExpectedExecutable $testExecutable -ExpectedConfigPath $testConfig
     }
@@ -402,7 +402,7 @@ if ($installEntries.Count -gt 0) {
     if (Test-Path -LiteralPath $tokenPath) {
         throw 'The isolated test token path already exists.'
     }
-    if (@(Get-NetTCPConnection -State Listen -LocalPort 18888 -ErrorAction Stop).Count -ne 0) {
+    if (@(Get-LedgerListeningTcpConnections -Port 18888).Count -ne 0) {
         throw 'The isolated test port is already occupied.'
     }
 }
@@ -426,7 +426,7 @@ $requestHeaders = $null
 $taskRegistrationAttempted = $false
 
 try {
-    if (-not $isRetry -and @(Get-NetTCPConnection -State Listen -LocalPort 18888 -ErrorAction Stop).Count -ne 0) {
+    if (-not $isRetry -and @(Get-LedgerListeningTcpConnections -Port 18888).Count -ne 0) {
         throw 'The isolated test port became occupied before installation.'
     }
     $mutationStarted = $true
@@ -477,7 +477,7 @@ try {
         Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'Isolated loopback-only ezBookkeeping test instance' -ErrorAction Stop | Out-Null
     } else {
         $task = Get-LedgerExpectedTask -TaskName $TaskName -InstallDirectory $installRoot -ExpectedExecutable $testExecutable -ConfigPath $testConfig -Mode Explicit
-        $currentRetryListeners = @(Get-NetTCPConnection -State Listen -LocalPort 18888 -ErrorAction Stop)
+        $currentRetryListeners = @(Get-LedgerListeningTcpConnections -Port 18888)
         if ($currentRetryListeners.Count -gt 0) {
             $currentRetryIdentity = Get-LedgerListenerOwner -Port 18888 -ExpectedExecutable $testExecutable -ExpectedConfigPath $testConfig
             if ($null -ne $retryListenerIdentity -and
