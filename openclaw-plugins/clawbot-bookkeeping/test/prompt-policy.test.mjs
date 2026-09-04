@@ -13,6 +13,27 @@ test('makes the model responsible for conversational intent and grounded notes',
   assert.equal(prompt.includes('不得补充原消息没有的信息'), true);
 });
 
+test('requires a hidden semantic pass over time, currency, category, and notes', () => {
+  for (const phrase of [
+    '时间、金额、币种、分类和备注',
+    'timeMode',
+    'received',
+    'explicit',
+    'timeEvidence',
+    'localDate',
+    'localTime',
+    'Asia/Singapore',
+    '非 SGD',
+    '不要展示这套检查过程',
+  ]) {
+    assert.equal(prompt.includes(phrase), true, `missing prompt rule: ${phrase}`);
+  }
+  assert.equal(prompt.includes('可信发送时间 `2026-09-04 17:09`'), true);
+  assert.equal(prompt.includes('消息 `记账昨天晚上6点钟，晚餐10.5`'), true);
+  assert.equal(prompt.includes('`localDate: 2026-09-03`'), true);
+  assert.equal(prompt.includes('`localTime: 18:00`'), true);
+});
+
 test('routes clear, ambiguous, confirmation, cancellation, and replacement messages', () => {
   assert.equal(prompt.includes('`record_expense`'), true);
   assert.equal(prompt.includes('`prepare_expense`'), true);
