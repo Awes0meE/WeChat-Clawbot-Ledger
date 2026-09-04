@@ -180,10 +180,29 @@ async function dnsSnapshot(hostname) {
     const answers = await dns.resolveCname(hostname);
     const cnameTargets = [...new Set(answers.map((answer) => answer.toLowerCase().replace(/\.$/u, '')))].sort();
     if (cnameTargets.length === 0) fail('LEDGER_PUBLIC_DNS_EMPTY');
-    return { cnameTargets };
+    return { mode: 'cname', cnameTargets };
   } catch (error) {
     if (error?.safeCode) throw error;
-    fail('LEDGER_PUBLIC_DNS_FAILED');
+    const isFlattenedApex = error?.code === 'ENODATA' && hostname === PORTFOLIO_HOSTS[0];
+    if (!isFlattenedApex) {
+      fail('LEDGER_PUBLIC_DNS_FAILED');
+    }
+
+    const addressResults = await Promise.allSettled([
+      dns.resolve4(hostname),
+      dns.resolve6(hostname),
+    ]);
+    const unsupportedFailure = addressResults.some((result) => (
+      result.status === 'rejected' && result.reason?.code !== 'ENODATA'
+    ));
+    const hasRoutableAnswer = addressResults.some((result) => (
+      result.status === 'fulfilled' && Array.isArray(result.value) && result.value.length > 0
+    ));
+    if (unsupportedFailure || !hasRoutableAnswer) fail('LEDGER_PUBLIC_DNS_FAILED');
+
+    // Cloudflare flattens apex CNAMEs. Record only that stable public shape;
+    // rotating CDN addresses are deliberately verified for presence but not persisted.
+    return { mode: 'flattened-apex', cnameTargets: [] };
   }
 }
 
@@ -233,9 +252,15 @@ function readBaseline(path) {
       fail('LEDGER_PUBLIC_BASELINE_INVALID');
     }
     for (const entry of document.entries) {
-      if (!PORTFOLIO_HOSTS.includes(entry?.host)
-          || !Array.isArray(entry?.dns?.cnameTargets)
-          || entry.dns.cnameTargets.length === 0) {
+      const cnameTargets = entry?.dns?.cnameTargets;
+      const cnameShape = entry?.dns?.mode === 'cname'
+        && Array.isArray(cnameTargets)
+        && cnameTargets.length > 0;
+      const flattenedApexShape = entry?.host === PORTFOLIO_HOSTS[0]
+        && entry?.dns?.mode === 'flattened-apex'
+        && Array.isArray(cnameTargets)
+        && cnameTargets.length === 0;
+      if (!PORTFOLIO_HOSTS.includes(entry?.host) || (!cnameShape && !flattenedApexShape)) {
         fail('LEDGER_PUBLIC_BASELINE_INVALID');
       }
     }

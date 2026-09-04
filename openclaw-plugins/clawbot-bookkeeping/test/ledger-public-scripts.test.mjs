@@ -206,13 +206,19 @@ test('public acceptance is bounded, bodyless, credential-redacting, and portfoli
   assert.doesNotMatch(helper, /console\.(?:log|error)|process\.(?:stdout|stderr)\.write\([^\r\n]*(?:body|content|token|credential)/iu);
 });
 
-test('portfolio baseline capture is schema-v2, CNAME-based, and does not require Ledger to exist yet', () => {
+test('portfolio baseline capture handles a Cloudflare-flattened apex without comparing rotating addresses', () => {
   const helper = readRequired(publicHelperPath);
 
   assert.match(helper, /if\s*\(options\.capture\)\s*\{[\s\S]*?saveBaseline\([\s\S]*?return;/u);
   assert.match(helper, /document\?\.schemaVersion\s*!==\s*2/u);
   assert.match(helper, /schemaVersion:\s*2/u);
   assert.match(helper, /dns\.resolveCname\(hostname\)/u);
+  assert.match(helper, /error\?\.code\s*===\s*'ENODATA'[\s\S]*hostname\s*===\s*PORTFOLIO_HOSTS\[0\]/u);
+  assert.match(helper, /dns\.resolve4\(hostname\)/u);
+  assert.match(helper, /dns\.resolve6\(hostname\)/u);
+  assert.match(helper, /mode:\s*'flattened-apex'/u);
+  assert.match(helper, /mode:\s*'cname'/u);
+  assert.doesNotMatch(helper, /addresses\s*:/u);
   assert.doesNotMatch(helper, /JSON\.stringify\(matches\[0\]\)\s*!==\s*JSON\.stringify\(actualEntry\)/u);
 });
 

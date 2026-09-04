@@ -78,7 +78,7 @@ git diff --check
   -PortfolioBaselinePath 'D:\Clawbot\deployment-evidence\portfolio-before-v2.json'
 ```
 
-捕获模式在保存作品集后立即返回，不要求 Ledger DNS 已存在。schema-v2 基线使用 `dns.resolveCname` 保存 apex/`www` 当时的规范 CNAME target，避免把 CDN 轮换的 A/AAAA 当成路由变更；它另含状态、重定向位置、选定响应头、正文长度和 SHA-256，不含响应正文。如已有 schema-v1 证据，保留原文件并创建上述新 v2 文件；捕获脚本遇到已存在目标会拒绝覆盖。
+捕获模式在保存作品集后立即返回，不要求 Ledger DNS 已存在。schema-v2 基线保存 `www` 的公开规范 CNAME target；Cloudflare 会扁平化 apex CNAME，因此 apex 只保存稳定的 `flattened-apex` 形态，并要求至少存在一条 A/AAAA 解析结果，但不保存会轮换的 CDN 地址。Cloudflare API 的部署前后 readback 另行证明 apex/`www` 的权威记录内容未变。基线另含状态、重定向位置、选定响应头、正文长度和 SHA-256，不含响应正文。如已有 schema-v1 证据，保留原文件并创建上述新 v2 文件；捕获脚本遇到已存在目标会拒绝覆盖。
 
 另行记录以下脱敏事实：当前 branch/HEAD、两个计划任务的名称与动作摘要、`8180/8888/18888` 监听状态和所有者摘要、ezBookkeeping health 布尔值、OpenClaw Gateway/channel/plugin health、插件和 workspace 是否位于 Git checkout，以及 `ledger` 当前是否 NXDOMAIN。不得记录配置值、命令行中的秘密或页面正文。
 
@@ -289,7 +289,7 @@ ledger -> <TUNNEL_UUID>.cfargotunnel.com
 
 不新增或修改 apex、`www`。在还没有 `ledger` DNS 的情况下，先安装并启动受控 Tunnel 任务，本机确认 supervisor 通过完整 origin/child 验证，再用 Cloudflare API readback 确认该 named Tunnel 已 connected。只有这些前置条件和所有 Ledger-only 规则均通过后，才创建 `ledger` proxied CNAME 作为最后一刀；DNS 生效后立即运行完整公网验收。
 
-proxied CNAME 在公网 DNS 中会 flatten，因此不用公网 `resolveCname(ledger)` 来证明 Tunnel target。必须用 Cloudflare API readback 核对该唯一 `ledger` record 为 `proxied=true`，且 content 恰为已确认 Tunnel UUID 的 `<TUNNEL_UUID>.cfargotunnel.com`；作品集 schema-v2 CNAME 基线则继续只负责核对未代理的 apex/`www` 原始目标。
+proxied CNAME 在公网 DNS 中会 flatten，因此不用公网 `resolveCname(ledger)` 来证明 Tunnel target。必须用 Cloudflare API readback 核对该唯一 `ledger` record 为 `proxied=true`，且 content 恰为已确认 Tunnel UUID 的 `<TUNNEL_UUID>.cfargotunnel.com`；作品集 schema-v2 公网基线负责核对 apex 的 flattened 形态、`www` 的 CNAME 和两者行为指纹，Cloudflare API readback 负责核对 apex/`www` 的权威记录内容。
 
 ## 10. 公网、重启与 fail-closed 验收
 
