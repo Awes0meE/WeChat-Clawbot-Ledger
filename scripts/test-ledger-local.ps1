@@ -118,7 +118,7 @@ function Assert-LocalCloudflaredBinary {
     }
     $signature = Get-AuthenticodeSignature -FilePath $cloudflared -ErrorAction Stop
     $subject = if ($null -ne $signature.SignerCertificate) { [string]$signature.SignerCertificate.Subject } else { '' }
-    if ([string]$signature.Status -cne 'Valid' -or $subject -notmatch '(?i)(?:^|,\s*)O=Cloudflare, Inc\.(?:,|$)') {
+    if ([string]$signature.Status -cne 'Valid' -or $subject -notmatch '(?i)(?:^|,\s*)O=(?:"Cloudflare, Inc\."|Cloudflare, Inc\.)(?:,|$)') {
         throw 'cloudflared signature mismatch: Cloudflare, Inc.'
     }
 }

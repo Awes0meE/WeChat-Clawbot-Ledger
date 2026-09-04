@@ -397,7 +397,7 @@ function Get-AuthenticodeSignature {
   if ($global:scenario -eq 'invalid-signature') {
     return [pscustomobject]@{ Status = 'NotSigned'; SignerCertificate = $null }
   }
-  [pscustomobject]@{ Status = 'Valid'; SignerCertificate = [pscustomobject]@{ Subject = 'CN=Cloudflare, Inc., O=Cloudflare, Inc., C=US' } }
+  [pscustomobject]@{ Status = 'Valid'; SignerCertificate = [pscustomobject]@{ Subject = 'CN="Cloudflare, Inc.", O="Cloudflare, Inc.", C=US' } }
 }
 function Stop-Process {
   [CmdletBinding()]
@@ -540,7 +540,7 @@ function Get-AuthenticodeSignature {
   [CmdletBinding()]
   param([string]$FilePath)
   if ($global:scenario -eq 'invalid-signature') { return [pscustomobject]@{ Status = 'NotSigned'; SignerCertificate = $null } }
-  [pscustomobject]@{ Status = 'Valid'; SignerCertificate = [pscustomobject]@{ Subject = 'CN=Cloudflare, Inc., O=Cloudflare, Inc., C=US' } }
+  [pscustomobject]@{ Status = 'Valid'; SignerCertificate = [pscustomobject]@{ Subject = 'CN="Cloudflare, Inc.", O="Cloudflare, Inc.", C=US' } }
 }
 function Start-Process {
   [CmdletBinding()]
@@ -649,7 +649,7 @@ function Invoke-WebRequest {
 function Get-AuthenticodeSignature {
   [CmdletBinding()]
   param([string]$FilePath)
-  [pscustomobject]@{ Status = 'Valid'; SignerCertificate = [pscustomobject]@{ Subject = 'CN=Cloudflare, Inc., O=Cloudflare, Inc., C=US' } }
+  [pscustomobject]@{ Status = 'Valid'; SignerCertificate = [pscustomobject]@{ Subject = 'CN="Cloudflare, Inc.", O="Cloudflare, Inc.", C=US' } }
 }
 function Get-ScheduledTask {
   [CmdletBinding()]

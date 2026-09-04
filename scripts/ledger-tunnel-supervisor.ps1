@@ -506,7 +506,7 @@ function Assert-TunnelCloudflaredBinaryIdentity {
     }
     $signature = Get-AuthenticodeSignature -FilePath $script:ExpectedCloudflared -ErrorAction Stop
     $subject = if ($null -ne $signature.SignerCertificate) { [string]$signature.SignerCertificate.Subject } else { '' }
-    if ([string]$signature.Status -cne 'Valid' -or $subject -notmatch '(?i)(?:^|,\s*)O=Cloudflare, Inc\.(?:,|$)') {
+    if ([string]$signature.Status -cne 'Valid' -or $subject -notmatch '(?i)(?:^|,\s*)O=(?:"Cloudflare, Inc\."|Cloudflare, Inc\.)(?:,|$)') {
         throw 'The cloudflared binary does not have a valid Cloudflare, Inc. signature.'
     }
 }
