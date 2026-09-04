@@ -1,0 +1,8 @@
+tunnel: __LOCAL_TUNNEL_UUID__
+credentials-file: '__LOCAL_TUNNEL_CREDENTIAL_JSON__'
+no-autoupdate: true
+
+ingress:
+  - hostname: ledger.66ccff-labs.com
+    service: http://127.0.0.1:8888
+  - service: http_status:404
