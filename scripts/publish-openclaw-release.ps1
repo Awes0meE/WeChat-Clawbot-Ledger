@@ -17,6 +17,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $script:StrictUtf8Encoding = [Text.UTF8Encoding]::new($false, $true)
+$script:SupportedOpenClawVersion = '2026.8.2'
 
 # Windows PowerShell 5.1 does not initialize $PSScriptRoot while evaluating
 # parameter default expressions. Resolve this default only after param binding.
@@ -368,10 +369,17 @@ function Invoke-ExternalCommand {
     }
     try {
         $global:LASTEXITCODE = 0
+        $previousConsoleOut = [Console]::Out
+        $previousConsoleError = [Console]::Error
         try {
-            $capturedOutput = @(& $Executable @Arguments 2>&1)
+            [Console]::SetOut([IO.TextWriter]::Null)
+            [Console]::SetError([IO.TextWriter]::Null)
+            $capturedOutput = @(& $Executable @Arguments *>&1)
         } catch {
             throw $FailureMessage
+        } finally {
+            [Console]::SetOut($previousConsoleOut)
+            [Console]::SetError($previousConsoleError)
         }
         if ($LASTEXITCODE -ne 0) {
             throw $FailureMessage
@@ -382,6 +390,35 @@ function Invoke-ExternalCommand {
             Pop-Location
         }
     }
+}
+
+function Invoke-OpenClawCommandForConfig {
+    param(
+        [Parameter(Mandatory = $true)][string]$ConfigPath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$FailureMessage
+    )
+
+    $previousConfigPath = [Environment]::GetEnvironmentVariable('OPENCLAW_CONFIG_PATH', 'Process')
+    try {
+        [Environment]::SetEnvironmentVariable('OPENCLAW_CONFIG_PATH', $ConfigPath, 'Process')
+        return Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments $Arguments -FailureMessage $FailureMessage
+    } finally {
+        [Environment]::SetEnvironmentVariable('OPENCLAW_CONFIG_PATH', $previousConfigPath, 'Process')
+    }
+}
+
+function Get-OpenClawCliVersion {
+    $versionOutput = @(Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('--version') -FailureMessage 'The OpenClaw CLI version check failed.')
+    $versionText = ([string]::Join("`n", [string[]]$versionOutput)).Trim()
+    if ($versionText -cnotmatch '^OpenClaw ([0-9]+(?:\.[0-9]+){2}(?:[-+][0-9A-Za-z.-]+)?)(?: \([0-9A-Za-z._-]+\))?$') {
+        throw 'The OpenClaw CLI returned an invalid version marker.'
+    }
+    $version = [string]$Matches[1]
+    if ($version -cne $script:SupportedOpenClawVersion) {
+        throw 'The installed OpenClaw CLI version is outside the verified compatibility baseline.'
+    }
+    return $version
 }
 
 function Assert-OpenClawWeixinChannelStatus {
@@ -777,6 +814,23 @@ function Assert-OfficialCodexPin {
     }
 }
 
+function Assert-OpenClawModelPolicyMigrationComplete {
+    param([Parameter(Mandatory = $true)]$Config)
+
+    try {
+        $lastTouchedVersion = $Config.meta.lastTouchedVersion
+        if ($lastTouchedVersion -isnot [string] -or
+            $lastTouchedVersion -cnotmatch '^[0-9]+(?:\.[0-9]+){2}$' -or
+            ([Version]$lastTouchedVersion) -gt ([Version]$script:SupportedOpenClawVersion) -or
+            $Config.meta.migrations.modelPolicyAllowlist -isnot [bool] -or
+            $Config.meta.migrations.modelPolicyAllowlist -ne $true) {
+            throw 'invalid'
+        }
+    } catch {
+        throw 'The OpenClaw config metadata is outside the verified migration baseline; automatic config materialization was refused.'
+    }
+}
+
 function Get-OwnerAllowlistFingerprint {
     param([Parameter(Mandatory = $true)]$Config)
 
@@ -849,6 +903,87 @@ function Assert-PrivateFileAcl {
     }
 }
 
+function Protect-PrivateDirectory {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not [string]::IsNullOrWhiteSpace($AclExecutable)) {
+        $null = Invoke-ExternalCommand -Executable $AclExecutable -Arguments @('protect-directory', $Path) -FailureMessage 'Protecting a private OpenClaw directory ACL failed.'
+        return
+    }
+
+    $identity = $null
+    try {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        if ($null -eq $identity.User) { throw 'missing identity' }
+        $acl = New-Object Security.AccessControl.DirectorySecurity
+        $acl.SetOwner($identity.User)
+        $acl.SetAccessRuleProtection($true, $false)
+        $rule = New-Object Security.AccessControl.FileSystemAccessRule(
+            $identity.User,
+            [Security.AccessControl.FileSystemRights]::FullControl,
+            [Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit',
+            [Security.AccessControl.PropagationFlags]::None,
+            [Security.AccessControl.AccessControlType]::Allow
+        )
+        $null = $acl.AddAccessRule($rule)
+        Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+    } catch {
+        throw 'Protecting a private OpenClaw directory ACL failed.'
+    } finally {
+        if ($null -ne $identity) { $identity.Dispose() }
+    }
+}
+
+function Assert-PrivateDirectoryAcl {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not [string]::IsNullOrWhiteSpace($AclExecutable)) {
+        $null = Invoke-ExternalCommand -Executable $AclExecutable -Arguments @('verify-directory', $Path) -FailureMessage 'Verifying a private OpenClaw directory ACL failed.'
+        return
+    }
+
+    $identity = $null
+    try {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        if ($null -eq $identity.User) { throw 'missing identity' }
+        $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+        $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier])
+        $rules = @($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]))
+        if (-not $acl.AreAccessRulesProtected -or
+            $owner.Value -cne $identity.User.Value -or
+            $rules.Count -ne 1 -or
+            $rules[0].IsInherited -or
+            $rules[0].AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
+            $rules[0].IdentityReference.Value -cne $identity.User.Value -or
+            (($rules[0].FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -ne [Security.AccessControl.FileSystemRights]::FullControl)) {
+            throw 'invalid ACL'
+        }
+    } catch {
+        throw 'Verifying a private OpenClaw directory ACL failed.'
+    } finally {
+        if ($null -ne $identity) { $identity.Dispose() }
+    }
+}
+
+function New-ProtectedPrivateDirectory {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    Assert-NoExistingReparsePath -Path $Path
+    if ([IO.Directory]::Exists($Path) -or [IO.File]::Exists($Path)) {
+        throw 'The private OpenClaw staging path already exists.'
+    }
+    $null = [IO.Directory]::CreateDirectory($Path)
+    try {
+        Protect-PrivateDirectory -Path $Path
+        Assert-PrivateDirectoryAcl -Path $Path
+    } catch {
+        if ([IO.Directory]::Exists($Path) -and @(Get-ChildItem -LiteralPath $Path -Force).Count -eq 0) {
+            [IO.Directory]::Delete($Path, $false)
+        }
+        throw
+    }
+}
+
 function Remove-PrivateFileIfPresent {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -859,6 +994,56 @@ function Remove-PrivateFileIfPresent {
         }
         [IO.File]::Delete($Path)
     }
+}
+
+function Get-OpenClawPrivateStagingFiles {
+    param([Parameter(Mandatory = $true)][string]$DirectoryPath)
+
+    Assert-NoExistingReparsePath -Path $DirectoryPath
+    Assert-PrivateDirectoryAcl -Path $DirectoryPath
+    $allowedNames = @{
+        'openclaw.json' = $true
+        'openclaw.json.bak' = $true
+        'openclaw.json.bak.1' = $true
+        'openclaw.json.bak.2' = $true
+        'openclaw.json.bak.3' = $true
+        'openclaw.json.bak.4' = $true
+        'openclaw.json.pre-update' = $true
+    }
+    $files = New-Object 'System.Collections.Generic.List[IO.FileInfo]'
+    foreach ($item in @(Get-ChildItem -LiteralPath $DirectoryPath -Force -ErrorAction Stop)) {
+        if ($item.PSIsContainer -or (Test-ReparsePoint -Item $item)) {
+            throw 'The private OpenClaw staging directory contains an unsafe entry.'
+        }
+        if (-not $allowedNames.ContainsKey($item.Name) -and
+            $item.Name -cnotmatch '^openclaw\.json\.\d+\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$') {
+            throw 'The private OpenClaw staging directory contains an unexpected artifact.'
+        }
+        $files.Add($item)
+    }
+    return $files.ToArray()
+}
+
+function Protect-OpenClawPrivateStagingFiles {
+    param([Parameter(Mandatory = $true)][string]$DirectoryPath)
+
+    foreach ($file in @(Get-OpenClawPrivateStagingFiles -DirectoryPath $DirectoryPath)) {
+        Protect-PrivateFile -Path $file.FullName
+        Assert-PrivateFileAcl -Path $file.FullName
+    }
+}
+
+function Remove-OpenClawPrivateStagingDirectory {
+    param([Parameter(Mandatory = $true)][string]$DirectoryPath)
+
+    if (-not [IO.Directory]::Exists($DirectoryPath)) { return }
+    foreach ($file in @(Get-OpenClawPrivateStagingFiles -DirectoryPath $DirectoryPath)) {
+        Protect-PrivateFile -Path $file.FullName
+        Assert-PrivateFileAcl -Path $file.FullName
+        Remove-PrivateFileIfPresent -Path $file.FullName
+    }
+    Assert-PrivateDirectoryAcl -Path $DirectoryPath
+    [IO.Directory]::Delete($DirectoryPath, $false)
 }
 
 function New-ProtectedEmptyFile {
@@ -952,7 +1137,8 @@ function New-VerifiedPrivateBackup {
 function Move-FileAtomicallyReplacingDestination {
     param(
         [Parameter(Mandatory = $true)][string]$SourcePath,
-        [Parameter(Mandatory = $true)][string]$DestinationPath
+        [Parameter(Mandatory = $true)][string]$DestinationPath,
+        [string]$ExpectedDestinationHash
     )
 
     if ($null -eq ('Clawbot.ReleaseNativeMethods' -as [type])) {
@@ -967,6 +1153,12 @@ namespace Clawbot {
 }
 '@
     }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedDestinationHash)) {
+        if (-not [IO.File]::Exists($DestinationPath) -or
+            (Get-Sha256 -Path $DestinationPath) -cne $ExpectedDestinationHash) {
+            throw 'The destination changed immediately before atomic replacement.'
+        }
+    }
     if (-not [Clawbot.ReleaseNativeMethods]::MoveFileEx($SourcePath, $DestinationPath, 9)) {
         throw 'Atomic OpenClaw configuration restore failed.'
     }
@@ -976,7 +1168,8 @@ function Restore-VerifiedConfigBackup {
     param(
         [Parameter(Mandatory = $true)][string]$BackupPath,
         [Parameter(Mandatory = $true)][string]$ExpectedHash,
-        [Parameter(Mandatory = $true)][string]$ConfigPath
+        [Parameter(Mandatory = $true)][string]$ConfigPath,
+        [string]$ExpectedCurrentHash
     )
 
     Assert-PrivateFileAcl -Path $BackupPath
@@ -991,7 +1184,14 @@ function Restore-VerifiedConfigBackup {
         if ((Get-Sha256 -Path $restoreTemp) -cne $ExpectedHash) {
             throw 'The rollback copy failed verification.'
         }
-        Move-FileAtomicallyReplacingDestination -SourcePath $restoreTemp -DestinationPath $ConfigPath
+        Assert-NoExistingReparsePath -Path $ConfigPath
+        if (-not [string]::IsNullOrWhiteSpace($ExpectedCurrentHash)) {
+            if (-not [IO.File]::Exists($ConfigPath) -or
+                (Get-Sha256 -Path $ConfigPath) -cne $ExpectedCurrentHash) {
+                throw 'The live OpenClaw config changed while rollback was being prepared; automatic rollback was refused.'
+            }
+        }
+        Move-FileAtomicallyReplacingDestination -SourcePath $restoreTemp -DestinationPath $ConfigPath -ExpectedDestinationHash $ExpectedCurrentHash
         Protect-PrivateFile -Path $ConfigPath
         Assert-PrivateFileAcl -Path $ConfigPath
         if ((Get-Sha256 -Path $ConfigPath) -cne $ExpectedHash) {
@@ -1045,7 +1245,11 @@ function Switch-OpenClawRelease {
     }
     Assert-NoExistingReparsePath -Path $ConfigPath
 
+    $configHash = Get-Sha256 -Path $ConfigPath
     $configText = Read-StrictUtf8 -Path $ConfigPath
+    if ((Get-Sha256 -Path $ConfigPath) -cne $configHash) {
+        throw 'The OpenClaw configuration changed while a stable migration snapshot was being read.'
+    }
     try {
         $config = ConvertFrom-Json -InputObject $configText -ErrorAction Stop
         $candidate = ConvertFrom-Json -InputObject $configText -ErrorAction Stop
@@ -1053,6 +1257,7 @@ function Switch-OpenClawRelease {
         throw 'The OpenClaw configuration is not valid JSON.'
     }
     Assert-OfficialCodexPin -Config $config
+    Assert-OpenClawModelPolicyMigrationComplete -Config $config
     $ownerAllowlistBefore = Get-OwnerAllowlistFingerprint -Config $config
 
     $sourceBookkeeping = Join-Path $RepositoryRoot 'openclaw-plugins\clawbot-bookkeeping'
@@ -1144,9 +1349,51 @@ function Switch-OpenClawRelease {
         throw 'The configured plugin and workspace paths mix repository or different release sources.'
     }
 
+    try {
+        $currentServerBaseUrl = [string]$config.plugins.entries.'clawbot-bookkeeping'.config.serverBaseUrl
+    } catch {
+        throw 'The configured bookkeeping origin is missing or invalid.'
+    }
+    $requiresLegacyBootstrap = $currentServerBaseUrl -ceq 'http://127.0.0.1:8180'
+    if (-not $requiresLegacyBootstrap -and $currentServerBaseUrl -cne 'http://127.0.0.1:8888') {
+        throw 'The configured bookkeeping origin is not an approved exact loopback migration source.'
+    }
+    if ($requiresLegacyBootstrap -and
+        ($bookkeepingSourceKind -cne 'repository' -or
+         $stableSourceKind -cne 'repository' -or
+         $workspaceSourceKind -cne 'repository')) {
+        throw 'The legacy bookkeeping origin may be bootstrapped only from the exact repository source set.'
+    }
+    if ($requiresLegacyBootstrap) {
+        $configVolume = [IO.Path]::GetPathRoot((Get-FullPath -Path $ConfigPath))
+        $backupVolume = [IO.Path]::GetPathRoot((Get-FullPath -Path $BackupsRoot))
+        if ([string]::IsNullOrWhiteSpace($configVolume) -or
+            [string]::IsNullOrWhiteSpace($backupVolume) -or
+            -not [string]::Equals($configVolume, $backupVolume, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'The legacy bootstrap staging and OpenClaw config must remain on the same volume for atomic promotion.'
+        }
+    }
+    $openClawVersion = Get-OpenClawCliVersion
+
+    $legacyBaseline = $null
+    if ($requiresLegacyBootstrap) {
+        $legacyBaseline = ConvertFrom-Json -InputObject $configText -ErrorAction Stop
+        $legacyBaseline.plugins.entries.'clawbot-bookkeeping'.config.serverBaseUrl = 'http://127.0.0.1:8888'
+        Assert-OfficialCodexPin -Config $legacyBaseline
+        if ((Get-OwnerAllowlistFingerprint -Config $legacyBaseline) -cne $ownerAllowlistBefore) {
+            throw 'The owner allowlist changed while preparing the legacy bookkeeping origin bootstrap.'
+        }
+        $legacyProof = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $legacyBaseline -Depth 100) -ErrorAction Stop
+        $legacyProof.plugins.entries.'clawbot-bookkeeping'.config.serverBaseUrl = 'http://127.0.0.1:8180'
+        if ((ConvertTo-CanonicalJson -Value $legacyProof) -cne (ConvertTo-CanonicalJson -Value $config)) {
+            throw 'The legacy bookkeeping origin bootstrap changed values outside the approved replacement.'
+        }
+    }
+
     $candidate.plugins.load.paths = $updatedPaths.ToArray()
     $candidate.agents.entries.bookkeeper.workspace = $releaseWorkspace
     $candidate.plugins.entries.'clawbot-bookkeeping'.config.serverBaseUrl = 'http://127.0.0.1:8888'
+    $candidate.meta.lastTouchedVersion = $openClawVersion
     Assert-OfficialCodexPin -Config $candidate
     if ((Get-OwnerAllowlistFingerprint -Config $candidate) -cne $ownerAllowlistBefore) {
         throw 'The owner allowlist changed while preparing the OpenClaw patch.'
@@ -1179,52 +1426,139 @@ function Switch-OpenClawRelease {
     $timestamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
     $backupPath = Join-Path $BackupsRoot ('openclaw-' + $timestamp + '-' + $releaseCommit + '-' + [guid]::NewGuid().ToString('N') + '.json')
     $patchPath = Join-Path $BackupsRoot ('.openclaw-patch-' + [guid]::NewGuid().ToString('N') + '.json')
+    $legacyStagingDirectory = $null
+    $legacyStagedConfigPath = $null
+    $legacyBaselinePath = $null
+    $legacyBaselineHash = $null
     Assert-NoExistingReparsePath -Path $ConfigPath
-    $configHash = Get-Sha256 -Path $ConfigPath
     try {
         New-VerifiedPrivateBackup -SourcePath $ConfigPath -BackupPath $backupPath -ExpectedHash $configHash
         Write-ProtectedUtf8File -Path $patchPath -Value ((ConvertTo-Json -InputObject $patch -Depth 20) + "`n")
+        if ($requiresLegacyBootstrap) {
+            $legacyStagingDirectory = Join-Path $BackupsRoot ('.openclaw-bootstrap-stage-' + [guid]::NewGuid().ToString('N'))
+            New-ProtectedPrivateDirectory -Path $legacyStagingDirectory
+            $legacyStagedConfigPath = Join-Path $legacyStagingDirectory 'openclaw.json'
+            Write-ProtectedUtf8File -Path $legacyStagedConfigPath -Value ((ConvertTo-Json -InputObject $legacyBaseline -Depth 100) + "`n")
+            $legacyBaselineHash = Get-Sha256 -Path $legacyStagedConfigPath
+            $legacyBaselinePath = Join-Path $BackupsRoot ('openclaw-bootstrap-baseline-' + $timestamp + '-' + $releaseCommit + '-' + [guid]::NewGuid().ToString('N') + '.json')
+            New-VerifiedPrivateBackup -SourcePath $legacyStagedConfigPath -BackupPath $legacyBaselinePath -ExpectedHash $legacyBaselineHash
+        }
     } catch {
+        if (-not [string]::IsNullOrWhiteSpace($legacyStagingDirectory)) {
+            Remove-OpenClawPrivateStagingDirectory -DirectoryPath $legacyStagingDirectory
+        }
+        if (-not [string]::IsNullOrWhiteSpace($legacyBaselinePath)) {
+            Remove-PrivateFileIfPresent -Path $legacyBaselinePath
+        }
         Remove-PrivateFileIfPresent -Path $patchPath
         Remove-PrivateFileIfPresent -Path $backupPath
         throw
     }
 
     $livePatchAttempted = $false
+    $legacyLivePromoted = $false
+    $promotedHash = $null
+    $verifiedPatchedHash = $null
+    $patchTargetPath = if ($requiresLegacyBootstrap) { $legacyStagedConfigPath } else { $ConfigPath }
     $switchStage = 'Gateway preflight'
     try {
         Assert-PrivateFileAcl -Path $backupPath
         Assert-PrivateFileAcl -Path $patchPath
+        if ($requiresLegacyBootstrap) {
+            Assert-PrivateDirectoryAcl -Path $legacyStagingDirectory
+            Assert-PrivateFileAcl -Path $legacyStagedConfigPath
+            Assert-PrivateFileAcl -Path $legacyBaselinePath
+            if ((Get-Sha256 -Path $legacyStagedConfigPath) -cne $legacyBaselineHash -or
+                (Get-Sha256 -Path $legacyBaselinePath) -cne $legacyBaselineHash) {
+                throw 'The validated legacy bootstrap baseline changed before use.'
+            }
+        }
         $null = Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('gateway', 'status') -FailureMessage 'The OpenClaw Gateway was not running before the switch.'
+        if ($requiresLegacyBootstrap) {
+            $switchStage = 'legacy bootstrap validation'
+            $null = Invoke-OpenClawCommandForConfig -ConfigPath $legacyStagedConfigPath -Arguments @('config', 'validate') -FailureMessage 'The legacy bookkeeping origin bootstrap candidate was invalid.'
+            Protect-OpenClawPrivateStagingFiles -DirectoryPath $legacyStagingDirectory
+            if ((Get-Sha256 -Path $ConfigPath) -cne $configHash -or
+                (Get-Sha256 -Path $backupPath) -cne $configHash -or
+                (Get-Sha256 -Path $legacyStagedConfigPath) -cne $legacyBaselineHash -or
+                (Get-Sha256 -Path $legacyBaselinePath) -cne $legacyBaselineHash) {
+                throw 'The live or staged OpenClaw configuration changed during legacy bootstrap validation.'
+            }
+        }
         $switchStage = 'config patch dry-run'
-        $null = Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('config', 'patch', '--dry-run', '--file', $patchPath) -FailureMessage 'The OpenClaw config patch dry-run failed.'
+        $null = Invoke-OpenClawCommandForConfig -ConfigPath $patchTargetPath -Arguments @('config', 'patch', '--dry-run', '--file', $patchPath) -FailureMessage 'The OpenClaw config patch dry-run failed.'
         $switchStage = 'dry-run integrity verification'
         if ((Get-Sha256 -Path $ConfigPath) -cne $configHash -or
             (Get-Sha256 -Path $backupPath) -cne $configHash) {
             throw 'The dry-run changed the config or its verified backup.'
         }
+        if ($requiresLegacyBootstrap -and
+            ((Get-Sha256 -Path $legacyStagedConfigPath) -cne $legacyBaselineHash -or
+             (Get-Sha256 -Path $legacyBaselinePath) -cne $legacyBaselineHash)) {
+            throw 'The dry-run changed the staged bootstrap config or its verified baseline.'
+        }
         Assert-PrivateFileAcl -Path $backupPath
-        Protect-PrivateFile -Path $ConfigPath
-        Assert-PrivateFileAcl -Path $ConfigPath
+        if ($requiresLegacyBootstrap) {
+            Protect-OpenClawPrivateStagingFiles -DirectoryPath $legacyStagingDirectory
+        } else {
+            Protect-PrivateFile -Path $ConfigPath
+            Assert-PrivateFileAcl -Path $ConfigPath
+        }
 
-        $livePatchAttempted = $true
-        $switchStage = 'live config patch'
-        $null = Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('config', 'patch', '--file', $patchPath) -FailureMessage 'The live OpenClaw config patch failed.'
+        if (-not $requiresLegacyBootstrap) { $livePatchAttempted = $true }
+        $switchStage = if ($requiresLegacyBootstrap) { 'staged config patch' } else { 'live config patch' }
+        $null = Invoke-OpenClawCommandForConfig -ConfigPath $patchTargetPath -Arguments @('config', 'patch', '--file', $patchPath) -FailureMessage 'The OpenClaw config patch failed.'
 
         $switchStage = 'patched config verification'
-        Assert-NoExistingReparsePath -Path $ConfigPath
-        Protect-PrivateFile -Path $ConfigPath
-        Assert-PrivateFileAcl -Path $ConfigPath
-        $patchedText = Read-StrictUtf8 -Path $ConfigPath
+        Assert-NoExistingReparsePath -Path $patchTargetPath
+        if ($requiresLegacyBootstrap) {
+            Protect-OpenClawPrivateStagingFiles -DirectoryPath $legacyStagingDirectory
+        } else {
+            Protect-PrivateFile -Path $ConfigPath
+            Assert-PrivateFileAcl -Path $ConfigPath
+        }
+        $verifiedPatchedHash = Get-Sha256 -Path $patchTargetPath
+        $patchedText = Read-StrictUtf8 -Path $patchTargetPath
+        if ((Get-Sha256 -Path $patchTargetPath) -cne $verifiedPatchedHash) {
+            throw 'The patched OpenClaw config changed while its stable verification snapshot was being read.'
+        }
         try { $patchedConfig = ConvertFrom-Json -InputObject $patchedText -ErrorAction Stop } catch { throw 'The patched OpenClaw config is invalid.' }
         if ((ConvertTo-CanonicalJson -Value $patchedConfig) -cne (ConvertTo-CanonicalJson -Value $candidate)) {
-            throw 'The live OpenClaw config patch changed values outside the approved replacement.'
+            throw 'The OpenClaw config patch changed values outside the approved replacement.'
         }
         Assert-OfficialCodexPin -Config $patchedConfig
         if ((Get-OwnerAllowlistFingerprint -Config $patchedConfig) -cne $ownerAllowlistBefore) {
             throw 'The owner allowlist changed during the OpenClaw config patch.'
         }
         Assert-Release -Path $ReleasePath -ExpectedCommit $releaseCommit
+
+        if ($requiresLegacyBootstrap) {
+            $switchStage = 'atomic config promotion'
+            Assert-PrivateFileAcl -Path $legacyBaselinePath
+            if ((Get-Sha256 -Path $backupPath) -cne $configHash -or
+                (Get-Sha256 -Path $legacyBaselinePath) -cne $legacyBaselineHash -or
+                (Get-Sha256 -Path $legacyStagedConfigPath) -cne $verifiedPatchedHash) {
+                throw 'A staged config or verified backup changed before atomic promotion.'
+            }
+            $promotedHash = $verifiedPatchedHash
+            Assert-NoExistingReparsePath -Path $ConfigPath
+            if ((Get-Sha256 -Path $ConfigPath) -cne $configHash) {
+                throw 'The live config changed immediately before atomic promotion.'
+            }
+            Move-FileAtomicallyReplacingDestination -SourcePath $legacyStagedConfigPath -DestinationPath $ConfigPath -ExpectedDestinationHash $configHash
+            $legacyLivePromoted = $true
+            Protect-PrivateFile -Path $ConfigPath
+            Assert-PrivateFileAcl -Path $ConfigPath
+            if ((Get-Sha256 -Path $ConfigPath) -cne $promotedHash) {
+                throw 'The atomically promoted OpenClaw configuration changed.'
+            }
+            $promotedConfig = ConvertFrom-Json -InputObject (Read-StrictUtf8 -Path $ConfigPath) -ErrorAction Stop
+            if ((ConvertTo-CanonicalJson -Value $promotedConfig) -cne (ConvertTo-CanonicalJson -Value $candidate)) {
+                throw 'The atomically promoted OpenClaw configuration was not the verified candidate.'
+            }
+        } else {
+            $promotedHash = Get-Sha256 -Path $ConfigPath
+        }
 
         $switchStage = 'Gateway restart'
         $null = Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('gateway', 'restart') -FailureMessage 'The OpenClaw Gateway restart failed.'
@@ -1242,8 +1576,34 @@ function Switch-OpenClawRelease {
         $switchStage = 'bookkeeper model check'
         $null = Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('models', 'status', '--agent', 'bookkeeper', '--json') -FailureMessage 'The bookkeeper model status check failed.'
     } catch {
-        if ($livePatchAttempted) {
-            Restore-VerifiedConfigBackup -BackupPath $backupPath -ExpectedHash $configHash -ConfigPath $ConfigPath
+        if ($legacyLivePromoted) {
+            Restore-VerifiedConfigBackup -BackupPath $legacyBaselinePath -ExpectedHash $legacyBaselineHash -ConfigPath $ConfigPath -ExpectedCurrentHash $promotedHash
+            try {
+                $null = Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('gateway', 'restart') -FailureMessage 'The rollback Gateway restart failed.'
+                $null = Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('gateway', 'status') -FailureMessage 'The rollback Gateway verification failed.'
+            } catch {
+                throw 'The OpenClaw switch failed and the valid bootstrap baseline was restored, but the Gateway rollback verification failed.'
+            }
+            throw ('The OpenClaw switch failed during ' + $switchStage + '; the valid bootstrap baseline was restored.')
+        } elseif ($livePatchAttempted) {
+            $currentPatchedHash = $null
+            if ([IO.File]::Exists($ConfigPath)) {
+                $currentPatchedHash = Get-Sha256 -Path $ConfigPath
+                if ($currentPatchedHash -ceq $configHash) {
+                    throw ('The OpenClaw switch failed during ' + $switchStage + '; the live config remained unchanged.')
+                }
+                try {
+                    $currentPatchedText = Read-StrictUtf8 -Path $ConfigPath
+                    if ((Get-Sha256 -Path $ConfigPath) -cne $currentPatchedHash) { throw 'changed' }
+                    $currentPatchedConfig = ConvertFrom-Json -InputObject $currentPatchedText -ErrorAction Stop
+                } catch {
+                    throw 'The OpenClaw switch failed and the live config changed concurrently; automatic rollback was refused.'
+                }
+                if ((ConvertTo-CanonicalJson -Value $currentPatchedConfig) -cne (ConvertTo-CanonicalJson -Value $candidate)) {
+                    throw 'The OpenClaw switch failed and the live config changed concurrently; automatic rollback was refused.'
+                }
+            }
+            Restore-VerifiedConfigBackup -BackupPath $backupPath -ExpectedHash $configHash -ConfigPath $ConfigPath -ExpectedCurrentHash $currentPatchedHash
             try {
                 $null = Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('gateway', 'restart') -FailureMessage 'The rollback Gateway restart failed.'
                 $null = Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('gateway', 'status') -FailureMessage 'The rollback Gateway verification failed.'
@@ -1255,6 +1615,9 @@ function Switch-OpenClawRelease {
         throw
     } finally {
         Remove-PrivateFileIfPresent -Path $patchPath
+        if (-not [string]::IsNullOrWhiteSpace($legacyStagingDirectory)) {
+            Remove-OpenClawPrivateStagingDirectory -DirectoryPath $legacyStagingDirectory
+        }
     }
 }
 

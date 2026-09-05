@@ -197,12 +197,28 @@ function createAclShim(root) {
   const path = join(root, 'acl-shim.ps1');
   write(path, String.raw`
 $operation = 'legacy-protect'
-if ($args.Count -eq 2 -and $args[0] -in @('protect', 'verify', 'protect-release', 'verify-release')) { $operation = $args[0] }
+if ($args.Count -eq 2 -and $args[0] -in @('protect', 'verify', 'protect-directory', 'verify-directory', 'protect-release', 'verify-release')) { $operation = $args[0] }
 elseif ($args.Count -ne 4 -or $args[1] -ne '/inheritance:r' -or $args[2] -ne '/grant:r' -or -not $args[3].EndsWith(':(F)')) { exit 101 }
 Add-Content -LiteralPath $env:CLAWBOT_TEST_ACL_TRACE -Value $operation -Encoding UTF8
 $callCount = @(Get-Content -LiteralPath $env:CLAWBOT_TEST_ACL_TRACE -Encoding UTF8).Count
 if ($env:CLAWBOT_TEST_ACL_FAIL_ON_CALL -and $callCount -eq [int]$env:CLAWBOT_TEST_ACL_FAIL_ON_CALL) { exit 103 }
 if ($operation -eq 'verify-release' -and $env:CLAWBOT_TEST_RELEASE_ACL_UNSAFE -eq '1') { exit 105 }
+if ($operation -eq 'verify' -and
+    ($env:CLAWBOT_TEST_CHANGE_CONFIG_DURING_ROLLBACK_PREP -eq '1' -or $env:CLAWBOT_TEST_DELETE_CONFIG_DURING_ROLLBACK_PREP -eq '1') -and
+    $args[1] -like '*.openclaw-rollback-*.json' -and
+    (Get-Item -LiteralPath $args[1]).Length -gt 0) {
+  if ($env:CLAWBOT_TEST_DELETE_CONFIG_DURING_ROLLBACK_PREP -eq '1') {
+    Remove-Item -LiteralPath $env:CLAWBOT_TEST_OPENCLAW_CONFIG -Force
+  } else {
+    $liveConfig = [IO.File]::ReadAllText($env:CLAWBOT_TEST_OPENCLAW_CONFIG, [Text.Encoding]::UTF8) | ConvertFrom-Json -ErrorAction Stop
+    $liveConfig.unrelatedTopLevel.keep = @('concurrent-rollback-preparation-change')
+    [IO.File]::WriteAllText(
+      $env:CLAWBOT_TEST_OPENCLAW_CONFIG,
+      (($liveConfig | ConvertTo-Json -Depth 100) + [Environment]::NewLine),
+      (New-Object Text.UTF8Encoding($false))
+    )
+  }
+}
 exit 0
 `);
   return path;
@@ -225,10 +241,57 @@ function Merge-PatchObject {
   }
 }
 
+function Set-ConcurrentLiveChange {
+  param([string]$Marker)
+  $liveConfig = [IO.File]::ReadAllText($env:CLAWBOT_TEST_OPENCLAW_CONFIG, [Text.Encoding]::UTF8) | ConvertFrom-Json -ErrorAction Stop
+  $liveConfig.unrelatedTopLevel.keep = @($Marker)
+  [IO.File]::WriteAllText(
+    $env:CLAWBOT_TEST_OPENCLAW_CONFIG,
+    (($liveConfig | ConvertTo-Json -Depth 100) + [Environment]::NewLine),
+    (New-Object Text.UTF8Encoding($false))
+  )
+}
+
 $joined = $args -join ' '
 Add-Content -LiteralPath $env:CLAWBOT_TEST_OPENCLAW_TRACE -Value $joined -Encoding UTF8
-if ($env:CLAWBOT_TEST_OPENCLAW_FAIL_ON -and $joined.Contains($env:CLAWBOT_TEST_OPENCLAW_FAIL_ON)) { exit 93 }
+if ($env:CLAWBOT_TEST_OPENCLAW_FAIL_ON -and $joined.Contains($env:CLAWBOT_TEST_OPENCLAW_FAIL_ON)) {
+  if ($env:CLAWBOT_TEST_CHANGE_LIVE_BEFORE_OPENCLAW_FAILURE -eq '1') {
+    Set-ConcurrentLiveChange -Marker 'concurrent-post-promotion-change'
+  }
+  if ($env:CLAWBOT_TEST_EMIT_SENSITIVE_DIAGNOSTIC -eq '1') {
+    Write-Output 'SENSITIVE-OPENCLAW-DIAGNOSTIC SENSITIVE-FIXTURE-VALUE'
+    Write-Warning 'fixture-owner SENSITIVE-OPENCLAW-WARNING'
+    Write-Host 'SENSITIVE-OPENCLAW-INFORMATION'
+    [Console]::Out.WriteLine('SENSITIVE-OPENCLAW-CONSOLE-OUT')
+    [Console]::Error.WriteLine('fixture-owner SENSITIVE-OPENCLAW-STDERR')
+  }
+  exit 93
+}
+if ($args.Count -eq 1 -and $args[0] -eq '--version') {
+  if ($env:CLAWBOT_TEST_CHANGE_CONFIG_DURING_VERSION_CHECK -eq '1') {
+    Set-ConcurrentLiveChange -Marker 'concurrent-version-check-change'
+  }
+  $version = if ([string]::IsNullOrWhiteSpace($env:CLAWBOT_TEST_OPENCLAW_VERSION)) { '2026.8.2' } else { $env:CLAWBOT_TEST_OPENCLAW_VERSION }
+  Write-Output ("OpenClaw $version (fixture)")
+  exit 0
+}
+if ($args.Count -eq 2 -and $args[0] -eq 'config' -and $args[1] -eq 'validate') {
+  if ([string]::IsNullOrWhiteSpace($env:OPENCLAW_CONFIG_PATH) -or -not [IO.File]::Exists($env:OPENCLAW_CONFIG_PATH)) { exit 106 }
+  if ($env:CLAWBOT_TEST_REQUIRE_TEMP_CONFIG -eq '1' -and
+      [string]::Equals($env:OPENCLAW_CONFIG_PATH, $env:CLAWBOT_TEST_OPENCLAW_CONFIG, [StringComparison]::OrdinalIgnoreCase)) { exit 107 }
+  $validationConfig = [IO.File]::ReadAllText($env:OPENCLAW_CONFIG_PATH, [Text.Encoding]::UTF8) | ConvertFrom-Json -ErrorAction Stop
+  if ($validationConfig.plugins.entries.'clawbot-bookkeeping'.config.serverBaseUrl -cne 'http://127.0.0.1:8888') { exit 108 }
+  if ($env:CLAWBOT_TEST_CHANGE_CONFIG_DURING_BOOTSTRAP_VALIDATION -eq '1') {
+    Set-ConcurrentLiveChange -Marker 'concurrent-validation-change'
+  }
+  exit 0
+}
 if ($args.Count -ge 2 -and $args[0] -eq 'config' -and $args[1] -eq 'patch') {
+  $targetConfigPath = if ([string]::IsNullOrWhiteSpace($env:OPENCLAW_CONFIG_PATH)) { $env:CLAWBOT_TEST_OPENCLAW_CONFIG } else { $env:OPENCLAW_CONFIG_PATH }
+  if ($env:CLAWBOT_TEST_OPENCLAW_REJECT_INVALID_CURRENT -eq '1') {
+    $currentConfig = [IO.File]::ReadAllText($targetConfigPath, [Text.Encoding]::UTF8) | ConvertFrom-Json -ErrorAction Stop
+    if ($currentConfig.plugins.entries.'clawbot-bookkeeping'.config.serverBaseUrl -cne 'http://127.0.0.1:8888') { exit 109 }
+  }
   $fileIndex = [Array]::IndexOf([object[]]$args, '--file')
   if ($fileIndex -lt 0 -or $fileIndex + 1 -ge $args.Count) { exit 94 }
   $patchPath = $args[$fileIndex + 1]
@@ -236,16 +299,27 @@ if ($args.Count -ge 2 -and $args[0] -eq 'config' -and $args[1] -eq 'patch') {
   if ($patchText.Contains('tokenPath') -or $patchText.Contains('fixture-owner') -or $patchText.Contains('SENSITIVE-FIXTURE-VALUE')) { exit 99 }
   $patch = $patchText | ConvertFrom-Json -ErrorAction Stop
   if (-not ($args -contains '--dry-run')) {
-    $config = [IO.File]::ReadAllText($env:CLAWBOT_TEST_OPENCLAW_CONFIG, [Text.Encoding]::UTF8) | ConvertFrom-Json -ErrorAction Stop
+    $config = [IO.File]::ReadAllText($targetConfigPath, [Text.Encoding]::UTF8) | ConvertFrom-Json -ErrorAction Stop
     Merge-PatchObject -Target $config -Patch $patch
+    if (-not [string]::Equals($targetConfigPath, $env:CLAWBOT_TEST_OPENCLAW_CONFIG, [StringComparison]::OrdinalIgnoreCase)) {
+      foreach ($suffix in @('.bak', '.bak.1', '.bak.2', '.bak.3', '.bak.4', '.pre-update')) {
+        [IO.File]::Copy($targetConfigPath, ($targetConfigPath + $suffix), $true)
+      }
+      [IO.File]::Copy($targetConfigPath, ($targetConfigPath + '.' + $PID + '.00000000-0000-4000-8000-000000000000.tmp'), $true)
+    }
+    $config.meta.lastTouchedVersion = '2026.8.2'
     [IO.File]::WriteAllText(
-      $env:CLAWBOT_TEST_OPENCLAW_CONFIG,
+      $targetConfigPath,
       (($config | ConvertTo-Json -Depth 100) + [Environment]::NewLine),
       (New-Object Text.UTF8Encoding($false))
     )
+    if ($env:CLAWBOT_TEST_CHANGE_CONFIG_AFTER_STAGED_PATCH -eq '1' -and
+        -not [string]::Equals($targetConfigPath, $env:CLAWBOT_TEST_OPENCLAW_CONFIG, [StringComparison]::OrdinalIgnoreCase)) {
+      Set-ConcurrentLiveChange -Marker 'concurrent-staged-patch-change'
+    }
     if ($env:CLAWBOT_TEST_OPENCLAW_FAIL_AFTER_PATCH_WRITE -eq '1') { exit 100 }
     if ($env:CLAWBOT_TEST_OPENCLAW_DELETE_CONFIG_AFTER_PATCH -eq '1') {
-      Remove-Item -LiteralPath $env:CLAWBOT_TEST_OPENCLAW_CONFIG -Force
+      Remove-Item -LiteralPath $targetConfigPath -Force
       exit 104
     }
   }
@@ -334,7 +408,7 @@ function createFixture() {
       entries: {
         'clawbot-bookkeeping': {
           config: {
-            serverBaseUrl: 'http://127.0.0.1:8180',
+            serverBaseUrl: 'http://127.0.0.1:8888',
             tokenPath: 'SENSITIVE-FIXTURE-VALUE',
             untouched: { nested: true },
           },
@@ -354,6 +428,10 @@ function createFixture() {
       },
     },
     commands: { ownerAllowFrom: ['openclaw-weixin:fixture-owner'] },
+    meta: {
+      lastTouchedVersion: '2026.8.2',
+      migrations: { modelPolicyAllowlist: true },
+    },
     unrelatedTopLevel: { keep: ['all', 'values'] },
   };
   write(configPath, `${JSON.stringify(config, null, 2)}\n`);
@@ -429,6 +507,7 @@ function normalizedOpenClawTrace(fixture) {
     .trim()
     .split(/\r?\n/u)
     .filter(Boolean)
+    .filter((line) => line !== '--version')
     .map((line) => line.replace(/^(config patch(?: --dry-run)? --file) .+$/u, '$1 <patch>'));
 }
 
@@ -990,6 +1069,618 @@ test('dry-runs the exact OpenClaw config replacement before patch and restart', 
       'verify-release',
     ]);
     assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-patch-')), []);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('bootstraps the exact legacy loopback port before the official config patch', () => {
+  const fixture = createFixture();
+  try {
+    const legacyConfig = structuredClone(fixture.config);
+    legacyConfig.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8180';
+    write(fixture.configPath, `${JSON.stringify(legacyConfig, null, 2)}\n`);
+    const originalHash = hash(fixture.configPath);
+
+    const result = runPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-SwitchOpenClaw']),
+      {
+        ...fixture.env,
+        CLAWBOT_TEST_OPENCLAW_REJECT_INVALID_CURRENT: '1',
+        CLAWBOT_TEST_REQUIRE_TEMP_CONFIG: '1',
+      },
+    );
+
+    assertSucceeded(result);
+    assert.equal(`${result.stdout}\n${result.stderr}`.includes('SENSITIVE-FIXTURE-VALUE'), false);
+    assert.deepEqual(normalizedOpenClawTrace(fixture), [
+      'gateway status',
+      'config validate',
+      'config patch --dry-run --file <patch>',
+      'config patch --file <patch>',
+      'gateway restart',
+      'gateway status',
+      'channels status --probe --json',
+      'plugins info clawbot-bookkeeping',
+      'plugins info openclaw-weixin',
+      'plugins inspect codex',
+      'models status --agent bookkeeper --json',
+    ]);
+    const updated = JSON.parse(readFileSync(fixture.configPath, 'utf8'));
+    const expectedUpdated = structuredClone(legacyConfig);
+    const expectedReleasePaths = releasePaths(fixture.releasePath);
+    expectedUpdated.plugins.load.paths = [
+      expectedReleasePaths.bookkeeping,
+      expectedReleasePaths.stable,
+      fixture.config.plugins.load.paths[2],
+    ];
+    expectedUpdated.agents.entries.bookkeeper.workspace = expectedReleasePaths.workspace;
+    expectedUpdated.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8888';
+    assert.deepEqual(updated, expectedUpdated);
+
+    const backupNames = readdirSync(fixture.backups).filter((name) => name.endsWith('.json'));
+    assert.equal(backupNames.length, 2);
+    const originalBackup = backupNames.find((name) => name.startsWith('openclaw-') && !name.startsWith('openclaw-bootstrap-baseline-'));
+    const validBaselineBackup = backupNames.find((name) => name.startsWith('openclaw-bootstrap-baseline-'));
+    assert.ok(originalBackup);
+    assert.ok(validBaselineBackup);
+    assert.equal(hash(join(fixture.backups, originalBackup)), originalHash);
+    const expectedBaseline = structuredClone(legacyConfig);
+    expectedBaseline.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8888';
+    assert.deepEqual(JSON.parse(readFileSync(join(fixture.backups, validBaselineBackup), 'utf8')), expectedBaseline);
+    assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-bootstrap-stage-')), []);
+    assert.equal(walkFiles(fixture.backups).some((path) => /\.bak(?:\.\d+)?$|\.pre-update$|openclaw\.json\.\d+\.[0-9a-f-]{36}\.tmp$/u.test(path)), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('updates an older config marker to the supported OpenClaw version stamp', () => {
+  const fixture = createFixture();
+  try {
+    const legacyConfig = structuredClone(fixture.config);
+    legacyConfig.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8180';
+    legacyConfig.meta.lastTouchedVersion = '2026.7.0';
+    write(fixture.configPath, `${JSON.stringify(legacyConfig, null, 2)}\n`);
+
+    const result = runPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-SwitchOpenClaw']),
+      {
+        ...fixture.env,
+        CLAWBOT_TEST_OPENCLAW_REJECT_INVALID_CURRENT: '1',
+        CLAWBOT_TEST_REQUIRE_TEMP_CONFIG: '1',
+      },
+    );
+
+    assertSucceeded(result);
+    const updated = JSON.parse(readFileSync(fixture.configPath, 'utf8'));
+    assert.equal(updated.meta.lastTouchedVersion, '2026.8.2');
+    assert.equal(updated.meta.migrations.modelPolicyAllowlist, true);
+    assert.equal(updated.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl, 'http://127.0.0.1:8888');
+    assert.equal(readFileSync(fixture.tracePath, 'utf8').includes('--version'), true);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('rejects an unverified OpenClaw CLI version before backup or activation', () => {
+  const fixture = createFixture();
+  try {
+    const originalConfig = JSON.parse(readFileSync(fixture.configPath, 'utf8'));
+    const result = runPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-SwitchOpenClaw']),
+      { ...fixture.env, CLAWBOT_TEST_OPENCLAW_VERSION: '2026.9.0' },
+    );
+
+    assertFailed(result, /version|compatibility|baseline|unsupported/iu);
+    assert.deepEqual(JSON.parse(readFileSync(fixture.configPath, 'utf8')), originalConfig);
+    assert.deepEqual(normalizedOpenClawTrace(fixture), []);
+    assert.equal(readFileSync(fixture.tracePath, 'utf8').includes('--version'), true);
+    assert.deepEqual(readdirSync(fixture.backups), []);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('rejects a config written by a future OpenClaw version before any CLI command', () => {
+  const fixture = createFixture();
+  try {
+    const futureConfig = structuredClone(fixture.config);
+    futureConfig.meta.lastTouchedVersion = '2026.9.0';
+    write(fixture.configPath, `${JSON.stringify(futureConfig, null, 2)}\n`);
+
+    const result = runPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-SwitchOpenClaw']),
+      fixture.env,
+    );
+
+    assertFailed(result, /config metadata|migration|baseline|materialization/iu);
+    assert.deepEqual(JSON.parse(readFileSync(fixture.configPath, 'utf8')), futureConfig);
+    assert.deepEqual(normalizedOpenClawTrace(fixture), []);
+    assert.equal(existsSync(fixture.tracePath), false);
+    assert.deepEqual(readdirSync(fixture.backups), []);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('rejects an incomplete OpenClaw model-policy migration before any CLI command', () => {
+  const fixture = createFixture();
+  try {
+    const incompleteConfig = structuredClone(fixture.config);
+    delete incompleteConfig.meta.migrations.modelPolicyAllowlist;
+    write(fixture.configPath, `${JSON.stringify(incompleteConfig, null, 2)}\n`);
+
+    const result = runPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-SwitchOpenClaw']),
+      fixture.env,
+    );
+
+    assertFailed(result, /config metadata|migration|baseline|materialization/iu);
+    assert.deepEqual(normalizedOpenClawTrace(fixture), []);
+    assert.deepEqual(JSON.parse(readFileSync(fixture.configPath, 'utf8')), incompleteConfig);
+    assert.deepEqual(readdirSync(fixture.backups), []);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('leaves the exact legacy config untouched when the staged patch dry-run fails', () => {
+  const fixture = createFixture();
+  try {
+    const legacyConfig = structuredClone(fixture.config);
+    legacyConfig.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8180';
+    write(fixture.configPath, `${JSON.stringify(legacyConfig, null, 2)}\n`);
+    const originalHash = hash(fixture.configPath);
+
+    const result = runPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-SwitchOpenClaw']),
+      {
+        ...fixture.env,
+        CLAWBOT_TEST_OPENCLAW_REJECT_INVALID_CURRENT: '1',
+        CLAWBOT_TEST_REQUIRE_TEMP_CONFIG: '1',
+        CLAWBOT_TEST_OPENCLAW_FAIL_ON: 'config patch --dry-run',
+      },
+    );
+
+    assertFailed(result, /dry-run|config patch/iu);
+    assert.equal(hash(fixture.configPath), originalHash);
+    assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /rollback|restored/iu);
+    assert.deepEqual(normalizedOpenClawTrace(fixture), [
+      'gateway status',
+      'config validate',
+      'config patch --dry-run --file <patch>',
+    ]);
+    assert.equal(normalizedOpenClawTrace(fixture).includes('gateway restart'), false);
+    assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-bootstrap-stage-')), []);
+    assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-patch-')), []);
+    assert.equal(`${result.stdout}\n${result.stderr}`.includes('SENSITIVE-FIXTURE-VALUE'), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('does not overwrite a concurrent live config change during legacy bootstrap validation', () => {
+  const fixture = createFixture();
+  try {
+    const legacyConfig = structuredClone(fixture.config);
+    legacyConfig.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8180';
+    write(fixture.configPath, `${JSON.stringify(legacyConfig, null, 2)}\n`);
+
+    const result = runPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-SwitchOpenClaw']),
+      {
+        ...fixture.env,
+        CLAWBOT_TEST_OPENCLAW_REJECT_INVALID_CURRENT: '1',
+        CLAWBOT_TEST_REQUIRE_TEMP_CONFIG: '1',
+        CLAWBOT_TEST_CHANGE_CONFIG_DURING_BOOTSTRAP_VALIDATION: '1',
+      },
+    );
+
+    assertFailed(result, /changed|concurrent|config|switch/iu);
+    const current = JSON.parse(readFileSync(fixture.configPath, 'utf8'));
+    const expectedConcurrent = structuredClone(legacyConfig);
+    expectedConcurrent.unrelatedTopLevel.keep = ['concurrent-validation-change'];
+    assert.deepEqual(current, expectedConcurrent);
+    assert.equal(normalizedOpenClawTrace(fixture).some((line) => line.startsWith('config patch')), false);
+    assert.equal(normalizedOpenClawTrace(fixture).includes('gateway restart'), false);
+    assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-bootstrap-stage-')), []);
+    assert.equal(`${result.stdout}\n${result.stderr}`.includes('SENSITIVE-FIXTURE-VALUE'), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('does not overwrite a config changed during the initial stable snapshot', () => {
+  const fixture = createFixture();
+  try {
+    const legacyConfig = structuredClone(fixture.config);
+    legacyConfig.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8180';
+    write(fixture.configPath, `${JSON.stringify(legacyConfig, null, 2)}\n`);
+
+    const result = runPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-SwitchOpenClaw']),
+      {
+        ...fixture.env,
+        CLAWBOT_TEST_CHANGE_CONFIG_DURING_VERSION_CHECK: '1',
+      },
+    );
+
+    assertFailed(result, /changed|snapshot|backup|verification|config/iu);
+    const expectedConcurrent = structuredClone(legacyConfig);
+    expectedConcurrent.unrelatedTopLevel.keep = ['concurrent-version-check-change'];
+    assert.deepEqual(JSON.parse(readFileSync(fixture.configPath, 'utf8')), expectedConcurrent);
+    assert.deepEqual(normalizedOpenClawTrace(fixture), []);
+    assert.equal(readFileSync(fixture.tracePath, 'utf8').includes('--version'), true);
+    assert.deepEqual(readdirSync(fixture.backups), []);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('redacts staged validation diagnostics and cleans private artifacts before promotion', () => {
+  const fixture = createFixture();
+  try {
+    const legacyConfig = structuredClone(fixture.config);
+    legacyConfig.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8180';
+    write(fixture.configPath, `${JSON.stringify(legacyConfig, null, 2)}\n`);
+    const originalHash = hash(fixture.configPath);
+
+    const result = runPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-SwitchOpenClaw']),
+      {
+        ...fixture.env,
+        CLAWBOT_TEST_OPENCLAW_FAIL_ON: 'config validate',
+        CLAWBOT_TEST_EMIT_SENSITIVE_DIAGNOSTIC: '1',
+      },
+    );
+
+    assertFailed(result, /bootstrap candidate|validation|invalid/iu);
+    const combinedOutput = `${result.stdout}\n${result.stderr}`;
+    for (const marker of [
+      'SENSITIVE-OPENCLAW-DIAGNOSTIC',
+      'SENSITIVE-OPENCLAW-STDERR',
+      'SENSITIVE-OPENCLAW-WARNING',
+      'SENSITIVE-OPENCLAW-INFORMATION',
+      'SENSITIVE-OPENCLAW-CONSOLE-OUT',
+      'SENSITIVE-FIXTURE-VALUE',
+      'fixture-owner',
+    ]) {
+      assert.equal(combinedOutput.includes(marker), false, marker);
+    }
+    assert.equal(hash(fixture.configPath), originalHash);
+    assert.deepEqual(normalizedOpenClawTrace(fixture), ['gateway status', 'config validate']);
+    assert.equal(normalizedOpenClawTrace(fixture).includes('gateway restart'), false);
+    assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-bootstrap-stage-')), []);
+    assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-patch-')), []);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('does not promote over a concurrent live config change after the staged patch', () => {
+  const fixture = createFixture();
+  try {
+    const legacyConfig = structuredClone(fixture.config);
+    legacyConfig.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8180';
+    write(fixture.configPath, `${JSON.stringify(legacyConfig, null, 2)}\n`);
+
+    const result = runPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-SwitchOpenClaw']),
+      {
+        ...fixture.env,
+        CLAWBOT_TEST_OPENCLAW_REJECT_INVALID_CURRENT: '1',
+        CLAWBOT_TEST_REQUIRE_TEMP_CONFIG: '1',
+        CLAWBOT_TEST_CHANGE_CONFIG_AFTER_STAGED_PATCH: '1',
+      },
+    );
+
+    assertFailed(result, /changed|concurrent|promotion|config|switch/iu);
+    const current = JSON.parse(readFileSync(fixture.configPath, 'utf8'));
+    const expectedConcurrent = structuredClone(legacyConfig);
+    expectedConcurrent.unrelatedTopLevel.keep = ['concurrent-staged-patch-change'];
+    assert.deepEqual(current, expectedConcurrent);
+    assert.deepEqual(normalizedOpenClawTrace(fixture), [
+      'gateway status',
+      'config validate',
+      'config patch --dry-run --file <patch>',
+      'config patch --file <patch>',
+    ]);
+    assert.equal(normalizedOpenClawTrace(fixture).includes('gateway restart'), false);
+    assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-bootstrap-stage-')), []);
+    assert.equal(walkFiles(fixture.backups).some((path) => /\.bak(?:\.\d+)?$|\.pre-update$|openclaw\.json\.\d+\.[0-9a-f-]{36}\.tmp$/u.test(path)), false);
+    assert.equal(`${result.stdout}\n${result.stderr}`.includes('SENSITIVE-FIXTURE-VALUE'), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('restores the valid legacy bootstrap baseline after a post-promotion failure', () => {
+  const fixture = createFixture();
+  try {
+    const legacyConfig = structuredClone(fixture.config);
+    legacyConfig.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8180';
+    write(fixture.configPath, `${JSON.stringify(legacyConfig, null, 2)}\n`);
+    const originalHash = hash(fixture.configPath);
+
+    const result = runPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-SwitchOpenClaw']),
+      {
+        ...fixture.env,
+        CLAWBOT_TEST_OPENCLAW_REJECT_INVALID_CURRENT: '1',
+        CLAWBOT_TEST_REQUIRE_TEMP_CONFIG: '1',
+        CLAWBOT_TEST_OPENCLAW_FAIL_ON: 'channels status --probe',
+      },
+    );
+
+    assertFailed(result, /channel|failed|baseline|restored|switch/iu);
+    const restored = JSON.parse(readFileSync(fixture.configPath, 'utf8'));
+    const expectedBaseline = structuredClone(legacyConfig);
+    expectedBaseline.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8888';
+    assert.deepEqual(restored, expectedBaseline);
+    const trace = normalizedOpenClawTrace(fixture);
+    assert.equal(trace.filter((line) => line === 'gateway restart').length, 2);
+    assert.deepEqual(trace.slice(-2), ['gateway restart', 'gateway status']);
+
+    const backupNames = readdirSync(fixture.backups).filter((name) => name.endsWith('.json'));
+    assert.equal(backupNames.length, 2);
+    const originalBackup = backupNames.find((name) => name.startsWith('openclaw-') && !name.startsWith('openclaw-bootstrap-baseline-'));
+    const validBaselineBackup = backupNames.find((name) => name.startsWith('openclaw-bootstrap-baseline-'));
+    assert.ok(originalBackup);
+    assert.ok(validBaselineBackup);
+    assert.equal(hash(join(fixture.backups, originalBackup)), originalHash);
+    assert.deepEqual(JSON.parse(readFileSync(join(fixture.backups, validBaselineBackup), 'utf8')), expectedBaseline);
+    assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-bootstrap-stage-')), []);
+    assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-patch-')), []);
+    assert.equal(walkFiles(fixture.backups).some((path) => /\.bak(?:\.\d+)?$|\.pre-update$|openclaw\.json\.\d+\.[0-9a-f-]{36}\.tmp$/u.test(path)), false);
+    assert.equal(`${result.stdout}\n${result.stderr}`.includes('SENSITIVE-FIXTURE-VALUE'), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('refuses to roll back over a concurrent live config change after legacy promotion', () => {
+  const fixture = createFixture();
+  try {
+    const legacyConfig = structuredClone(fixture.config);
+    legacyConfig.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8180';
+    write(fixture.configPath, `${JSON.stringify(legacyConfig, null, 2)}\n`);
+
+    const result = runPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-SwitchOpenClaw']),
+      {
+        ...fixture.env,
+        CLAWBOT_TEST_OPENCLAW_REJECT_INVALID_CURRENT: '1',
+        CLAWBOT_TEST_REQUIRE_TEMP_CONFIG: '1',
+        CLAWBOT_TEST_OPENCLAW_FAIL_ON: 'channels status --probe',
+        CLAWBOT_TEST_CHANGE_LIVE_BEFORE_OPENCLAW_FAILURE: '1',
+      },
+    );
+
+    assertFailed(result, /changed concurrently|rollback was refused|concurrent/iu);
+    const current = JSON.parse(readFileSync(fixture.configPath, 'utf8'));
+    const expectedReleasePaths = releasePaths(fixture.releasePath);
+    const expectedConcurrent = structuredClone(legacyConfig);
+    expectedConcurrent.unrelatedTopLevel.keep = ['concurrent-post-promotion-change'];
+    expectedConcurrent.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8888';
+    expectedConcurrent.plugins.load.paths = [
+      expectedReleasePaths.bookkeeping,
+      expectedReleasePaths.stable,
+      fixture.config.plugins.load.paths[2],
+    ];
+    expectedConcurrent.agents.entries.bookkeeper.workspace = expectedReleasePaths.workspace;
+    assert.deepEqual(current, expectedConcurrent);
+    assert.equal(normalizedOpenClawTrace(fixture).filter((line) => line === 'gateway restart').length, 1);
+    assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-bootstrap-stage-')), []);
+    assert.equal(`${result.stdout}\n${result.stderr}`.includes('SENSITIVE-FIXTURE-VALUE'), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('refuses a concurrent live config change while legacy rollback is being prepared', () => {
+  const fixture = createFixture();
+  try {
+    const legacyConfig = structuredClone(fixture.config);
+    legacyConfig.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8180';
+    write(fixture.configPath, `${JSON.stringify(legacyConfig, null, 2)}\n`);
+
+    const result = runPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-SwitchOpenClaw']),
+      {
+        ...fixture.env,
+        CLAWBOT_TEST_OPENCLAW_FAIL_ON: 'channels status --probe',
+        CLAWBOT_TEST_CHANGE_CONFIG_DURING_ROLLBACK_PREP: '1',
+      },
+    );
+
+    assertFailed(result, /changed while rollback|rollback was refused|concurrent/iu);
+    const expectedConcurrent = structuredClone(legacyConfig);
+    const expectedReleasePaths = releasePaths(fixture.releasePath);
+    expectedConcurrent.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8888';
+    expectedConcurrent.plugins.load.paths = [
+      expectedReleasePaths.bookkeeping,
+      expectedReleasePaths.stable,
+      fixture.config.plugins.load.paths[2],
+    ];
+    expectedConcurrent.agents.entries.bookkeeper.workspace = expectedReleasePaths.workspace;
+    expectedConcurrent.unrelatedTopLevel.keep = ['concurrent-rollback-preparation-change'];
+    assert.deepEqual(JSON.parse(readFileSync(fixture.configPath, 'utf8')), expectedConcurrent);
+    assert.equal(normalizedOpenClawTrace(fixture).filter((line) => line === 'gateway restart').length, 1);
+    assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-bootstrap-stage-')), []);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('refuses rollback when the live config is deleted during legacy rollback preparation', () => {
+  const fixture = createFixture();
+  try {
+    const legacyConfig = structuredClone(fixture.config);
+    legacyConfig.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8180';
+    write(fixture.configPath, `${JSON.stringify(legacyConfig, null, 2)}\n`);
+
+    const result = runPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-SwitchOpenClaw']),
+      {
+        ...fixture.env,
+        CLAWBOT_TEST_OPENCLAW_FAIL_ON: 'channels status --probe',
+        CLAWBOT_TEST_DELETE_CONFIG_DURING_ROLLBACK_PREP: '1',
+      },
+    );
+
+    assertFailed(result, /changed while rollback|atomic replacement|rollback was refused|destination changed/iu);
+    assert.equal(existsSync(fixture.configPath), false);
+    assert.equal(normalizedOpenClawTrace(fixture).filter((line) => line === 'gateway restart').length, 1);
+    assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-bootstrap-stage-')), []);
+    assert.deepEqual(readdirSync(dirname(fixture.configPath)).filter((name) => name.startsWith('.openclaw-rollback-')), []);
+    assert.equal(`${result.stdout}\n${result.stderr}`.includes('SENSITIVE-FIXTURE-VALUE'), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('refuses to roll back a normal release switch over a concurrent live config change', () => {
+  const fixture = createFixture();
+  try {
+    const result = runPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-SwitchOpenClaw']),
+      {
+        ...fixture.env,
+        CLAWBOT_TEST_OPENCLAW_FAIL_ON: 'channels status --probe',
+        CLAWBOT_TEST_CHANGE_LIVE_BEFORE_OPENCLAW_FAILURE: '1',
+      },
+    );
+
+    assertFailed(result, /changed concurrently|rollback was refused|concurrent/iu);
+    const expectedConcurrent = structuredClone(fixture.config);
+    const expectedReleasePaths = releasePaths(fixture.releasePath);
+    expectedConcurrent.plugins.load.paths = [
+      expectedReleasePaths.bookkeeping,
+      expectedReleasePaths.stable,
+      fixture.config.plugins.load.paths[2],
+    ];
+    expectedConcurrent.agents.entries.bookkeeper.workspace = expectedReleasePaths.workspace;
+    expectedConcurrent.unrelatedTopLevel.keep = ['concurrent-post-promotion-change'];
+    assert.deepEqual(JSON.parse(readFileSync(fixture.configPath, 'utf8')), expectedConcurrent);
+    assert.equal(normalizedOpenClawTrace(fixture).filter((line) => line === 'gateway restart').length, 1);
+    assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-patch-')), []);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('rejects non-exact legacy bookkeeping origins before touching OpenClaw', () => {
+  const fixture = createFixture();
+  try {
+    assertSucceeded(runPowerShell(publishScript, publishArguments(fixture, ['-ReleaseOnly']), fixture.env));
+    const backupsBefore = readdirSync(fixture.backups);
+    for (const serverBaseUrl of [
+      null,
+      8180,
+      {},
+      [],
+      'http://localhost:8180',
+      'http://127.0.0.1:18888',
+      'https://127.0.0.1:8180',
+      'HTTP://127.0.0.1:8180',
+      ' http://127.0.0.1:8180',
+      'http://127.0.0.1:8180 ',
+      'http://user@127.0.0.1:8180',
+      'http://127.0.0.1:8180/',
+      'http://127.0.0.1:8180/path',
+      'http://127.0.0.1:8180?query=1',
+      'http://127.0.0.1:8180#fragment',
+      'http://192.0.2.1:8180',
+      'http://127.0.0.1:8888/',
+    ]) {
+      const invalidConfig = structuredClone(fixture.config);
+      invalidConfig.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = serverBaseUrl;
+      write(fixture.configPath, `${JSON.stringify(invalidConfig, null, 2)}\n`);
+      rmSync(fixture.tracePath, { force: true });
+
+      const result = runPowerShell(
+        publishScript,
+        publishArguments(fixture, ['-ExistingReleasePath', fixture.releasePath, '-SwitchOpenClaw']),
+        fixture.env,
+      );
+      assertFailed(result, /approved|exact|loopback|origin|migration/iu);
+      assert.deepEqual(normalizedOpenClawTrace(fixture), []);
+      assert.deepEqual(JSON.parse(readFileSync(fixture.configPath, 'utf8')), invalidConfig);
+      assert.deepEqual(readdirSync(fixture.backups), backupsBefore);
+    }
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('rejects the legacy port when OpenClaw already loads a release', () => {
+  const fixture = createFixture();
+  try {
+    assertSucceeded(runPowerShell(publishScript, publishArguments(fixture, ['-ReleaseOnly']), fixture.env));
+    const releaseConfig = structuredClone(fixture.config);
+    const existingReleasePaths = releasePaths(fixture.releasePath);
+    releaseConfig.plugins.load.paths = [
+      existingReleasePaths.bookkeeping,
+      existingReleasePaths.stable,
+      fixture.config.plugins.load.paths[2],
+    ];
+    releaseConfig.agents.entries.bookkeeper.workspace = existingReleasePaths.workspace;
+    releaseConfig.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8180';
+    write(fixture.configPath, `${JSON.stringify(releaseConfig, null, 2)}\n`);
+
+    const result = runPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-ExistingReleasePath', fixture.releasePath, '-SwitchOpenClaw']),
+      fixture.env,
+    );
+    assertFailed(result, /legacy|repository|source|bootstrap/iu);
+    assert.deepEqual(normalizedOpenClawTrace(fixture), []);
+    assert.deepEqual(JSON.parse(readFileSync(fixture.configPath, 'utf8')), releaseConfig);
+    assert.deepEqual(readdirSync(fixture.backups), []);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('rejects cross-volume legacy staging before creating private artifacts', () => {
+  const fixture = createFixture();
+  try {
+    assertSucceeded(runPowerShell(publishScript, publishArguments(fixture, ['-ReleaseOnly']), fixture.env));
+    const legacyConfig = structuredClone(fixture.config);
+    legacyConfig.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8180';
+    write(fixture.configPath, `${JSON.stringify(legacyConfig, null, 2)}\n`);
+    const currentDrive = fixture.root.slice(0, 2).toUpperCase();
+    const otherDrive = currentDrive === 'Z:' ? 'Y:' : 'Z:';
+    const crossVolumeBackups = `${otherDrive}\\clawbot-cross-volume-${process.pid}-${Date.now()}`;
+    assert.equal(existsSync(crossVolumeBackups), false);
+    fixture.backups = crossVolumeBackups;
+
+    const result = runPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-ExistingReleasePath', fixture.releasePath, '-SwitchOpenClaw']),
+      fixture.env,
+    );
+
+    assertFailed(result, /same volume|atomic promotion|staging/iu);
+    assert.deepEqual(normalizedOpenClawTrace(fixture), []);
+    assert.deepEqual(JSON.parse(readFileSync(fixture.configPath, 'utf8')), legacyConfig);
+    assert.equal(existsSync(crossVolumeBackups), false);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
