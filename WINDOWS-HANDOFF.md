@@ -2,21 +2,26 @@
 
 更新于 2026-09-05，时区 `Asia/Singapore`。这是 Windows 接手、恢复和验收的第一入口。仓库描述发布契约；任何“正在运行”结论都必须在当前主机重新探测，并以 `docs/ledger-cloudflare-runbook.md` 的完整矩阵闭环。
 
-## 2026-09-05 续接点：重启与微信实测通过，平台重放待验证
+## 2026-09-05 续接点：旧回执修复已部署，双消息微信验收待完成
 
-完整、脱敏的续接上下文见 [`docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md`](docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)。下一轮开发助手可使用 GPT-6；这不改变生产 `bookkeeper` 的运行模型，后者继续固定为 `gpt-5.6-sol` 与官方 Codex harness。
+本次故障、修复及待办见 [微信旧回执修复交接](docs/handoffs/2026-09-05-wechat-stale-reply-repair.md)；此前 Tunnel、重启和验收证据见 [GPT-6 续接点](docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)。生产 `bookkeeper` 继续固定为 `gpt-5.6-sol` 与官方 Codex harness。
 
-- 用户已明确授权全量 neat、推送、提 PR、合并 `main`、清理无用分支及同步远近端。整合前 `main` 与 `fix/clear-expense-intent` 同为 `93543ab`；该修复与 Ledger 分支无冲突整合，必需祖先与独立修复保留。合并后从同步的 `main` 维护；删除旧分支/worktree 前必须核对无独有提交、未提交文件、运行依赖或活动任务，不得 reset、rebase 或丢弃工作。
-- 正式 `127.0.0.1:8888`、隔离测试 `127.0.0.1:18888`、immutable OpenClaw release、受控 Tunnel、Ledger DNS 与五条规则已部署。本机 14/14 通过；续接先只读复核，保留既有资源。
+- 用户已明确授权全量 neat、推送、提 PR、合并 `main`、清理无用分支及同步远近端。删除旧分支/worktree 前必须核对无独有提交、未提交文件、运行依赖或活动任务，不得 reset、rebase 或丢弃工作。Git 合并不切换生产代码。
+- 两次新微信消息重复收到上一笔回执，已确认运行中的旧 release `1cf2f739ca92898feed5f24372e9a407ced34b0a` 未部署 `93543ab` 的新可信消息优先修复。新增 `c5e2e25` 拒绝多候选和错误确认决定触发的旧成功回执回退，回复回归 516/516 通过；`48225a1` 仅修正测试中的 Windows CRLF 兼容。
+- `0e7c2d7f1f0369552d17d054e2ef24b75be7a482` 包含 managed `session-memory` 保护，完整 `npm test` 退出码为 0，独立 hook 测试 14/14。新 release 已发布且 verifier 通过，现已返回 `OPENCLAW_RELEASE_SWITCHED`、退出码 0；脚本中的 Gateway/channel/plugin/Codex/model 检查通过。切换后 workspace 和两条 plugin 路径均为新 release，正式 `8888` 的 loopback、唯一 owner、程序与配置正确，Gateway loopback 恢复。修正仓库 `.ps1` 的 CRLF/LF 约定后，严格本机重验 14/14 全部通过、退出码 0；已部署 Tunnel 脚本未变，verifier 未放宽。
+- 旧 release 的 PS 5.1 全量 verifier 已返回 `ROLLBACK_RELEASE_VERIFIED`、退出码 0，保留用于回滚。同次维护在切换前运行了带 `ApiTokenPath` 与 `ComparePortfolioBaseline` 的公网验收，返回 `LEDGER_PUBLIC_ACCEPTANCE_OK`；本次没有额外重跑限速验证。两条全新微信消息的现场验收尚未完成，不能据此宣称全部上线通过。
+- managed hook 三个文件已安装，direct import 验证通过；Gateway 启动 INFO 的实际 `loadedCount=1`，配置与 eligibility 均为 1 且唯一条目为 managed `session-memory`，loader 失败数为 0，已证明运行注册成功。只跳过 `context.agentId === 'bookkeeper'`；`main` 及其他代理保持官方处理。官方上游固定 OpenClaw 2026.8.2 与 handler/descriptor 双 SHA-256，升级时须先审核再更新 pin。
+- 旧 workspace 的四个 memory 文件已迁至仓库外受限归档，迁出前后哈希 4/4 一致；未读取正文，未删除文件。修复与代码切换不改账、不补账、不重放此前业务消息。已在本机内存建立账户/分类/交易三哈希基线并确认本次测试标记不存在；双消息验收使用现有微信会话，不先 reset，完成后只清理精确识别的验收记录并复核基线。
+- 正式 `127.0.0.1:8888`、隔离测试 `127.0.0.1:18888`、immutable OpenClaw release、受控 Tunnel、Ledger DNS 与五条规则已部署，此前本机验收 14/14 通过；续接先只读复核，保留既有资源。
 - 正式网页登录及一次性记录的新增、显示、修改、删除已完成；仅删除已知验收记录，账户/分类/交易三个规范化哈希全部恢复基线。凭据未写入本地文件。
 - pre-HSTS 闸门通过后，仅给现有 Ledger header rule 添加 `Strict-Transport-Security: max-age=86400`，无 `includeSubDomains` 或 `preload`。随后完整公网限速/token/缓存/安全头、作品集回归和 Cloudflare 只读 22/22 通过。
 - `ServiceCycle` 与恢复验证通过，包括 origin 停止及错误端口 owner 时 Tunnel 失败关闭。用户已执行真实 Windows 重启，启动时间严格晚于 owner-only `ledger-reboot-v1.json` 基线；12:56 UTC 的 `VerifyPostReboot` 完整通过，本机、公网、作品集和 OpenClaw 均恢复。原基线保留，不要覆盖。
-- 整合提交 `bedefb0` 的完整测试 513/513、stable-ID build 与 3/3、15 个 PowerShell 5.1 脚本解析全部通过；整合树经独立代码审查，无冲突且生产端口仍为 `8888`。实现修复、脱敏证据路径与余下步骤集中记录在续接文档。
-- 微信新消息已确认对应恰好一笔金额/分类正确的交易，用户现场确认只收到一条完整回执；只读持久状态审计确认稳定消息 ID、可信队列领取、created 去重状态和 API 交易对应。用户确认 HTTP 标记筛选汇总正确，查询前后三个哈希不变；只删除已知测试记录后，三个哈希均恢复原基线。
+- 此前整合提交 `bedefb0` 的完整测试 513/513、stable-ID build 与 3/3、15 个 PowerShell 5.1 脚本解析全部通过；这些历史结果不能替代本次修复后的现场验收。
+- 此前单条微信记账与 HTTP 标记筛选汇总验收通过，只删除已知测试记录后三个哈希恢复原基线；本次故障说明单条测试不足以覆盖跨轮旧回执问题，须补充连续两条新消息验收。
 - 项目目前没有真实平台同 message ID 重放入口，该项仍需独立真实证据；重复发送同正文、插件合成测试、单条 created 去重状态均不能代替。回复条数来自用户现场观察，不能把已删除的待回复状态当作发送次数证据。MCP 仍关闭，不是本轮默认启用步骤。
 - 根目录可能存在被 Git 忽略的 `testAccountInfo.txt`。不得读取到终端输出、模型上下文或 Git；它只可由不回显的本机流程用于 `18888` 测试登录，不能代替正式网页登录凭据。
 
-PR 合并与清理完成以联网核对本地 `main`、upstream、远端 `main` 一致，目标提交均在其历史中且工作区干净为准。Git 整合不发布新运行版本；生产仍加载 `D:\Clawbot\releases\1cf2f739ca92898feed5f24372e9a407ced34b0a`。当前仍缺真实平台重放证据，不能报告全部上线完成。实时状态可能在会话间漂移，新会话先按续接文档执行只读核验。
+PR 合并与清理完成以联网核对本地 `main`、upstream、远端 `main` 一致，目标提交均在其历史中且工作区干净为准。新会话先按本次修复交接只读核验 active release、hook 注册和服务状态；测试通过不等于微信现场验收通过。当前双新消息验收仍待用户对第一条的回应，真实平台重放缺口保留。
 
 ## 不变边界
 
