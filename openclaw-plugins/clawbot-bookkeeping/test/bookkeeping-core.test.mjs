@@ -443,6 +443,7 @@ for (const [label, content, amount] of [
   ['merchant purchase details', 'NTUC购物8.25，买了两根芹菜，一个菜板', '8.25'],
   ['additive shorthand', '食阁吃饭6.5+2.5', '9'],
   ['spoken additive amount', '昨天中午在食阁吃饭，花了6块5加两块五', '9'],
+  ['spoken yuan-jiao-fen amount', 'Shopee买了一根HDMI线，3块3毛6', '3.36'],
   ['explicit compound expense clause', '午饭7.2，顺便查本月支出', '7.2'],
   ['example wording inside a later note', '午饭7.2，备注例如鸡饭', '7.2'],
   ['conditional wording inside an attached note', '午饭7.2备注如果好吃再来', '7.2'],

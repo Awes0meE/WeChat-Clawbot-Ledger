@@ -93,6 +93,17 @@ type ToolExecutionContext = {
   requesterSenderId?: string;
 };
 
+type ToolCallSlot = {
+  runKey: string;
+  toolName: string;
+  sessionKey?: string;
+  requesterConversationKey?: string;
+  conflictingRunKeys?: Set<string>;
+  inbound?: InboundMessage;
+  ambiguous: boolean;
+  touchedAt: number;
+};
+
 type RecordExpenseResult = {
   status: 'created' | 'duplicate';
   dedupeStatus?: 'unconfirmed';
@@ -348,16 +359,7 @@ export default definePluginEntry({
       response: AuthoritativeToolResponse;
       touchedAt: number;
     }>();
-    const toolCallSlots = new Map<string, {
-      runKey: string;
-      toolName: string;
-      sessionKey?: string;
-      requesterConversationKey?: string;
-      conflictingRunKeys?: Set<string>;
-      inbound?: InboundMessage;
-      ambiguous: boolean;
-      touchedAt: number;
-    }>();
+    const toolCallSlots = new Map<string, ToolCallSlot>();
     const pruneExpiredToolCallSlots = (now = Date.now()) => {
       for (const [toolCallKey, slot] of toolCallSlots) {
         if (now - slot.touchedAt > TOOL_CALL_SLOT_RETENTION_MS) {
@@ -847,6 +849,7 @@ export default definePluginEntry({
         delete slot.inbound;
       }
       let recoveredByExecutionContext = false;
+      let deferredCachedRecovery: [string, ToolCallSlot] | undefined;
       if (!slot && toolContext.senderIsOwner === true) {
         const executionConversationKey = trustedConversationKey({
           sessionKey: toolContext.sessionKey,
@@ -879,8 +882,12 @@ export default definePluginEntry({
           if (recoveryCandidates.length > 0) {
             const selected = recoveryCandidates.find(([, candidate]) => Boolean(candidate.inbound))
               ?? recoveryCandidates[0];
-            [resolvedToolCallKey, slot] = selected;
-            recoveredByExecutionContext = true;
+            if (selected[1].inbound) {
+              [resolvedToolCallKey, slot] = selected;
+              recoveredByExecutionContext = true;
+            } else {
+              deferredCachedRecovery = selected;
+            }
           }
         }
       }
@@ -933,6 +940,10 @@ export default definePluginEntry({
           });
           recoveredByDurableBridge = true;
         }
+      }
+      if (!slot && deferredCachedRecovery) {
+        [resolvedToolCallKey, slot] = deferredCachedRecovery;
+        recoveredByExecutionContext = true;
       }
       const inbound = slot?.ambiguous === false ? slot.inbound : undefined;
       const cachedResponse = slot?.ambiguous === false
