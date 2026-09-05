@@ -15,10 +15,10 @@
 
 ## Git 与保密边界
 
-- 继续使用 `feat/secure-ledger-tunnel`；已确认历史包含 `c59da14`、`fc7c4ec`、原交接提交 `65c24c4`。
-- 用户后续已授权全局 neat、同步远近端和清理工作区，覆盖原先“不推送”限制，范围为当前功能分支。同步后必须联网核对本地 HEAD、upstream 与远端 HEAD 相同；不能只凭 remote-tracking ref 声称同步完成。
-- 本轮联网 fetch 后，本地 `main` 与 `origin/main` 均为 `93543ab`，它有功能分支尚未包含的独立修复。用户尚未授权合并 `main`；不得 merge、reset、rebase、覆盖或丢弃现有工作。
-- 不触碰相邻 `fix/clear-expense-intent` worktree 的文件、暂存区、提交、运行时或配置。清洁工作区不等于删除 ignored 数据或其他 worktree。
+- Ledger 开发历史包含 `c59da14`、`fc7c4ec`、原交接提交 `65c24c4`。完成 PR 整合后从联网同步的 `main` 维护，无需重新创建 `feat/secure-ledger-tunnel`。
+- 用户最新授权为全量 neat、推送、提 PR、合并 `main`、清理无用分支并同步远近端，取代原先功能分支限定。完成时必须联网核对本地 `main`、upstream 与远端 `main` 相同，并验证 PR 合并状态；不能只凭 remote-tracking ref 声称同步完成。
+- 整合前本地/远端 `main` 与 `fix/clear-expense-intent` 同为 `93543ab`，该修复已在 `main`，与 Ledger 分支无冲突整合。保留中文金额解析、新可信消息优先及历史去重保护；不得 reset、rebase、覆盖或丢弃现有工作。
+- 旧 `fix/clear-expense-intent` worktree 和已合并分支只在再次确认无独有提交、未提交文件、运行依赖或活动任务后清理。根目录 ignored 私密文件、运行数据与其他无关内容继续保留。
 - 根目录 `testAccountInfo.txt` 仅验证了存在且被 Git 忽略，未读取。继续只允许这两项检查，不得放入模型上下文、暂存、提交或上传。
 - 不输出、记录或上传账户、密码、token、身份、SQLite、交易正文、响应正文或日志。正式网页登录已按用户明确授权完成，凭据未另存为本地文件；不要复述或再使用聊天中的凭据。
 
@@ -30,7 +30,8 @@
 | `02ce2c8` | 修复 PowerShell 任务参数数组拼接产生额外空格的问题，保留精确任务身份比较；6/6 与真实任务只读匹配通过。 |
 | `98c7fe8` | 修复同类 Tunnel child 命令数组问题；55/55、独立审查及实际子进程精确匹配通过。 |
 | `aee5126` | 每个 supervisor fixture 使用独立合成 Local mutex，避免占用生产 mutex；同 fixture 各副本保持同 mutex 和字节一致，保留真实跨进程互斥；TDD、3/3 与独立审查通过。 |
-| `37b5fbf` | 整理 tracked-only 私密文件验证及可选 MCP 流程；运行代码与上述修复一致。最新完整回归见下表。 |
+| `37b5fbf` | 整理 tracked-only 私密文件验证及可选 MCP 流程；当时完整回归 511/511。 |
+| `bedefb0` | 无冲突整合 `main` 中的 `93543ab`：保留中文金额解析、新可信消息优先与缓存恢复边界，以及 Ledger 的 `8888` 默认端口。独立审查与完整回归通过；未切换生产 release。 |
 
 原 `400/200020` 阻塞已经解决，不要重复实现或放宽为任意 `400`。其语义依据是 ezBookkeeping v1.6.1 的 [API token IP middleware](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/middlewares/api_token_ip_limit.go)、[全局错误定义](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/errs/global.go) 和 [错误码公式](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/errs/error.go)。TRACE `405` 也须与精确 Cloudflare WAF readback 联合作证，不能单独推断 WAF 命中。
 
@@ -42,7 +43,7 @@ Tunnel 使用本机 `D:\Clawbot\cloudflared\ledger.yml`，真实 UUID、credenti
 
 | 验收项 | 最新已完成证据 |
 | --- | --- |
-| 自动化 | `37b5fbf` 完整 bookkeeping 511/511，失败/跳过/取消均 0，250.69 秒；stable-ID build 成功与 3/3；15 个 Windows PowerShell 5.1 脚本解析通过，编译产物无变化。 |
+| 自动化 | `bedefb0` 整合树完整 bookkeeping 513/513，失败/跳过/取消均 0，231.65 秒；stable-ID build 成功与 3/3；15 个 Windows PowerShell 5.1 脚本解析通过，编译产物无变化。后续文档整理未改变运行代码。 |
 | 本机/release | PS 5.1 本机 14/14、immutable manifest/hash/ACL 通过；ServiceCycle 和 CapturePreReboot 又通过完整本机、公网与 OpenClaw 探测。PS 7 的旧静态 ACL API 假失败不能替代 PS 5.1 结果。 |
 | 正式浏览器 | 正式登录后创建唯一标记的一次性记录，确认显示与精确一次写入，再修改、删除；只清理该已知记录。账户/分类/交易三个规范化哈希全部恢复基线，未恢复数据库。 |
 | HSTS | pre-HSTS 与浏览器闸门通过后，对现有 header rule 执行一次 PATCH，仅添加 `Strict-Transport-Security: max-age=86400`；无 `includeSubDomains`/`preload`，其余四个 header 和规则字段保持。 |
@@ -52,7 +53,7 @@ Tunnel 使用本机 `D:\Clawbot\cloudflared\ledger.yml`，真实 UUID、credenti
 | 真实重启 | 用户执行 Windows 重启；实际 boot 时间严格晚于原 `ledger-reboot-v1.json` 的 boot/capture 时间。WhatIf 后，12:56 UTC 完整 `VerifyPostReboot` 返回 `LEDGER_REBOOT_ACCEPTANCE_OK` 且退出码 0，本机/发布包/公网/作品集/OpenClaw 检查通过。基线保留不覆盖。 |
 | 微信写入/回执 | 用户只发送一条新的测试消息并现场确认只收到一条完整回执；后台精确标记对应一笔金额、分类、时间正确的交易。只读 SQLite 审计 7/7 通过：created 状态、稳定消息 ID、clientSession 绑定、可信队列领取与 API 交易对应；私密字段只在本机内存处理。 |
 | 微信汇总/清理 | 用户确认按唯一标记筛选的 HTTP 汇总正确，本机同范围结果一致，查询前后三个规范化哈希不变。复核交易 ID、标记与内容哈希后只删除该已知记录，标记消失，账户/分类/交易三个哈希全部恢复测试前基线。 |
-| 发布前扫描 | 既有 41 个提交、172 个不同 blob 与提交说明已扫描，最终四份文档增量也通过，随后同步至 `457d758`。本次重启后再次联网确认本地/上游/远端相同、工作区干净、main 未变。后续文档仍须增量检查再提交。远端仓库为 private，未配置 GitHub workflows；不得声称远端 CI 已通过。 |
+| Git 检查 | 既有 `457d758` 功能分支同步与秘密扫描属于历史检查。本次整合另按实际待发布树完整扫描 tracked 文件、测试/示例及提交说明，文档修改须增量检查后提交；PR 合并状态、最终 main 与分支清理须联网回读确认。远端仓库为 private，未配置 GitHub workflows；不得声称远端 CI 已通过。 |
 
 仓库外证据目录为 `D:\Clawbot\deployment-evidence`，下列证据文件已核验为 owner-only，只含哈希、时间与脱敏检查结果：
 
@@ -77,5 +78,5 @@ Tunnel 使用本机 `D:\Clawbot\cloudflared\ledger.yml`，真实 UUID、credenti
 2. 平台级同 message ID 重放仍缺真实入口与证据。当前代码保留稳定腾讯 ID 并有插件层合成重放测试，但 monitor/API/命令没有真实 replay 入口；不得重置游标、伪造可信 hooks、直接调用入站处理器或把同正文的新消息当作平台重放。
 3. 持久去重表的一条 created 记录及单条交易只能证明当前结果与可信关联，不能证明平台确实投递过两次或历史 POST 次数。待回复记录在发送成功与过期清理时都会删除，且没有发送计数字段；本轮的单条回执结论来自用户现场观察。
 4. 有了安全、可核验的真实平台重放能力后，再针对已确认消息取得重复投递及不增写证据；当前只保留此缺口，不为凑齐验收改写生产消息队列或扩大工具权限。
-5. 继续按运维手册证据矩阵核验当前状态；任何新代码修改须 TDD、相关回归和独立提交。无新代码、失败或未解决疑虑时不重复全套测试。用户尚未授权合并 main；功能分支同步仍须完整检查及联网核对。
+5. 继续按运维手册证据矩阵核验当前状态；任何新代码修改须 TDD、相关回归和独立提交。无新代码、失败或未解决疑虑时不重复全套测试。本次 Git 整合不切换生产 release，不能据此宣称微信已加载 `93543ab` 的修复；后续发布须独立验证与显式切换。
 6. 所有必需真实证据闭环后，才把未完成状态改为完成。当前可报告网页与微信日常功能实测通过，并明确平台重放尚未验证。

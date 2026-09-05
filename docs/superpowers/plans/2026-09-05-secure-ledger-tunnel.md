@@ -1,6 +1,6 @@
 # Secure Ledger Tunnel Implementation Plan
 
-> **2026-09-05 progress:** Tasks 1–3 and the Task 4 code/operations body are committed. Live deployment has reached the guarded Tunnel, Ledger-only rules, DNS, and local acceptance, but final acceptance is incomplete. Continue only from the [dated GPT-6 handoff](../../handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md); do not recreate or overwrite existing local or Cloudflare resources. Historical checkboxes below remain the original implementation plan and are not a live progress tracker.
+> **2026-09-05 progress:** Implementation, browser CRUD, public security, portfolio checks, service recovery, a real Windows reboot, and live WeChat write/HTTP summary/cleanup checks have passed. Real platform replay of the same message ID still lacks a safe trigger and evidence. Continue from the [dated GPT-6 handoff](../../handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md); do not recreate existing local or Cloudflare resources. The user's later authorization covers push, PR merge into main, and verified redundant-branch cleanup, superseding this plan's original no-push/no-main constraint. Git integration does not switch the production release. Historical checkboxes below remain the original implementation plan and are not a live progress tracker.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkboxes (`- [ ]`) for tracking.
 

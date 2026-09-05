@@ -38,7 +38,7 @@ D:\Clawbot\deployment-evidence\            仅脱敏状态、时间和哈希
 
 ## 上线前门禁
 
-1. 当前分支必须包含设计基准 `c59da14`，工作分支为 `feat/secure-ledger-tunnel`。
+1. 当前分支必须包含设计基准 `c59da14` 及已整合修复。日常维护从联网同步的 `main` 建立语义命名的工作分支；已完成的 `feat/secure-ledger-tunnel` 不需要永久保留。发布必须使用经过验证的干净提交。
 2. 全部 Node 测试、stable-ID build/test、PowerShell 5.1 语法测试和 `git diff --check` 通过。
 3. 仓库扫描没有真实 token、身份、SQLite、日志或交易内容。
 4. `8888` 和 `18888` 尚未被未知程序占用；绝不自动终止未知进程。
@@ -203,6 +203,7 @@ $approvedCloudflaredSha256 = '<64_HEX_FROM_SEPARATELY_VERIFIED_OFFICIAL_RELEASE_
 $actualCloudflaredSha256 = (Get-FileHash -LiteralPath 'D:\Clawbot\cloudflared\cloudflared.exe' -Algorithm SHA256).Hash
 if ($actualCloudflaredSha256 -cne $approvedCloudflaredSha256) { throw 'Downloaded cloudflared does not match the separately approved checksum.' }
 .\scripts\install-ledger-tunnel-task.ps1 `
+  -TunnelConfigPath 'D:\Clawbot\cloudflared\ledger.yml' `
   -CredentialPath 'D:\Clawbot\cloudflared\<LOCAL_TUNNEL_UUID>.json' `
   -ExpectedCloudflaredSha256 $approvedCloudflaredSha256 `
   -StartAfterInstall `
@@ -342,6 +343,14 @@ proxied CNAME 在公网 DNS 中会 flatten，因此不用公网 `resolveCname(le
 `ServiceCycle` 不等于机器重启。真实 Windows 重启验收必须分成两次独立运行，且证据文件不得覆盖：
 
 ```powershell
+# 每次新会话先重新核验 release 与官方 checksum；这里的值不随 Git 合并自动更新。
+$restartArguments = @{
+  ReleasePath = 'D:\Clawbot\releases\<VERIFIED_RELEASE_COMMIT>'
+  PortfolioBaselinePath = 'D:\Clawbot\deployment-evidence\portfolio-before-v2.json'
+  ExpectedCloudflaredSha256 = '<64_HEX_FROM_SEPARATELY_VERIFIED_OFFICIAL_RELEASE_CHECKSUM>'
+  ApiTokenPath = "$env:USERPROFILE\.openclaw\secrets\ezbookkeeping-token.txt"
+}
+
 # 重启前：在仓库/OneDrive 外创建 owner-only 基线，记录 LastBootUpTime
 .\scripts\test-ledger-restart.ps1 @restartArguments `
   -Phase CapturePreReboot `
@@ -370,7 +379,7 @@ proxied CNAME 在公网 DNS 中会 flatten，因此不用公网 `resolveCname(le
 | 重启 | task 恢复、origin 失效即 fail closed、错误 owner 不启动、无未知进程被停止 |
 | WeChat | 新消息恰好一次写入/回复、重复不增写、支持的 HTTP 汇总正确、已知验收数据被删除；MCP 已激活时再验证历史查询 |
 | 作品集 | apex/`www` DNS、redirect、TLS、route 与 fingerprint 全部不变 |
-| Git | 分支提交完整且工作区干净；无秘密/数据；按用户当前授权记录同步范围；功能分支推送后联网核对本地与远端 HEAD；未另获明确许可不得合并 `main` |
+| Git | 分支提交完整且工作区干净；无秘密/数据；按用户当前授权经 PR 合并后，联网核对本地/upstream/远端 `main` 一致及祖先完整性；只清理经核验无独有内容和运行依赖的分支/worktree；Git 合并不等于生产 release 切换 |
 
 任一行没有真实证据，就不能报告完成。
 

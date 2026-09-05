@@ -36,6 +36,8 @@ Browser -> https://ledger.66ccff-labs.com -> Cloudflare Tunnel
 
 当前 Ledger 网页已通过正式登录、一次性记录的新增/修改/删除、HSTS 后公网安全与作品集回归，以及服务重启和失败关闭验收。2026-09-05 真实 Windows 重启后的完整恢复、Cloudflare 核验、微信记账与 HTTP 汇总实测均已通过，测试记录已清理且三个数据哈希恢复基线。平台重复投递同一消息的真实验证仍缺触发入口，全部上线验收尚未闭环。新的开发会话必须先阅读 [2026-09-05 GPT-6 续接点](docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)，从既有 Tunnel、DNS、规则和证据继续。
 
+日常源码维护以同步后的 `main` 为基线。本次整合保留 `93543ab` 的中文金额解析与新可信消息优先修复；Git 合并不切换生产代码。当前生产仍加载 `D:\Clawbot\releases\1cf2f739ca92898feed5f24372e9a407ced34b0a`，后续发布须另按运维手册创建、验证并显式切换 immutable release，不能由 `main` 的内容推断微信已加载全部新修复。
+
 ## 助理行为
 
 ### 写入支出

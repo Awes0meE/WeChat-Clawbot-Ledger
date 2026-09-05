@@ -115,20 +115,24 @@ ezBookkeeping 正式目录为 `D:\Clawbot\ezbookkeeping`，配置文件为 `D:\C
 
 测试目录 `D:\Clawbot\ezbookkeeping-test` 只白名单复制程序资产，使用 `18888`、独立 config/storage/log/secret/token/SQLite 和受控 marker；不得复制正式数据。初始化密码只在 visible terminal 以 `Read-Host -AsSecureString` 输入。
 
-先用 `-WhatIf` 预演；预演不得修改配置、计划任务、服务或 token，也不会询问密码：
+已部署主机的续接先按 [活动交接点](handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md) 只读核对，不重跑安装或初始化。以下为不同安装状态的独立入口，先用 `-WhatIf` 预演；预演不得修改配置、计划任务、服务或 token，也不会询问密码。
+
+首次安装且没有同名任务时，在程序与显式配置已经就绪后创建正式任务；预演核对无误后才去掉 `-WhatIf`：
 
 ```powershell
 .\scripts\install-ezbookkeeping-task.ps1 -WhatIf
-.\scripts\install-ledger-test-instance.ps1 -WhatIf
+```
+
+已有旧 `8180` / `server run` 任务时，直接使用迁移入口识别、备份并转换旧任务。不要先调用只接受显式配置动作的任务安装器；预演核对通过后，用同一参数去掉 `-WhatIf` 执行迁移。脚本在实际转换前创建并校验备份，`-WhatIf` 不创建备份：
+
+```powershell
 .\scripts\migrate-ledger-production.ps1 -WhatIf
 ```
 
-实际安装及配置：
+隔离测试实例单独安装；核对独立目录与状态后去掉 `-WhatIf`，再按运维手册进行交互初始化：
 
 ```powershell
-.\scripts\install-ezbookkeeping-task.ps1
-.\scripts\install-ledger-test-instance.ps1
-.\scripts\migrate-ledger-production.ps1
+.\scripts\install-ledger-test-instance.ps1 -WhatIf
 ```
 
 发布与切换使用 [运维手册的两阶段流程](ledger-cloudflare-runbook.md#5-发布并切换正式-openclaw-release)：先真实发布并验证 release，再显式指定同一 release 路径切换正式 OpenClaw。

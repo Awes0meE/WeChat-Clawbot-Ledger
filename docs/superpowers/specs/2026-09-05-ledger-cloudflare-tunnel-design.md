@@ -2,7 +2,7 @@
 
 日期：2026-09-05
 
-状态：设计已确认，实施与部署进行中；当前暂停点见 [`../../handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md`](../../handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)，实时操作顺序以 [`../../ledger-cloudflare-runbook.md`](../../ledger-cloudflare-runbook.md) 为准
+状态：设计已确认；实现、正式浏览器、公网安全、作品集、服务恢复、真实 Windows 重启和微信记账/HTTP 汇总验收已通过，真实平台同消息 ID 重放仍待验证。最新授权包含 PR 合并 main 与安全清理旧分支；Git 整合不切换生产 release。当前续接点见 [`../../handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md`](../../handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)，实时操作顺序以 [`../../ledger-cloudflare-runbook.md`](../../ledger-cloudflare-runbook.md) 为准。下文保留原设计决策，不作为实时状态证明。
 
 范围：为现有 Windows ezBookkeeping 增加单次登录的公网网页入口，并隔离 Clawbot 开发环境与生产账本
 

@@ -4,15 +4,18 @@
 
 OpenClaw's WeChat channel plugin, supporting login authorization via QR code scanning.
 
+> **Clawbot local variant:** This directory contains `@clawbot/openclaw-weixin-stable-id`, based on Tencent's 2.4.8 release. See [the local patch](CLAWBOT-PATCH.md) for stable message IDs and trusted sender mapping. Clawbot production installation, updates, and recovery use the [immutable release runbook](../../docs/ledger-cloudflare-runbook.md). The upstream installation, account-management, and uninstall instructions below are retained as reference; they are not Clawbot's production deployment procedure.
+
 ## Compatibility
 
-| Plugin Version | OpenClaw Version       | npm dist-tag | Status      |
-|---------------|------------------------|--------------|-------------|
-| 2.0.x         | >=2026.3.22            | `latest`     | Active      |
-| 1.0.x         | >=2026.1.0 <2026.3.22  | `legacy`     | Maintenance |
+| Local plugin version | Declared minimum OpenClaw version | Verified Clawbot host |
+| --- | --- | --- |
+| `2.4.8-clawbot.1` | `>=2026.5.12` | `2026.8.2` |
 
-> The plugin checks the host version at startup and will refuse to load if the
-> running OpenClaw version is outside the supported range.
+The table records this package's installation metadata and the verified host.
+The retained upstream runtime guard in `src/compat.ts` still uses `2026.3.22` as
+its minimum and skips checks when the host version is unavailable or unknown;
+it does not enforce the declared `2026.5.12` installation minimum.
 
 ## Prerequisites
 
