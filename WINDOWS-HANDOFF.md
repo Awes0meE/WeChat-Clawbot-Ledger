@@ -2,19 +2,20 @@
 
 更新于 2026-09-05，时区 `Asia/Singapore`。这是 Windows 接手、恢复和验收的第一入口。仓库描述发布契约；任何“正在运行”结论都必须在当前主机重新探测，并以 `docs/ledger-cloudflare-runbook.md` 的完整矩阵闭环。
 
-## 2026-09-05 暂停点：下一轮从这里继续
+## 2026-09-05 续接点：等待真实重启与微信验收
 
 完整、脱敏的续接上下文见 [`docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md`](docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)。下一轮开发助手可使用 GPT-6；这不改变生产 `bookkeeper` 的运行模型，后者继续固定为 `gpt-5.6-sol` 与官方 Codex harness。
 
-- 在分支 `feat/secure-ledger-tunnel` 继续；已确认包含 `c59da14`、`fc7c4ec`、交接提交 `65c24c4`，随后独立提交 API 修复 `8aa2ea9`、restart 参数修复 `02ce2c8` 和子进程识别修复 `98c7fe8`。本地 `main` 与 `origin/main` 的历史引用为独立提交 `93543ab`，未联网核验远端；不得自动 merge、rebase、reset，也不得触碰相邻 `fix/clear-expense-intent` worktree。
-- 已完成并需先只读复核：正式 `127.0.0.1:8888`、隔离测试 `127.0.0.1:18888`、immutable OpenClaw release、受控 Tunnel、Ledger DNS、五条 Ledger 规则与 Windows PowerShell 5.1 本机验收 14/14。不要重建或覆盖这些资源。
-- API-token 边界修复已按 TDD 完成：只有 JSON 同时满足 `success=false`、`errorCode=200020`、`path=/api/v1/accounts/list.json` 时才接受 `400`，解析结束立即清空响应正文引用；原有 `401/403` 保留。修复时全套 448/448、focused 91/91 通过，真实 loopback `200` 与公网精确 IP 拒绝已配对验证。
-- pre-HSTS 公网、作品集基线和本机 14/14 已通过；既有 Tunnel、DNS、五条规则、apex/`www` 已重新只读核验。可见 Ledger 页面已交给用户，正式登录与 disposable CRUD 尚未完成；HSTS 仍关闭。
-- `aee5126 test(ledger): isolate supervisor fixture mutexes` 修复了测试与运行中生产 supervisor 的 mutex 冲突，并保持同 fixture 副本字节一致。本轮最终完整测试 511/511；stable-ID build 与 3/3、15 个 PowerShell 5.1 脚本解析、immutable release、restart `WhatIf` 和 198 个 tracked 文件扫描通过。11:55 UTC 再次通过本机 14/14、pre-HSTS 与作品集基线。
-- 下一步先由用户自行正式登录，再完成并清理一条已知 disposable 记录。该闸门通过后才可给现有 header rule 添加 host-only `Strict-Transport-Security: max-age=86400`；之后依次完成公网限速、ServiceCycle/fail-closed、真实 Windows 重启、微信去重/查询和作品集最终回归。当前检查点与外部证据路径见续接文档。
+- 在 `feat/secure-ledger-tunnel` 继续，必需祖先与各项独立修复已核验。用户已授权整理及同步功能分支；尚未授权合并 `main`。本轮联网 fetch 后本地 `main` 与 `origin/main` 均为 `93543ab`。不得 reset、rebase、丢弃工作或触碰相邻 `fix/clear-expense-intent` worktree。
+- 正式 `127.0.0.1:8888`、隔离测试 `127.0.0.1:18888`、immutable OpenClaw release、受控 Tunnel、Ledger DNS 与五条规则已部署。本机 14/14 通过；续接先只读复核，保留既有资源。
+- 正式网页登录及一次性记录的新增、显示、修改、删除已完成；仅删除已知验收记录，账户/分类/交易三个规范化哈希全部恢复基线。凭据未写入本地文件。
+- pre-HSTS 闸门通过后，仅给现有 Ledger header rule 添加 `Strict-Transport-Security: max-age=86400`，无 `includeSubDomains` 或 `preload`。随后完整公网限速/token/缓存/安全头、作品集回归和 Cloudflare 只读 22/22 通过。
+- `ServiceCycle` 与恢复验证通过，包括 origin 停止及错误端口 owner 时 Tunnel 失败关闭。新的 owner-only `D:\Clawbot\deployment-evidence\ledger-reboot-v1.json` 已捕获；不要再次创建或覆盖它。
+- 最新源码基线 `37b5fbf` 的完整测试 511/511、stable-ID build 与 3/3、15 个 PowerShell 5.1 脚本解析全部通过。实现修复、独立审查、脱敏证据路径与余下步骤集中记录在续接文档。
+- 下一步由用户现场真实重启 Windows，再执行 `VerifyPostReboot`；之后完成可信微信的新消息写入/回复、平台级重放去重、HTTP 汇总与已知数据清理。MCP 仍关闭，不是本轮默认启用步骤。
 - 根目录可能存在被 Git 忽略的 `testAccountInfo.txt`。不得读取到终端输出、模型上下文或 Git；它只可由不回显的本机流程用于 `18888` 测试登录，不能代替正式网页登录凭据。
 
-截至暂停点，分支未合并、未推送。任何实时状态均可能在会话间漂移，新会话先按续接文档执行只读核验。
+功能分支同步以联网核对本地 HEAD、upstream 与远端 HEAD 一致为准；`main` 保持原状。当前仍缺真实重启和微信验收，不能报告全部上线完成。实时状态可能在会话间漂移，新会话先按续接文档执行只读核验。
 
 ## 不变边界
 

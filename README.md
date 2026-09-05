@@ -34,7 +34,7 @@ Browser -> https://ledger.66ccff-labs.com -> Cloudflare Tunnel
 | 专用代理 allowlist | `record_expense`、`prepare_expense`、`resolve_expense_confirmation`、`summarize_expenses`、`ezbookkeeping__query_transactions` |
 | 灵活历史查询 | 代码与最小权限契约已就绪；截至 2026-09-05，本机 `enable_mcp=false` 且独立 MCP token 尚未生成，因此尚未上线 |
 
-当前 Ledger 上线尚未完成。2026-09-05 续接已修复 API token 的精确 `400/200020` 判定、restart 精确识别及测试隔离，本轮全套回归 511/511、本机 14/14、pre-HSTS 公网及作品集基线验收通过；正在等待用户完成正式网页登录与 disposable CRUD，HSTS 仍关闭。新的开发会话必须先阅读 [2026-09-05 GPT-6 续接点](docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)，从已存在的 Tunnel、DNS 和规则状态继续，不得重建或覆盖资源。
+当前 Ledger 网页已通过正式登录、一次性记录的新增/修改/删除、HSTS 后公网安全与作品集回归，以及服务重启和失败关闭验收。重启前证据已生成；真实 Windows 重启后的恢复与微信消息验收仍待完成，因此尚不能报告全部上线验收完成。新的开发会话必须先阅读 [2026-09-05 GPT-6 续接点](docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)，从既有 Tunnel、DNS、规则和证据继续。
 
 ## 助理行为
 
@@ -197,9 +197,9 @@ openclaw plugins inspect codex
 openclaw models status --agent bookkeeper --json
 ```
 
-动态 MCP 由插件 manifest 和 requester-scoped resolver 声明，不应为了 CLI 诊断另加顶层 `mcp.servers` 静态连接。任何本机配置或部署变更前，必须执行 `WINDOWS-HANDOFF.md` 中只检查属性名的只读断言；若顶层 `mcp.servers` 下存在 `ezbookkeeping`，立即停止部署，另行审核后再移除，不能由部署步骤自动删除。该断言不显示配置对象、header 或值。它与账本插件自动化测试（manifest、resolver、allowlist 允许 `query_transactions`，源码和测试明确排除 `add_transaction`）及所有者微信历史查询共同闭合“无静态后备连接”的证据链；stable-ID 插件另有独立测试。
+动态 MCP 由插件 manifest 和 requester-scoped resolver 声明，不应为了 CLI 诊断另加顶层 `mcp.servers` 静态连接。任何本机配置或部署变更前，必须执行 `WINDOWS-HANDOFF.md` 中只检查属性名的只读断言；若顶层 `mcp.servers` 下存在 `ezbookkeeping`，立即停止部署，另行审核后再移除，不能由部署步骤自动删除。该断言不显示配置对象、header 或值。它与账本插件自动化测试（manifest、resolver、allowlist 允许 `query_transactions`，源码和测试明确排除 `add_transaction`）共同证明没有静态后备连接；MCP 激活后，再以所有者微信历史查询验证动态连接的端到端行为。stable-ID 插件另有独立测试。
 
-秘密扫描从仓库根目录执行时应排除嵌套 `.worktrees` 副本，但不得排除测试或示例目录；每一条命中都必须人工核对，任何无法证明是固定合成数据或占位符的结果都必须按真实泄露处理。详细命令见 `WINDOWS-HANDOFF.md`。
+秘密扫描只读取当前仓库的 Git tracked 文件，先拒绝禁止的数据路径和链接，再扫描内容；不得排除测试或示例目录，也不得递归读取 `.worktrees`、ignored 文件或运行时数据。每条命中都必须人工核对，无法证明是固定合成数据或占位符的结果按真实泄露处理。详细命令见 `WINDOWS-HANDOFF.md`。
 
 ## 明确不做的事
 
