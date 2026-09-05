@@ -394,8 +394,13 @@ function Assert-NoForeignTunnelTask {
         $actions = @($task.Actions)
         $mentionsTunnel = [string]::Equals([string]$task.TaskName, $TaskName, [StringComparison]::OrdinalIgnoreCase)
         foreach ($action in $actions) {
-            if ([string]$action.Execute -match '(?i)cloudflared|ledger-tunnel-supervisor' -or
-                [string]$action.Arguments -match '(?i)cloudflared|ledger-tunnel-supervisor') {
+            if ($null -eq $action) { continue }
+            $executeProperty = $action.PSObject.Properties['Execute']
+            $argumentsProperty = $action.PSObject.Properties['Arguments']
+            $execute = if ($null -ne $executeProperty) { [string]$executeProperty.Value } else { '' }
+            $arguments = if ($null -ne $argumentsProperty) { [string]$argumentsProperty.Value } else { '' }
+            if ($execute -match '(?i)cloudflared|ledger-tunnel-supervisor' -or
+                $arguments -match '(?i)cloudflared|ledger-tunnel-supervisor') {
                 $mentionsTunnel = $true
             }
         }

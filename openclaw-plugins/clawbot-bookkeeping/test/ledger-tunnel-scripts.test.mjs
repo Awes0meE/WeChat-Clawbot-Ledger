@@ -546,6 +546,12 @@ function Get-ScheduledTask {
   if ($global:scenario -eq 'task-case-conflict') {
     return ,([pscustomobject]@{ TaskName = 'clawbot ledger tunnel'; TaskPath = '\\'; Actions = @([pscustomobject]@{ Execute = 'foreign.exe'; Arguments = 'foreign'; WorkingDirectory = $env:CLAWBOT_TUNNEL_TEST_RUNTIME }) })
   }
+  if ($global:scenario -eq 'whatif-unrelated-non-exec-task') {
+    return ,([pscustomobject]@{ TaskName = 'Unrelated COM task'; TaskPath = '\\'; Actions = @([pscustomobject]@{ ClassId = '{00000000-0000-0000-0000-000000000000}'; Data = 'fixture' }) })
+  }
+  if ($global:scenario -eq 'task-non-exec-name-conflict') {
+    return ,([pscustomobject]@{ TaskName = 'Clawbot Ledger Tunnel'; TaskPath = '\\'; Actions = @([pscustomobject]@{ ClassId = '{00000000-0000-0000-0000-000000000000}'; Data = 'fixture' }) })
+  }
   if ($global:scenario -eq 'task-race' -and $global:taskChecks -gt 1) {
     return ,([pscustomobject]@{ TaskName = 'Clawbot Ledger Tunnel'; TaskPath = '\\'; Actions = @([pscustomobject]@{ Execute = 'foreign.exe'; Arguments = 'foreign'; WorkingDirectory = $env:CLAWBOT_TUNNEL_TEST_RUNTIME }) })
   }
@@ -608,8 +614,8 @@ $arguments = @{
   TaskName = $requestedTaskName
   Confirm = $false
 }
-if ($Scenario -eq 'whatif') { $arguments.WhatIf = $true }
-if ($Scenario -in @('whatif', 'install-start', 'post-register-task-race')) { $arguments.StartAfterInstall = $true }
+if ($Scenario -in @('whatif', 'whatif-unrelated-non-exec-task')) { $arguments.WhatIf = $true }
+if ($Scenario -in @('whatif', 'whatif-unrelated-non-exec-task', 'install-start', 'post-register-task-race')) { $arguments.StartAfterInstall = $true }
 & $env:CLAWBOT_TUNNEL_TEST_INSTALLER @arguments
 `);
   return path;
@@ -1246,6 +1252,23 @@ test('installer WhatIf performs no validation process, write, ACL, or task mutat
   }
 });
 
+test('installer ignores unrelated scheduled-task actions without executable fields', () => {
+  const fixture = createFixture();
+  try {
+    const wrapper = createInstallerWrapper(fixture);
+    const beforeConfig = readFileSync(fixture.tunnelConfigPath);
+    const beforeCredential = readFileSync(fixture.credentialPath);
+    const result = runPowerShell(wrapper, ['whatif-unrelated-non-exec-task'], fixtureEnv(fixture));
+    assertSucceeded(result);
+    assert.equal(existsSync(fixture.runtimeDirectory), false);
+    assert.deepEqual(readFileSync(fixture.tunnelConfigPath), beforeConfig);
+    assert.deepEqual(readFileSync(fixture.credentialPath), beforeCredential);
+    assert.equal(existsSync(fixture.tracePath), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test('installer validates ingress then creates an exact supervisor-only least-privilege task', () => {
   const fixture = createFixture();
   try {
@@ -1378,7 +1401,7 @@ test('installer refuses relative credentials and never adopts unmarked runtime o
 });
 
 test('installer rejects unsafe ACLs, validator failures, foreign tasks, services, and non-exact ingress', () => {
-  for (const scenario of ['unsafe-acl', 'wrong-owner', 'validator-failure', 'task-conflict', 'service-conflict', 'bad-task-name', 'log-collision']) {
+  for (const scenario of ['unsafe-acl', 'wrong-owner', 'validator-failure', 'task-conflict', 'task-non-exec-name-conflict', 'service-conflict', 'bad-task-name', 'log-collision']) {
     const fixture = createFixture();
     try {
       const wrapper = createInstallerWrapper(fixture);
