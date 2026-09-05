@@ -177,7 +177,7 @@ data_source = euro_central_bank
 `;
 }
 
-function writeEnvironmentIsolatedScript(sourcePath, destinationPath, providerName) {
+function writeEnvironmentIsolatedScript(sourcePath, destinationPath, providerName, mutexName) {
   const source = readFileSync(sourcePath, 'utf8');
   const escapedProviderName = providerName.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
   const providerPattern = new RegExp(
@@ -206,11 +206,19 @@ function writeEnvironmentIsolatedScript(sourcePath, destinationPath, providerNam
     }
     return @{}
 }`;
-  write(destinationPath, source.replace(providerPattern, isolatedProvider));
+  let isolatedSource = source.replace(providerPattern, isolatedProvider);
+  if (sourcePath === supervisorScript) {
+    const productionMutex = "'Global\\ClawbotLedgerTunnelSupervisor'";
+    assert.equal(isolatedSource.split(productionMutex).length - 1, 1, 'expected one production supervisor mutex');
+    assert.match(mutexName, /^Local\\ClawbotLedgerTunnelTest-[0-9a-f]{64}$/u);
+    isolatedSource = isolatedSource.replace(productionMutex, `'${mutexName}'`);
+  }
+  write(destinationPath, isolatedSource);
 }
 
 function createFixture() {
   const root = mkdtempSync(join(tmpdir(), 'clawbot-ledger-tunnel-'));
+  const supervisorMutexName = `Local\\ClawbotLedgerTunnelTest-${createHash('sha256').update(root).digest('hex')}`;
   const local = join(root, 'local');
   const cloudflaredPath = join(local, 'cloudflared.exe');
   const credentialPath = join(local, '11111111-2222-4333-8444-555555555555.json');
@@ -236,7 +244,7 @@ function createFixture() {
   write(testConfigPath, testIni(testRoot));
   mkdirSync(releasePath, { recursive: true });
   write(releaseVerifierPath, "param([string]$ReleasePath)\nWrite-Output 'OPENCLAW_RELEASE_VERIFIED'\n");
-  writeEnvironmentIsolatedScript(supervisorScript, isolatedSupervisorPath, 'Get-TunnelEnvironmentVariables');
+  writeEnvironmentIsolatedScript(supervisorScript, isolatedSupervisorPath, 'Get-TunnelEnvironmentVariables', supervisorMutexName);
   writeEnvironmentIsolatedScript(localTestScript, isolatedLocalTestPath, 'Get-LocalEnvironmentVariables');
   write(join(isolatedScriptsDirectory, 'ledger-runtime-common.ps1'), readFileSync(commonScript, 'utf8'));
   write(
@@ -246,6 +254,7 @@ function createFixture() {
 
   return {
     root,
+    supervisorMutexName,
     local,
     cloudflaredPath,
     credentialPath,
@@ -810,6 +819,103 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   return path;
 }
 
+test('copied supervisor fixtures use unique test mutexes instead of the production mutex', () => {
+  const first = createFixture();
+  const second = createFixture();
+  try {
+    const bundledSupervisor = join(first.root, 'bundle', 'ledger-tunnel-supervisor.ps1');
+    writeEnvironmentIsolatedScript(supervisorScript, bundledSupervisor, 'Get-TunnelEnvironmentVariables', first.supervisorMutexName);
+    const names = [first.isolatedSupervisorPath, second.isolatedSupervisorPath, bundledSupervisor].map((path) => {
+      const source = readFileSync(path, 'utf8');
+      assert.equal(source.includes('Global\\ClawbotLedgerTunnelSupervisor'), false, 'fixture still contains the production mutex');
+      const name = source.match(/New-Object System\.Threading\.Mutex\(\$false, '(Local\\ClawbotLedgerTunnelTest-[0-9a-f]{64})'\)/u)?.[1];
+      assert.ok(name, 'fixture must retain a real mutex with a synthetic local name');
+      return name;
+    });
+    assert.notEqual(names[0], names[1]);
+    assert.equal(names[0], names[2], 'all supervisor copies within one fixture must share its mutex');
+    assert.equal(
+      createHash('sha256').update(readFileSync(first.isolatedSupervisorPath)).digest('hex'),
+      createHash('sha256').update(readFileSync(bundledSupervisor)).digest('hex'),
+      'bundled and installed supervisor copies within one fixture must be byte-identical',
+    );
+    assert.equal(readFileSync(supervisorScript, 'utf8').includes('Global\\ClawbotLedgerTunnelSupervisor'), true);
+  } finally {
+    rmSync(first.root, { recursive: true, force: true });
+    rmSync(second.root, { recursive: true, force: true });
+  }
+});
+
+test('fixture mutexes reject a same-fixture contender while different fixtures remain independent', () => {
+  const first = createFixture();
+  const second = createFixture();
+  try {
+    const bundledSupervisor = join(first.root, 'bundle', 'ledger-tunnel-supervisor.ps1');
+    writeEnvironmentIsolatedScript(supervisorScript, bundledSupervisor, 'Get-TunnelEnvironmentVariables', first.supervisorMutexName);
+    // Check every copy before starting any PowerShell process or touching a mutex.
+    for (const path of [first.isolatedSupervisorPath, second.isolatedSupervisorPath, bundledSupervisor]) {
+      assert.equal(readFileSync(path, 'utf8').includes('Global\\ClawbotLedgerTunnelSupervisor'), false, 'fixture still contains the production mutex');
+    }
+    const probePath = join(first.root, 'fixture-mutex-probe.ps1');
+    write(probePath, String.raw`
+param([string]$FirstCopy, [string]$SameFixtureCopy, [string]$SecondCopy, [ValidateSet('Hold', 'Try')][string]$Mode)
+$ErrorActionPreference = 'Stop'
+$tokens = $errors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile($FirstCopy, [ref]$tokens, [ref]$errors)
+if ($errors.Count -ne 0) { throw 'Fixture source parse failed.' }
+foreach ($name in @('Enter-TunnelSupervisorMutex', 'Exit-TunnelSupervisorMutex')) {
+  $definitions = @($ast.FindAll({
+    param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name
+  }, $true))
+  if ($definitions.Count -ne 1) { throw 'Expected exactly one mutex helper.' }
+  $definition = $definitions[0].Extent.Text
+  if ($name -ceq 'Enter-TunnelSupervisorMutex' -and
+      ($definition.Contains('Global\ClawbotLedgerTunnelSupervisor') -or
+       $definition -notmatch "'Local\\ClawbotLedgerTunnelTest-[0-9a-f]{64}'")) {
+    throw 'Refusing a mutex outside the synthetic fixture namespace.'
+  }
+  . ([scriptblock]::Create($definition))
+}
+$script:TunnelMutex = $null
+$script:TunnelMutexOwned = $false
+try {
+  Enter-TunnelSupervisorMutex
+  if ($Mode -ceq 'Try') {
+    Write-Output 'acquired'
+  } else {
+    $powershell = Join-Path $PSHOME 'powershell.exe'
+    $same = & $powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PSCommandPath -FirstCopy $SameFixtureCopy -Mode Try
+    if ($LASTEXITCODE -ne 0) { throw 'Same-fixture mutex probe failed.' }
+    $different = & $powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PSCommandPath -FirstCopy $SecondCopy -Mode Try
+    if ($LASTEXITCODE -ne 0) { throw 'Different-fixture mutex probe failed.' }
+    [ordered]@{ sameFixture = $same; differentFixture = $different } | ConvertTo-Json -Compress
+  }
+} catch {
+  if ($Mode -ceq 'Try' -and $_.Exception.Message -ceq 'Another Ledger Tunnel supervisor already owns the runtime.') {
+    Write-Output 'refused_existing_owner'
+  } else { throw 'Synthetic mutex probe failed.' }
+} finally {
+  Exit-TunnelSupervisorMutex
+}
+`);
+    const result = runPowerShell(probePath, [
+      '-FirstCopy', first.isolatedSupervisorPath,
+      '-SameFixtureCopy', bundledSupervisor,
+      '-SecondCopy', second.isolatedSupervisorPath,
+      '-Mode', 'Hold',
+    ]);
+    assertSucceeded(result);
+    assert.deepEqual(JSON.parse(result.stdout.trim()), {
+      sameFixture: 'refused_existing_owner',
+      differentFixture: 'acquired',
+    });
+  } finally {
+    rmSync(first.root, { recursive: true, force: true });
+    rmSync(second.root, { recursive: true, force: true });
+  }
+});
+
 test('ships only the exact sanitized locally managed Ledger ingress', () => {
   const text = readFileSync(exampleConfig, 'utf8');
   assert.match(text, /^tunnel: __LOCAL_TUNNEL_UUID__$/mu);
@@ -902,6 +1008,7 @@ test('PowerShell 5.1 resolves adjacent helper defaults after parameter binding',
       supervisorScript,
       bundledSupervisor,
       'Get-TunnelEnvironmentVariables',
+      fixture.supervisorMutexName,
     );
     write(bundledInstaller, readFileSync(installerScript, 'utf8'));
     writeEnvironmentIsolatedScript(localTestScript, bundledLocal, 'Get-LocalEnvironmentVariables');
