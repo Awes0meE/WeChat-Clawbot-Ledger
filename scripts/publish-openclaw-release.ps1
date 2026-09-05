@@ -31,6 +31,17 @@ function Get-FullPath {
     return [IO.Path]::GetFullPath($Path).TrimEnd([char[]]@('\', '/'))
 }
 
+function Get-WindowsExtendedPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $fullPath = Get-FullPath -Path $Path
+    if ($fullPath.StartsWith('\\?\', [StringComparison]::Ordinal)) { return $fullPath }
+    if ($fullPath.StartsWith('\\', [StringComparison]::Ordinal)) {
+        return '\\?\UNC\' + $fullPath.Substring(2)
+    }
+    return '\\?\' + $fullPath
+}
+
 function Test-PathInside {
     param(
         [Parameter(Mandatory = $true)][string]$Candidate,
@@ -101,17 +112,18 @@ function Assert-DirectoryTreeHasNoReparsePoints {
 
     Assert-NoExistingReparsePath -Path $Path
     if (-not [IO.Directory]::Exists($Path)) { return }
-    $root = Get-FullPath -Path $Path
+    $root = Get-WindowsExtendedPath -Path $Path
     $pending = New-Object 'System.Collections.Generic.Stack[string]'
     $pending.Push($root)
     while ($pending.Count -gt 0) {
         $directory = $pending.Pop()
-        foreach ($item in @(Get-ChildItem -LiteralPath $directory -Force -ErrorAction Stop)) {
-            if (Test-ReparsePoint -Item $item) {
+        foreach ($entryPath in [IO.Directory]::EnumerateFileSystemEntries($directory)) {
+            $attributes = [IO.File]::GetAttributes($entryPath)
+            if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
                 throw $FailureMessage
             }
-            if ($item.PSIsContainer) {
-                $pending.Push($item.FullName)
+            if (($attributes -band [IO.FileAttributes]::Directory) -ne 0) {
+                $pending.Push($entryPath)
             }
         }
     }
@@ -652,40 +664,8 @@ function Remove-OwnedStagingDirectory {
         throw
     }
 
-    $files = New-Object 'System.Collections.Generic.List[string]'
-    $directories = New-Object 'System.Collections.Generic.List[string]'
-    $pending = New-Object 'System.Collections.Generic.Stack[string]'
-    $pending.Push($ownedPath)
-    while ($pending.Count -gt 0) {
-        $directory = $pending.Pop()
-        foreach ($item in @(Get-ChildItem -LiteralPath $directory -Force -ErrorAction Stop)) {
-            if (Test-ReparsePoint -Item $item) {
-                throw 'Suspicious staging contains a reparse point and was preserved.'
-            }
-            if ($item.PSIsContainer) {
-                $directories.Add($item.FullName)
-                $pending.Push($item.FullName)
-            } else {
-                $files.Add($item.FullName)
-            }
-        }
-    }
-
-    foreach ($filePath in $files.ToArray()) {
-        Assert-NoExistingReparsePath -Path $filePath
-        [IO.File]::Delete($filePath)
-    }
-    [string[]]$directoryPaths = $directories.ToArray()
-    [Array]::Sort($directoryPaths, [Comparison[string]]{
-        param($left, $right)
-        return $right.Length.CompareTo($left.Length)
-    })
-    foreach ($directoryPath in $directoryPaths) {
-        Assert-NoExistingReparsePath -Path $directoryPath
-        [IO.Directory]::Delete($directoryPath, $false)
-    }
     Assert-NoExistingReparsePath -Path $ownedPath
-    [IO.Directory]::Delete($ownedPath, $false)
+    [IO.Directory]::Delete((Get-WindowsExtendedPath -Path $ownedPath), $true)
 }
 
 function Publish-Release {
@@ -757,10 +737,16 @@ function Publish-Release {
         Assert-Release -Path $releasePath -ExpectedCommit $commitAfterBuild
         return $releasePath
     } catch {
+        $publicationError = $_
         if ([IO.Directory]::Exists($stagingContainer)) {
-            Remove-OwnedStagingDirectory -Path $stagingContainer -Parent $ReleasesRoot
+            try {
+                Remove-OwnedStagingDirectory -Path $stagingContainer -Parent $ReleasesRoot
+            } catch {
+                $cleanupFailureType = $_.Exception.GetType().Name
+                throw ('OpenClaw release publication failed and its owned staging cleanup also failed (' + $cleanupFailureType + ').')
+            }
         }
-        throw
+        throw $publicationError
     }
 }
 

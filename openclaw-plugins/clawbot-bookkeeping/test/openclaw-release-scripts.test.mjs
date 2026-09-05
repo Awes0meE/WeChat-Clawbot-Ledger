@@ -153,6 +153,17 @@ if ($joined -eq 'ci --omit=dev --omit=peer --ignore-scripts') {
 if ($joined -eq 'ci --omit=dev --ignore-scripts') {
   Add-Content -LiteralPath $env:CLAWBOT_TEST_BUILD_TRACE -Value 'stable-id-production-dependencies' -Encoding UTF8
   $modules = Join-Path (Get-Location) 'node_modules'
+  if ($env:CLAWBOT_TEST_NPM_CREATE_DEEP_FAILURE -eq '1') {
+    $deepPath = $modules
+    foreach ($index in 1..5) {
+      $segment = 'deep-' + (('x' * 55) -join '') + $index
+      $deepPath = [IO.Path]::Combine($deepPath, $segment)
+    }
+    $extendedDeepPath = '\\?\' + [IO.Path]::GetFullPath($deepPath)
+    [IO.Directory]::CreateDirectory($extendedDeepPath) | Out-Null
+    [IO.File]::WriteAllText([IO.Path]::Combine($extendedDeepPath, 'deep-runtime-file.js'), 'deep fixture', (New-Object Text.UTF8Encoding($false)))
+    exit 110
+  }
   foreach ($dependency in @('openclaw', 'qrcode-terminal', 'zod')) {
     New-Item -ItemType Directory -Path (Join-Path $modules $dependency) -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $modules "$dependency\package.json"), ('{"name":"' + $dependency + '"}'), (New-Object Text.UTF8Encoding($false)))
@@ -1000,6 +1011,22 @@ test('preserves suspicious staging and an external sentinel when a junction appe
     assertFailed(result, /reparse|junction|preserv|staging/iu);
     assert.equal(readFileSync(sentinelPath, 'utf8'), 'keep');
     assert.equal(readdirSync(fixture.releases).filter((name) => name.startsWith('.staging-')).length, 1);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('cleans an owned deep-path staging tree without masking the publication failure', () => {
+  const fixture = createFixture();
+  try {
+    const result = runPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-ReleaseOnly']),
+      { ...fixture.env, CLAWBOT_TEST_NPM_CREATE_DEEP_FAILURE: '1' },
+    );
+    assertFailed(result, /stable-ID runtime dependencies|installing locked stable-ID/iu);
+    assert.equal(existsSync(fixture.releasePath), false);
+    assert.deepEqual(readdirSync(fixture.releases).filter((name) => name.startsWith('.staging-')), []);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
