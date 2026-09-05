@@ -68,6 +68,8 @@ git diff --check
 
 对所有 `scripts\*.ps1` 使用 Windows PowerShell 5.1 parser 检查。对安装、迁移、发布和重启脚本先执行 `-WhatIf`；预演不得读 token、发 HTTP、控制任务、启动进程或写文件。
 
+Supervisor 自动化夹具使用每个 fixture 独立的本地测试 mutex；同一 fixture 的源码、安装与 bundle 副本保持相同 mutex 和字节内容。测试不会争用生产 `Global\ClawbotLedgerTunnelSupervisor`，无需停止正式服务来运行回归。
+
 秘密扫描必须排除 `.git`、依赖和已知 worktree，但不能排除 `test`、`config`、`scripts` 或文档。匹配项由人工看上下文，不能为了零匹配扩大 ignore。
 
 ## 2. 捕获部署前作品集基线

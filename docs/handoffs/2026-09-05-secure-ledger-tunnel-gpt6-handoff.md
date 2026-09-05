@@ -4,6 +4,28 @@
 
 状态：开发主体与大部分真实部署已完成，最终上线验收尚未闭环。本文是下一轮开发会话的唯一临时续接入口；设计不再 brainstorming，长期操作合同仍以 [`../ledger-cloudflare-runbook.md`](../ledger-cloudflare-runbook.md) 为准。
 
+## 2026-09-05 续接进展：先读本节
+
+- 已完整读取本交接要求的文件；确认 `feat/secure-ledger-tunnel` 历史含 `c59da14`、`fc7c4ec`、`65c24c4`。未操作相邻 worktree、未合并、未推送、未重建 Cloudflare 资源。
+- 原 API 阻塞已修复并独立提交：`8aa2ea9 fix(ledger): verify API token IP rejection`。TDD、focused 91/91、完整 448/448、独立规范/质量审查及补丁扫描通过。下方 API 阻塞章节保留为历史依据，不要重复实现。
+- 本次初始只读检查发现已有正式/测试/Tunnel 任务均停止。精确复核任务、二进制/hash、配置、ACL、runtime 与无端口冲突后，仅启动既有任务；随后 Windows PowerShell 5.1 本机 14/14 通过，旧 `8180` 无监听，非 loopback 地址对 `8888` 的 TCP 探测均不可达。
+- pre-HSTS 公网验收及作品集基线对比通过；同一 API token 的 loopback `200` 与公网精确 `400/200020` 已配对验证，只输出状态与布尔值。
+- 11:41 UTC 的 Cloudflare readback 证明既有 Tunnel healthy、4 个连接；Ledger DNS/五条规则精确一致，HSTS 仍缺失，Access 未启用，apex/`www` 与既有作品集 redirect 不变。没有进行 Cloudflare 写操作。
+- 正式 Ledger 可见浏览器已交给用户自行登录；**尚未完成正式登录及浏览器 disposable CRUD**。下一项真实验收从这里继续；未完成前不得启用 HSTS、ServiceCycle 或后续重启验收。
+- readonly restart 预检发现任务参数拼接多插入分隔空格，已按 TDD 修复并独立提交 `02ce2c8 fix(ledger): match exact Tunnel restart arguments`。6/6 回归与实际安装任务的只读精确匹配通过，严格身份比较保留。
+- restart 子进程认可命令数组的同类拼接问题也已按 TDD 修复并单独提交：`98c7fe8 fix(ledger): recognize exact Tunnel child commands`。55/55 回归与独立审查通过，实际任务及子进程的只读精确识别通过；没有执行 ServiceCycle。
+- supervisor 测试复制品共用生产 mutex 的问题已单独提交 `aee5126 test(ledger): isolate supervisor fixture mutexes`。修复前真实服务运行时为 443/454；修复采用每 fixture 独立的合成 Local mutex，同 fixture 源码/安装/bundle 副本保持相同 mutex 和字节内容，保留真实跨进程互斥。TDD 与独立审查完成，focused 3/3、本轮最终完整 `npm.cmd test` **511/511、0 failed、0 skipped**（236.09 秒），全程没有停止生产服务。
+- 本轮另通过 stable-ID build 与 3/3、15 个 Windows PowerShell 5.1 脚本解析、immutable release hash/ACL 验证、restart `WhatIf`、198 个 tracked 文件扫描（禁止产物及强秘密模式均零命中）。11:55 UTC 再次通过本机 14/14、pre-HSTS 公网与作品集基线。以上仍不能代替尚缺的浏览器、HSTS、ServiceCycle、真实重启与微信验收。
+
+本次仓库外脱敏证据：
+
+- `D:\Clawbot\deployment-evidence\continuation-checkpoint-20260905T115734Z.json`（最新 owner-only 检查点；测试代码提交 `aee5126`，含源码哈希及明确待办；`deploymentComplete=false`）
+- `D:\Clawbot\deployment-evidence\cloudflare-readback-20260905T114107Z.json`
+- `D:\Clawbot\deployment-evidence\pre-hsts-acceptance-20260905T114211Z.json`（记录该时间点已完成与待办，不是完整上线证明）
+- `D:\Clawbot\deployment-evidence\browser-crud-before-20260905T114036Z.json`（owner-only；只含账户/分类/交易的规范化哈希，不含正文；尚未执行浏览器 CRUD）
+
+下方“真实部署暂停现场”为较早的交接记录，恢复时以当前只读证据为准。
+
 ## 开始前必须读取
 
 依次完整读取：
@@ -20,7 +42,7 @@
 
 - 工作分支：`feat/secure-ledger-tunnel`
 - 设计基准：`c59da14`，必须是当前分支祖先。
-- 已验证代码检查点：`fc7c4ec fix(ledger): accept edge TRACE rejection`；当前 `/neat` 文档提交应是其后继。
+- 原代码检查点：`fc7c4ec fix(ledger): accept edge TRACE rejection`；原交接提交为 `65c24c4`。续接修复见本页首节。
 - 2026-09-05 本地引用中，`main` 与 `origin/main` 均为 `93543ab fix(bookkeeping): honor clear expense attempts`。它与功能分支已经分叉，功能分支当时相对 `main` 为 1 behind / 34 ahead。
 - 功能分支没有配置 upstream，未推送、未合并。不要根据本地 remote-tracking ref 声称已联网核验远端。
 - 另有 `fix/clear-expense-intent` worktree。不要触碰它的文件、暂存区、提交、运行时或配置。
@@ -65,7 +87,7 @@
 
 最后一份文件的 15 分钟激活窗口已经过期，不能复用来创建或重建 rate rule；规则已经存在，只做只读核验。
 
-## 当前唯一代码阻塞：精确证明公网 API token 被 IP 边界拒绝
+## 已解决的原 API 阻塞：精确证明公网 API token 被 IP 边界拒绝
 
 pre-HSTS 公网验收已经越过 TRACE，停在 `LEDGER_PUBLIC_CREDENTIAL_BOUNDARY_FAILED`：
 
@@ -80,7 +102,7 @@ pre-HSTS 公网验收已经越过 TRACE，停在 `LEDGER_PUBLIC_CREDENTIAL_BOUND
 - [`error.go`](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/errs/error.go#L10-L13)：错误码公式得到 `200020`。
 - [`api.go`](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/utils/api.go#L28-L64)：错误 JSON 含 `success`、`errorCode`、`errorMessage`、`path`。
 
-下一步按 TDD 做一个独立修复：
+以下 TDD 修复已在 `8aa2ea9` 完成，保留验收约束供回归检查：
 
 1. 先在 `openclaw-plugins/clawbot-bookkeeping/test/ledger-public-scripts.test.mjs` 加失败测试。
 2. 修改 `scripts/test-ledger-public.mjs`：API probe 可暂时把响应体留在内存；`400` 只有在 `success === false`、`errorCode === 200020`、`path === "/api/v1/accounts/list.json"` 三项同时精确命中时通过。
@@ -90,9 +112,9 @@ pre-HSTS 公网验收已经越过 TRACE，停在 `LEDGER_PUBLIC_CREDENTIAL_BOUND
 
 ## 后续必须保持的顺序
 
-1. 先只读核验 Git、本机服务、Tunnel/DNS/五项规则、HSTS 仍缺失、apex/`www` 未漂移；不能重建资源。
-2. 完成上面的 API `400/200020` TDD 修复并独立提交。
-3. 用 Windows PowerShell 5.1 重跑 pre-HSTS 公网验收；MCP 未启用，不传 `-McpTokenPath`：
+1. 已完成只读核验 Git、本机服务、Tunnel/DNS/五项规则、HSTS 仍缺失、apex/`www` 未漂移；新会话仍需复核，不能重建资源。
+2. 已完成上面的 API `400/200020` TDD 修复并独立提交。
+3. 已用 Windows PowerShell 5.1 通过 pre-HSTS 公网验收；MCP 未启用，不传 `-McpTokenPath`。需要刷新时使用：
 
    ```powershell
    .\scripts\test-ledger-public.ps1 `
@@ -112,8 +134,6 @@ pre-HSTS 公网验收已经越过 TRACE，停在 `LEDGER_PUBLIC_CREDENTIAL_BOUND
 
 ## 尚缺的完成证据
 
-- API `400` 的 `200020` 精确语义实现和通过结果。
-- 成功的 pre-HSTS 公网验收。
 - 正式浏览器登录与 disposable CRUD。
 - HSTS PATCH 与精确 Cloudflare readback。
 - HSTS 后公网 token/限速/缓存/安全头与作品集回归。

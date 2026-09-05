@@ -6,11 +6,12 @@
 
 完整、脱敏的续接上下文见 [`docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md`](docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)。下一轮开发助手可使用 GPT-6；这不改变生产 `bookkeeper` 的运行模型，后者继续固定为 `gpt-5.6-sol` 与官方 Codex harness。
 
-- 在分支 `feat/secure-ledger-tunnel` 继续；分支必须包含设计基准 `c59da14` 和已验证代码检查点 `fc7c4ec`。本地 `main` 与 `origin/main` 当前指向独立提交 `93543ab`，不得自动 merge、rebase、reset，也不得触碰相邻 `fix/clear-expense-intent` worktree。
+- 在分支 `feat/secure-ledger-tunnel` 继续；已确认包含 `c59da14`、`fc7c4ec`、交接提交 `65c24c4`，随后独立提交 API 修复 `8aa2ea9`、restart 参数修复 `02ce2c8` 和子进程识别修复 `98c7fe8`。本地 `main` 与 `origin/main` 的历史引用为独立提交 `93543ab`，未联网核验远端；不得自动 merge、rebase、reset，也不得触碰相邻 `fix/clear-expense-intent` worktree。
 - 已完成并需先只读复核：正式 `127.0.0.1:8888`、隔离测试 `127.0.0.1:18888`、immutable OpenClaw release、受控 Tunnel、Ledger DNS、五条 Ledger 规则与 Windows PowerShell 5.1 本机验收 14/14。不要重建或覆盖这些资源。
-- Cloudflare header rule 仍未加入 HSTS。当前公网验收停在 API-token 边界：loopback 为 `200`，公网同一 token 为 `400`，但现有脚本只接受 `401/403`。不得把任意 `400` 或任意非 2xx 当成安全证明。
-- 下一步须先按 ezBookkeeping v1.6.1 的 `ErrIPForbidden` 精确语义做 TDD：仅当 JSON 同时满足 `success=false`、`errorCode=200020`、`path=/api/v1/accounts/list.json` 时接受该 `400`，且响应体只能短暂存在内存、解析后清空，不能打印或落盘。
-- pre-HSTS 公网验收和正式网页登录 CRUD 通过后，才可给已精确 readback 的 header rule 添加 host-only `Strict-Transport-Security: max-age=86400`。之后仍须完成公网限速、ServiceCycle/fail-closed、真实 Windows 重启、微信去重/查询和作品集最终回归。
+- API-token 边界修复已按 TDD 完成：只有 JSON 同时满足 `success=false`、`errorCode=200020`、`path=/api/v1/accounts/list.json` 时才接受 `400`，解析结束立即清空响应正文引用；原有 `401/403` 保留。修复时全套 448/448、focused 91/91 通过，真实 loopback `200` 与公网精确 IP 拒绝已配对验证。
+- pre-HSTS 公网、作品集基线和本机 14/14 已通过；既有 Tunnel、DNS、五条规则、apex/`www` 已重新只读核验。可见 Ledger 页面已交给用户，正式登录与 disposable CRUD 尚未完成；HSTS 仍关闭。
+- `aee5126 test(ledger): isolate supervisor fixture mutexes` 修复了测试与运行中生产 supervisor 的 mutex 冲突，并保持同 fixture 副本字节一致。本轮最终完整测试 511/511；stable-ID build 与 3/3、15 个 PowerShell 5.1 脚本解析、immutable release、restart `WhatIf` 和 198 个 tracked 文件扫描通过。11:55 UTC 再次通过本机 14/14、pre-HSTS 与作品集基线。
+- 下一步先由用户自行正式登录，再完成并清理一条已知 disposable 记录。该闸门通过后才可给现有 header rule 添加 host-only `Strict-Transport-Security: max-age=86400`；之后依次完成公网限速、ServiceCycle/fail-closed、真实 Windows 重启、微信去重/查询和作品集最终回归。当前检查点与外部证据路径见续接文档。
 - 根目录可能存在被 Git 忽略的 `testAccountInfo.txt`。不得读取到终端输出、模型上下文或 Git；它只可由不回显的本机流程用于 `18888` 测试登录，不能代替正式网页登录凭据。
 
 截至暂停点，分支未合并、未推送。任何实时状态均可能在会话间漂移，新会话先按续接文档执行只读核验。
