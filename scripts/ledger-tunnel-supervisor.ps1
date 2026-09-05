@@ -397,7 +397,8 @@ function Get-ProtectedRuleIdentity {
 function Assert-TunnelProtectedFile {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [ValidateSet('Leaf', 'Container')][string]$PathType = 'Leaf'
+        [ValidateSet('Leaf', 'Container')][string]$PathType = 'Leaf',
+        [switch]$OwnerOnly
     )
 
     if (-not (Test-Path -LiteralPath $Path -PathType $PathType)) {
@@ -405,7 +406,8 @@ function Assert-TunnelProtectedFile {
     }
     $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
     $rules = @($acl.Access)
-    if (-not $acl.AreAccessRulesProtected -or $rules.Count -ne 2) {
+    $expectedRuleCount = if ($OwnerOnly) { 1 } else { 2 }
+    if (-not $acl.AreAccessRulesProtected -or $rules.Count -ne $expectedRuleCount) {
         throw 'A protected Tunnel file has an unsafe access control list.'
     }
     $currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -428,7 +430,8 @@ function Assert-TunnelProtectedFile {
         $identity = Get-ProtectedRuleIdentity -Rule $_
         $identity -ceq 'S-1-5-18' -or $identity -ceq 'NT AUTHORITY\SYSTEM'
     })
-    if ($ownerRules.Count -ne 1 -or $systemRules.Count -ne 1) {
+    $expectedSystemRuleCount = if ($OwnerOnly) { 0 } else { 1 }
+    if ($ownerRules.Count -ne 1 -or $systemRules.Count -ne $expectedSystemRuleCount) {
         throw 'A protected Tunnel file is not limited to its owner and SYSTEM.'
     }
     foreach ($rule in $rules) {
@@ -439,9 +442,11 @@ function Assert-TunnelProtectedFile {
     if ([string]$ownerRules[0].FileSystemRights -notmatch 'FullControl') {
         throw 'The Tunnel file owner does not have full control.'
     }
-    $systemRights = [string]$systemRules[0].FileSystemRights
-    if ($systemRights -notmatch 'Read' -or $systemRights -match 'Write|Modify|FullControl|Delete|ChangePermissions|TakeOwnership') {
-        throw 'SYSTEM has more than read access to a protected Tunnel file.'
+    if (-not $OwnerOnly) {
+        $systemRights = [string]$systemRules[0].FileSystemRights
+        if ($systemRights -notmatch 'Read' -or $systemRights -match 'Write|Modify|FullControl|Delete|ChangePermissions|TakeOwnership') {
+            throw 'SYSTEM has more than read access to a protected Tunnel file.'
+        }
     }
 }
 
@@ -937,7 +942,7 @@ try {
     Assert-TunnelProtectedFile -Path $script:ExpectedTunnelConfig
     Assert-TunnelProtectedFile -Path $configuration.CredentialPath
     Assert-TunnelProtectedFile -Path $script:ExpectedCloudflared
-    Assert-TunnelProtectedFile -Path $script:ExpectedEzBookkeepingConfig
+    Assert-TunnelProtectedFile -Path $script:ExpectedEzBookkeepingConfig -OwnerOnly
     Assert-TunnelProtectedFile -Path $script:ExpectedRuntime -PathType Container
     Assert-TunnelProtectedFile -Path $logDirectory -PathType Container
     $script:TunnelFailureStage = 'MARKERS'
@@ -970,7 +975,7 @@ try {
         Assert-TunnelProtectedFile -Path $script:ExpectedTunnelConfig
         Assert-TunnelProtectedFile -Path $configuration.CredentialPath
         Assert-TunnelProtectedFile -Path $script:ExpectedCloudflared
-        Assert-TunnelProtectedFile -Path $script:ExpectedEzBookkeepingConfig
+        Assert-TunnelProtectedFile -Path $script:ExpectedEzBookkeepingConfig -OwnerOnly
         Assert-TunnelMarker -MarkerPath $runtimeMarker -ExpectedText $script:RuntimeMarkerText
         Assert-TunnelMarker -MarkerPath $logMarker -ExpectedText $script:LogMarkerText
         Assert-NoCloudflaredEnvironmentOverrides

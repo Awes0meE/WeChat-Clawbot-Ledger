@@ -192,13 +192,15 @@ function Read-LocalTunnelConfig {
 function Assert-LocalProtectedFile {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [ValidateSet('Leaf', 'Container')][string]$PathType = 'Leaf'
+        [ValidateSet('Leaf', 'Container')][string]$PathType = 'Leaf',
+        [switch]$OwnerOnly
     )
 
     if (-not (Test-Path -LiteralPath $Path -PathType $PathType)) { throw 'missing protected path' }
     $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
     $rules = @($acl.Access)
-    if (-not $acl.AreAccessRulesProtected -or $rules.Count -ne 2) { throw 'unsafe ACL' }
+    $expectedRuleCount = if ($OwnerOnly) { 1 } else { 2 }
+    if (-not $acl.AreAccessRulesProtected -or $rules.Count -ne $expectedRuleCount) { throw 'unsafe ACL' }
     $currentName = [Security.Principal.WindowsIdentity]::GetCurrent().Name
     $currentSid = [string][Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     try {
@@ -228,7 +230,8 @@ function Assert-LocalProtectedFile {
             throw 'unexpected ACL identity'
         }
     }
-    if ($ownerCount -ne 1 -or $systemCount -ne 1) { throw 'incomplete ACL' }
+    $expectedSystemCount = if ($OwnerOnly) { 0 } else { 1 }
+    if ($ownerCount -ne 1 -or $systemCount -ne $expectedSystemCount) { throw 'incomplete ACL' }
 }
 
 function Get-LocalTaskArguments {
@@ -299,7 +302,7 @@ Invoke-LocalLedgerCheck -Name 'production_listener' -Check {
 Invoke-LocalLedgerCheck -Name 'production_configuration' -Check {
     Assert-LocalEzBookkeepingEnvironment
     Assert-LedgerNoExistingReparsePath -Path $EzBookkeepingConfigPath
-    Assert-LocalProtectedFile -Path $EzBookkeepingConfigPath
+    Assert-LocalProtectedFile -Path $EzBookkeepingConfigPath -OwnerOnly
     $document = Get-LedgerIniDocument -Path $EzBookkeepingConfigPath
     $required = @{
         'global.mode' = 'production'

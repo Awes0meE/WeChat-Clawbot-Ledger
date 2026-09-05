@@ -315,18 +315,28 @@ function prepareLocalRuntimeFixture(fixture) {
 
 function protectedAclPowerShell() {
   return `
-function New-ProtectedAcl {
+function New-ProtectedAcl([switch]$OwnerOnly) {
   $owner = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+  $rules = @(
+    [pscustomobject]@{ IdentityReference = [pscustomobject]@{ Value = $owner }; AccessControlType = 'Allow'; FileSystemRights = 'FullControl'; IsInherited = $false }
+  )
+  if (-not $OwnerOnly) {
+    $rules += [pscustomobject]@{ IdentityReference = [pscustomobject]@{ Value = 'NT AUTHORITY\\SYSTEM' }; AccessControlType = 'Allow'; FileSystemRights = 'ReadAndExecute, Synchronize'; IsInherited = $false }
+  }
   [pscustomobject]@{
     Owner = $owner
     AreAccessRulesProtected = $true
-    Access = @(
-      [pscustomobject]@{ IdentityReference = [pscustomobject]@{ Value = $owner }; AccessControlType = 'Allow'; FileSystemRights = 'FullControl'; IsInherited = $false },
-      [pscustomobject]@{ IdentityReference = [pscustomobject]@{ Value = 'NT AUTHORITY\\SYSTEM' }; AccessControlType = 'Allow'; FileSystemRights = 'ReadAndExecute, Synchronize'; IsInherited = $false }
-    )
+    Access = $rules
   }
 }
-function Get-Acl { [CmdletBinding()] param([string]$LiteralPath) New-ProtectedAcl }
+function Get-Acl {
+  [CmdletBinding()]
+  param([string]$LiteralPath)
+  $isProductionConfig = -not [string]::IsNullOrWhiteSpace($env:CLAWBOT_TUNNEL_TEST_PRODUCTION_CONFIG) -and
+    [string]::Equals([IO.Path]::GetFullPath($LiteralPath), [IO.Path]::GetFullPath($env:CLAWBOT_TUNNEL_TEST_PRODUCTION_CONFIG), [StringComparison]::OrdinalIgnoreCase)
+  $ownerOnly = $isProductionConfig -and $global:scenario -ne 'production-config-system-acl'
+  New-ProtectedAcl -OwnerOnly:$ownerOnly
+}
 `;
 }
 
@@ -956,6 +966,19 @@ test('supervisor double-checks before and after start and passes no credential a
   }
 });
 
+test('supervisor requires the production config to remain owner-only', () => {
+  const fixture = createFixture();
+  try {
+    const wrapper = createSupervisorWrapper(fixture);
+    const result = runPowerShell(wrapper, ['production-config-system-acl'], fixtureEnv(fixture));
+    assertFailed(result, /failed safely|ACL/iu);
+    const trace = existsSync(fixture.tracePath) ? readFileSync(fixture.tracePath, 'utf8') : '';
+    assert.equal(trace.includes('START '), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test('production launches cloudflared suspended into containment and cleans every startup failure', () => {
   const supervisor = readFileSync(supervisorScript, 'utf8');
   const nativeStart = supervisor.indexOf('CreateProcessW(');
@@ -1540,6 +1563,10 @@ test('local acceptance emits only fixed pass/fail evidence and rejects a mismatc
       assertSucceeded(equivalentPrincipal);
       assert.equal(JSON.parse(equivalentPrincipal.stdout.trim()).tunnel_task_principal, 'pass');
     }
+
+    const broadProductionConfigAcl = runPowerShell(wrapper, ['production-config-system-acl'], fixtureEnv(fixture));
+    assert.notEqual(broadProductionConfigAcl.status, 0);
+    assert.equal(JSON.parse(broadProductionConfigAcl.stdout.trim()).production_configuration, 'fail');
 
     const environmentOverride = runPowerShell(wrapper, ['healthy'], fixtureEnv(fixture, {
       CLAWBOT_TUNNEL_TEST_ENVIRONMENT_SCOPE: 'User',
