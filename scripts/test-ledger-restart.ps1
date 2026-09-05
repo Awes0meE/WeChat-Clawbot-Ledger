@@ -69,6 +69,33 @@ function Test-RestartSamePath {
     )
 }
 
+function Get-RestartWindowsIdentitySid {
+    param([Parameter(Mandatory = $true)][string]$Identity)
+
+    if ([string]::IsNullOrWhiteSpace($Identity)) { return $null }
+    try {
+        return New-Object Security.Principal.SecurityIdentifier($Identity)
+    } catch {
+        try {
+            $account = New-Object Security.Principal.NTAccount($Identity)
+            return $account.Translate([Security.Principal.SecurityIdentifier])
+        } catch {
+            return $null
+        }
+    }
+}
+
+function Test-RestartSameWindowsIdentity {
+    param(
+        [Parameter(Mandatory = $true)][string]$Left,
+        [Parameter(Mandatory = $true)][string]$Right
+    )
+
+    $leftSid = Get-RestartWindowsIdentitySid -Identity $Left
+    $rightSid = Get-RestartWindowsIdentitySid -Identity $Right
+    return $null -ne $leftSid -and $null -ne $rightSid -and $leftSid.Equals($rightSid)
+}
+
 function ConvertTo-RestartTaskQuotedArgument {
     param([Parameter(Mandatory = $true)][string]$Value)
 
@@ -153,12 +180,12 @@ function Assert-RestartTaskPolicy {
 
     $expectedUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
     $triggers = @($Task.Triggers)
-    if (-not [string]::Equals([string]$Task.Principal.UserId, $expectedUser, [StringComparison]::OrdinalIgnoreCase) -or
+    if (-not (Test-RestartSameWindowsIdentity -Left ([string]$Task.Principal.UserId) -Right $expectedUser) -or
         [string]$Task.Principal.LogonType -cne 'Interactive' -or
         [string]$Task.Principal.RunLevel -cne 'Limited' -or
         $triggers.Count -ne 1 -or
         [string]$triggers[0].CimClass.CimClassName -cne 'MSFT_TaskLogonTrigger' -or
-        -not [string]::Equals([string]$triggers[0].UserId, $expectedUser, [StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-RestartSameWindowsIdentity -Left ([string]$triggers[0].UserId) -Right $expectedUser) -or
         -not [bool]$triggers[0].Enabled -or
         -not [bool]$Task.Settings.Enabled -or
         [string]$Task.Settings.MultipleInstances -cne 'IgnoreNew' -or

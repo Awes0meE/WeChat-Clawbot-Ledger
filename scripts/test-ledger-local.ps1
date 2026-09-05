@@ -66,6 +66,33 @@ function Test-LocalSamePath {
     return [string]::Equals((Get-LocalNormalizedPath -Path $Left), (Get-LocalNormalizedPath -Path $Right), [StringComparison]::OrdinalIgnoreCase)
 }
 
+function Get-LocalWindowsIdentitySid {
+    param([Parameter(Mandatory = $true)][string]$Identity)
+
+    if ([string]::IsNullOrWhiteSpace($Identity)) { return $null }
+    try {
+        return New-Object Security.Principal.SecurityIdentifier($Identity)
+    } catch {
+        try {
+            $account = New-Object Security.Principal.NTAccount($Identity)
+            return $account.Translate([Security.Principal.SecurityIdentifier])
+        } catch {
+            return $null
+        }
+    }
+}
+
+function Test-LocalSameWindowsIdentity {
+    param(
+        [Parameter(Mandatory = $true)][string]$Left,
+        [Parameter(Mandatory = $true)][string]$Right
+    )
+
+    $leftSid = Get-LocalWindowsIdentitySid -Identity $Left
+    $rightSid = Get-LocalWindowsIdentitySid -Identity $Right
+    return $null -ne $leftSid -and $null -ne $rightSid -and $leftSid.Equals($rightSid)
+}
+
 function Assert-LocalAbsolutePath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -240,12 +267,12 @@ function Assert-LocalScheduledTaskPolicy {
 
     $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
     $triggers = @($Task.Triggers)
-    if (-not [string]::Equals([string]$Task.Principal.UserId, $currentUser, [StringComparison]::OrdinalIgnoreCase) -or
+    if (-not (Test-LocalSameWindowsIdentity -Left ([string]$Task.Principal.UserId) -Right $currentUser) -or
         [string]$Task.Principal.LogonType -cne 'Interactive' -or
         [string]$Task.Principal.RunLevel -cne 'Limited' -or
         $triggers.Count -ne 1 -or
         [string]$triggers[0].CimClass.CimClassName -cne 'MSFT_TaskLogonTrigger' -or
-        -not [string]::Equals([string]$triggers[0].UserId, $currentUser, [StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-LocalSameWindowsIdentity -Left ([string]$triggers[0].UserId) -Right $currentUser) -or
         -not [bool]$triggers[0].Enabled -or
         -not [bool]$Task.Settings.Enabled -or
         [string]$Task.Settings.MultipleInstances -cne 'IgnoreNew' -or
@@ -426,12 +453,12 @@ Invoke-LocalLedgerCheck -Name 'tunnel_task_principal' -Check {
     $tasks = @(Get-ScheduledTask -ErrorAction Stop | Where-Object { [string]::Equals([string]$_.TaskName, $TunnelTaskName, [StringComparison]::OrdinalIgnoreCase) -and $_.TaskPath -ceq '\' })
     if ($tasks.Count -ne 1) { throw 'task missing' }
     $triggers = @($tasks[0].Triggers)
-    if (-not [string]::Equals([string]$tasks[0].Principal.UserId, [Security.Principal.WindowsIdentity]::GetCurrent().Name, [StringComparison]::OrdinalIgnoreCase) -or
+    if (-not (Test-LocalSameWindowsIdentity -Left ([string]$tasks[0].Principal.UserId) -Right ([Security.Principal.WindowsIdentity]::GetCurrent().Name)) -or
         [string]$tasks[0].Principal.LogonType -cne 'Interactive' -or
         [string]$tasks[0].Principal.RunLevel -cne 'Limited' -or
         $triggers.Count -ne 1 -or
         [string]$triggers[0].CimClass.CimClassName -cne 'MSFT_TaskLogonTrigger' -or
-        -not [string]::Equals([string]$triggers[0].UserId, [Security.Principal.WindowsIdentity]::GetCurrent().Name, [StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-LocalSameWindowsIdentity -Left ([string]$triggers[0].UserId) -Right ([Security.Principal.WindowsIdentity]::GetCurrent().Name)) -or
         -not [bool]$triggers[0].Enabled -or
         -not [bool]$tasks[0].Settings.Enabled -or
         [string]$tasks[0].Settings.MultipleInstances -cne 'IgnoreNew' -or

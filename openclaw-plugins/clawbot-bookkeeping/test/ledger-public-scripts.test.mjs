@@ -273,6 +273,9 @@ test('restart acceptance only controls recognized exact tasks and tests fail-clo
   assert.match(source, /Assert-TunnelChildAbsentBeforeStart/u);
   assert.match(source, /RECOVERY_INCOMPLETE/u);
   assert.match(source, /MSFT_TaskLogonTrigger/u);
+  assert.match(source, /function Test-RestartSameWindowsIdentity/u);
+  assert.match(source, /NTAccount[\s\S]*Translate\(\[Security\.Principal\.SecurityIdentifier\]\)/u);
+  assert.ok((source.match(/Test-RestartSameWindowsIdentity/gmu) ?? []).length >= 3);
   assert.match(source, /RestartCount/u);
   assert.match(source, /MultipleInstances/u);
   assert.match(source, /CapturePreReboot/u);

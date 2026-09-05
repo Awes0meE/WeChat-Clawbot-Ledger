@@ -53,6 +53,33 @@ function Test-TunnelInstallSamePath {
     return [string]::Equals((Get-TunnelInstallNormalizedPath -Path $Left), (Get-TunnelInstallNormalizedPath -Path $Right), [StringComparison]::OrdinalIgnoreCase)
 }
 
+function Get-TunnelInstallWindowsIdentitySid {
+    param([Parameter(Mandatory = $true)][string]$Identity)
+
+    if ([string]::IsNullOrWhiteSpace($Identity)) { return $null }
+    try {
+        return New-Object Security.Principal.SecurityIdentifier($Identity)
+    } catch {
+        try {
+            $account = New-Object Security.Principal.NTAccount($Identity)
+            return $account.Translate([Security.Principal.SecurityIdentifier])
+        } catch {
+            return $null
+        }
+    }
+}
+
+function Test-TunnelInstallSameWindowsIdentity {
+    param(
+        [Parameter(Mandatory = $true)][string]$Left,
+        [Parameter(Mandatory = $true)][string]$Right
+    )
+
+    $leftSid = Get-TunnelInstallWindowsIdentitySid -Identity $Left
+    $rightSid = Get-TunnelInstallWindowsIdentitySid -Identity $Right
+    return $null -ne $leftSid -and $null -ne $rightSid -and $leftSid.Equals($rightSid)
+}
+
 function Assert-TunnelInstallLocalAbsolutePath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -173,19 +200,17 @@ function Assert-TunnelInstallProtectedFile {
     }
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $ownerName = $identity.Name
-    $ownerSid = [string]$identity.User.Value
     try {
         $actualOwner = [string]$acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
     } catch {
         $actualOwner = [string]$acl.Owner
     }
-    if (-not [string]::Equals($actualOwner, $ownerName, [StringComparison]::OrdinalIgnoreCase) -and
-        -not [string]::Equals($actualOwner, $ownerSid, [StringComparison]::OrdinalIgnoreCase)) {
+    if (-not (Test-TunnelInstallSameWindowsIdentity -Left $actualOwner -Right $ownerName)) {
         throw 'A protected local Tunnel file has an unsafe owner.'
     }
     $ownerRules = @($rules | Where-Object {
         $value = Get-TunnelInstallRuleIdentity -Rule $_
-        $value -ceq $ownerName -or $value -ceq $ownerSid
+        Test-TunnelInstallSameWindowsIdentity -Left $value -Right $ownerName
     })
     $systemRules = @($rules | Where-Object {
         $value = Get-TunnelInstallRuleIdentity -Rule $_
@@ -357,12 +382,12 @@ function Test-TunnelInstallExactTask {
             -not (Test-TunnelInstallSamePath -Left ([string]$actions[0].Execute) -Right $ExpectedLauncher) -or
             [string]$actions[0].Arguments -cne $ExpectedArguments -or
             -not (Test-TunnelInstallSamePath -Left ([string]$actions[0].WorkingDirectory) -Right $ExpectedWorkingDirectory) -or
-            -not [string]::Equals([string]$Task.Principal.UserId, $ExpectedUser, [StringComparison]::OrdinalIgnoreCase) -or
+            -not (Test-TunnelInstallSameWindowsIdentity -Left ([string]$Task.Principal.UserId) -Right $ExpectedUser) -or
             [string]$Task.Principal.LogonType -cne 'Interactive' -or
             [string]$Task.Principal.RunLevel -cne 'Limited' -or
             $triggers.Count -ne 1 -or
             [string]$triggers[0].CimClass.CimClassName -cne 'MSFT_TaskLogonTrigger' -or
-            -not [string]::Equals([string]$triggers[0].UserId, $ExpectedUser, [StringComparison]::OrdinalIgnoreCase) -or
+            -not (Test-TunnelInstallSameWindowsIdentity -Left ([string]$triggers[0].UserId) -Right $ExpectedUser) -or
             -not [bool]$triggers[0].Enabled -or
             -not [bool]$Task.Settings.Enabled -or
             [string]$Task.Settings.MultipleInstances -cne 'IgnoreNew' -or
@@ -465,7 +490,7 @@ function Copy-ImmutableRuntimeFile {
 function Set-TunnelRuntimeAcl {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $owner = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $owner = [Security.Principal.WindowsIdentity]::GetCurrent().User
     $system = New-Object Security.Principal.SecurityIdentifier('S-1-5-18')
     if (Test-Path -LiteralPath $Path -PathType Container) {
         $acl = New-Object Security.AccessControl.DirectorySecurity
@@ -476,6 +501,7 @@ function Set-TunnelRuntimeAcl {
         $ownerRule = New-Object Security.AccessControl.FileSystemAccessRule($owner, 'FullControl', 'Allow')
         $systemRule = New-Object Security.AccessControl.FileSystemAccessRule($system, 'ReadAndExecute', 'Allow')
     }
+    $acl.SetOwner($owner)
     $acl.SetAccessRuleProtection($true, $false)
     $acl.SetAccessRule($ownerRule)
     $acl.AddAccessRule($systemRule)

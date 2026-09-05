@@ -511,7 +511,7 @@ function Get-CimInstance {
   }
   @()
 }
-function New-ExactInstallerTask([switch]$WrongPrincipal) {
+function New-ExactInstallerTask([switch]$WrongPrincipal, [switch]$DifferentSidPrincipal, [switch]$SidPrincipal, [switch]$ShortPrincipal) {
   $runtime = [IO.Path]::GetFullPath($env:CLAWBOT_TUNNEL_TEST_RUNTIME).TrimEnd('\\')
   $installedSupervisor = Join-Path $runtime 'ledger-tunnel-supervisor.ps1'
   $installedCommon = Join-Path $runtime 'ledger-runtime-common.ps1'
@@ -531,8 +531,8 @@ function New-ExactInstallerTask([switch]$WrongPrincipal) {
     TaskName = 'Clawbot Ledger Tunnel'
     TaskPath = '\\'
     Actions = @([pscustomobject]@{ Execute = $launcher; Arguments = $arguments; WorkingDirectory = $runtime })
-    Principal = [pscustomobject]@{ UserId = $(if ($WrongPrincipal) { 'OTHER\\User' } else { $user }); LogonType = 'Interactive'; RunLevel = 'Limited' }
-    Triggers = @([pscustomobject]@{ CimClass = [pscustomobject]@{ CimClassName = 'MSFT_TaskLogonTrigger' }; UserId = $user; Enabled = $true })
+    Principal = [pscustomobject]@{ UserId = $(if ($WrongPrincipal) { 'OTHER\\User' } elseif ($DifferentSidPrincipal) { 'S-1-5-18' } elseif ($SidPrincipal) { [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } elseif ($ShortPrincipal) { $user.Split('\\')[-1] } else { $user }); LogonType = 'Interactive'; RunLevel = 'Limited' }
+    Triggers = @([pscustomobject]@{ CimClass = [pscustomobject]@{ CimClassName = 'MSFT_TaskLogonTrigger' }; UserId = $(if ($SidPrincipal) { [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } elseif ($ShortPrincipal) { $user.Split('\\')[-1] } else { $user }); Enabled = $true })
     Settings = [pscustomobject]@{ Enabled = $true; MultipleInstances = 'IgnoreNew'; RestartCount = 999; RestartInterval = 'PT1M'; ExecutionTimeLimit = 'PT0S'; StartWhenAvailable = $true; DisallowStartIfOnBatteries = $false; StopIfGoingOnBatteries = $false }
   }
 }
@@ -556,7 +556,10 @@ function Get-ScheduledTask {
     return ,([pscustomobject]@{ TaskName = 'Clawbot Ledger Tunnel'; TaskPath = '\\'; Actions = @([pscustomobject]@{ Execute = 'foreign.exe'; Arguments = 'foreign'; WorkingDirectory = $env:CLAWBOT_TUNNEL_TEST_RUNTIME }) })
   }
   if ($global:scenario -eq 'task-principal-conflict') { return ,(New-ExactInstallerTask -WrongPrincipal) }
+  if ($global:scenario -eq 'task-principal-sid-conflict') { return ,(New-ExactInstallerTask -DifferentSidPrincipal) }
   if ($global:scenario -eq 'exact-task') { return ,(New-ExactInstallerTask) }
+  if ($global:scenario -eq 'exact-task-principal-sid') { return ,(New-ExactInstallerTask -SidPrincipal) }
+  if ($global:scenario -eq 'exact-task-principal-short-name') { return ,(New-ExactInstallerTask -ShortPrincipal) }
   if ($global:registered) {
     Add-Trace 'TASK_REVALIDATE'
     if ($global:scenario -eq 'post-register-task-race') {
@@ -589,7 +592,16 @@ function New-ScheduledTaskSettingsSet { [CmdletBinding()] param([int]$RestartCou
 function New-ScheduledTaskPrincipal { [CmdletBinding()] param([string]$UserId, [string]$LogonType, [string]$RunLevel) Add-Trace ('PRINCIPAL ' + $LogonType + ' ' + $RunLevel); [pscustomobject]@{} }
 function Register-ScheduledTask { [CmdletBinding()] param([string]$TaskName, [object]$Action, [object]$Trigger, [object]$Settings, [object]$Principal, [switch]$Force) Add-Trace ('REGISTER ' + $TaskName + ' FORCE=' + [bool]$Force); $global:registered = $true }
 function Start-ScheduledTask { [CmdletBinding()] param([object]$InputObject) Add-Trace ('START_TASK ' + $InputObject.TaskName) }
-function Set-Acl { [CmdletBinding()] param([string]$LiteralPath, [object]$AclObject) Add-Trace ('ACL ' + [IO.Path]::GetFileName($LiteralPath)) }
+function Set-Acl {
+  [CmdletBinding()]
+  param([string]$LiteralPath, [object]$AclObject)
+  $ownerMatches = $false
+  try {
+    $actualOwner = $AclObject.GetOwner([Security.Principal.SecurityIdentifier])
+    $ownerMatches = $actualOwner.Equals([Security.Principal.WindowsIdentity]::GetCurrent().User)
+  } catch {}
+  Add-Trace ('ACL ' + [IO.Path]::GetFileName($LiteralPath) + ' OWNER_CURRENT=' + $ownerMatches)
+}
 if ($Scenario -eq 'whatif') {
   function Start-Process { throw 'WhatIf launched cloudflared.' }
   function New-ScheduledTaskAction { throw 'WhatIf constructed a task.' }
@@ -751,6 +763,14 @@ function Get-ScheduledTask {
       DisallowStartIfOnBatteries = $false
       StopIfGoingOnBatteries = $false
     }
+  }
+  if ($global:scenario -eq 'principal-sid') {
+    $tunnelTask.Principal.UserId = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $tunnelTask.Triggers[0].UserId = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+  }
+  if ($global:scenario -eq 'principal-short-name') {
+    $tunnelTask.Principal.UserId = $currentUser.Split('\\')[-1]
+    $tunnelTask.Triggers[0].UserId = $currentUser.Split('\\')[-1]
   }
   return @($productionTask, $tunnelTask)
 }
@@ -1288,6 +1308,11 @@ test('installer validates ingress then creates an exact supervisor-only least-pr
     assert.doesNotMatch(action, /--token|service\s+install/iu);
     assert.ok(trace.some((line) => line === 'PRINCIPAL Interactive Limited'));
     assert.ok(trace.some((line) => line === 'REGISTER Clawbot Ledger Tunnel FORCE=False'));
+    const aclWrites = trace.filter((line) => line.startsWith('ACL '));
+    assert.equal(aclWrites.length, 9);
+    assert.ok(aclWrites.every((line) => line.endsWith('OWNER_CURRENT=True')), aclWrites.join('\n'));
+    assert.ok(aclWrites.some((line) => /^ACL runtime /u.test(line)));
+    assert.ok(aclWrites.some((line) => /^ACL logs /u.test(line)));
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -1332,6 +1357,7 @@ test('installer rejects environment overrides, untrusted binaries, case collisio
     ['hash-mismatch', {}],
     ['task-case-conflict', {}],
     ['task-principal-conflict', {}],
+    ['task-principal-sid-conflict', {}],
     ['task-race', {}],
   ]) {
     const fixture = createFixture();
@@ -1360,6 +1386,22 @@ test('installer leaves an already exact full-identity task untouched', () => {
     assert.equal(trace.includes('REGISTER '), false);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('installer recognizes equivalent Task Scheduler principal identity forms', () => {
+  for (const scenario of ['exact-task-principal-short-name', 'exact-task-principal-sid']) {
+    const fixture = createFixture();
+    try {
+      const wrapper = createInstallerWrapper(fixture);
+      const result = runPowerShell(wrapper, [scenario], fixtureEnv(fixture));
+      assertSucceeded(result);
+      assert.match(result.stdout, /LEDGER_TUNNEL_TASK_ALREADY_INSTALLED/u);
+      const trace = readFileSync(fixture.tracePath, 'utf8');
+      assert.equal(trace.includes('REGISTER '), false);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
   }
 });
 
@@ -1492,6 +1534,12 @@ test('local acceptance emits only fixed pass/fail evidence and rejects a mismatc
       tunnel_task_principal: 'pass',
       tunnel_child: 'pass',
     });
+
+    for (const scenario of ['principal-short-name', 'principal-sid']) {
+      const equivalentPrincipal = runPowerShell(wrapper, [scenario], fixtureEnv(fixture));
+      assertSucceeded(equivalentPrincipal);
+      assert.equal(JSON.parse(equivalentPrincipal.stdout.trim()).tunnel_task_principal, 'pass');
+    }
 
     const environmentOverride = runPowerShell(wrapper, ['healthy'], fixtureEnv(fixture, {
       CLAWBOT_TUNNEL_TEST_ENVIRONMENT_SCOPE: 'User',
