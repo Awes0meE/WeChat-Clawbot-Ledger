@@ -1,6 +1,6 @@
 <div align="center">
 
-# Clawbot
+# WeChat Clawbot Ledger
 
 **A self-hosted WeChat bookkeeping assistant powered by OpenClaw and ezBookkeeping.**
 
@@ -18,7 +18,7 @@ Turn everyday messages into validated expenses, reliable receipts, and precise l
 
 ---
 
-Clawbot connects a dedicated WeChat conversation to a personal ezBookkeeping ledger. OpenClaw and the official Codex harness interpret the message; a local plugin validates the request, calls the ledger API, and produces the authoritative reply.
+WeChat Clawbot Ledger connects a dedicated WeChat conversation to a personal ezBookkeeping ledger. OpenClaw and the official Codex harness interpret the message; a local plugin validates the request, calls the ledger API, and produces the authoritative reply.
 
 The project targets a **single owner, one SGD expense account, and an always-on Windows host**. It includes the integration code, tests, deployment scripts, and configuration templates. Running it requires your own services and credentials; cloning this repository does not start a bot or provide access to a ledger.
 
@@ -107,7 +107,12 @@ The current setup intentionally focuses on one owner's SGD expenses. Additional 
 
 ### Run the local checks
 
-From the repository root, install the locked dependencies and run the plugin checks:
+Clone the repository, then install the locked dependencies and run the plugin checks:
+
+```powershell
+git clone https://github.com/Awes0meE/WeChat-Clawbot-Ledger.git
+Set-Location WeChat-Clawbot-Ledger
+```
 
 ```powershell
 Push-Location openclaw-plugins\clawbot-bookkeeping
@@ -132,7 +137,7 @@ Repository tests must never target the production ledger on port `8888`. Real le
 4. Validate against the isolated test ledger.
 5. Publish a manifest-verified immutable release, then follow the runbook's service, browser, restart, fail-closed, and WeChat acceptance checks.
 
-State-changing installation, migration, publication, and restart scripts support `-WhatIf`. Preview the documented operation before applying it. Production loads a verified release outside this checkout; editing source files does not deploy them.
+State-changing installation, migration, release, and restart scripts support `-WhatIf`. Preview the documented operation before applying it. Production loads a verified release outside this checkout; editing source files does not deploy them.
 
 ## Repository layout
 
@@ -142,7 +147,7 @@ State-changing installation, migration, publication, and restart scripts support
 | [`openclaw-plugins/openclaw-weixin-stable-id/`](openclaw-plugins/openclaw-weixin-stable-id/) | Tencent Weixin adapter variant preserving upstream message IDs and sender metadata |
 | [`openclaw-hooks/session-memory/`](openclaw-hooks/session-memory/) | Version-checked hook protecting the immutable bookkeeper workspace |
 | [`openclaw-workspace/`](openclaw-workspace/) | Dedicated bookkeeper instructions and behavior contracts |
-| [`config/`](config/) | Sanitized service templates and category configuration |
+| [`config/`](config/) | Service configuration templates and category definitions |
 | [`scripts/`](scripts/) | Windows installation, migration, release, Tunnel supervision, and verification |
 | [`docs/`](docs/) | Designs, implementation plans, operational runbooks, and acceptance records |
 | [`research/`](research/) | Notes comparing bookkeeping integration options |
@@ -160,7 +165,7 @@ Most detailed operational documents are currently written in Chinese.
 
 ## Privacy and security
 
-The repository is intended to hold reproducible code and sanitized configuration. Live credentials, WeChat identities, conversation transcripts, ledger databases, backups, and runtime logs belong outside version control. The ignore rules help prevent accidental additions, but do not remove information already present in Git history.
+The repository contains reproducible code and service configuration templates. Live credentials, WeChat identities, conversation transcripts, ledger databases, backups, and runtime logs belong outside version control. Use synthetic data in tests and review staged files before committing.
 
 - Restrict the bookkeeper to its configured owner and account.
 - Keep HTTP and MCP tokens separate and local; never place them in prompts or receipts.
@@ -177,6 +182,6 @@ Review [`AGENTS.md`](AGENTS.md), keep changes focused, and use Conventional Comm
 
 ## Acknowledgments and licensing
 
-Clawbot builds on [OpenClaw](https://github.com/openclaw/openclaw), [ezBookkeeping](https://github.com/mayswind/ezbookkeeping), and Tencent's Weixin channel adapter.
+WeChat Clawbot Ledger builds on [OpenClaw](https://github.com/openclaw/openclaw), [ezBookkeeping](https://github.com/mayswind/ezbookkeeping), and Tencent's Weixin channel adapter.
 
 The included Tencent adapter retains its [MIT license and copyright notice](openclaw-plugins/openclaw-weixin-stable-id/LICENSE). **A repository-wide license has not yet been declared.** The adapter's license should not be interpreted as a license for every file in this repository.
