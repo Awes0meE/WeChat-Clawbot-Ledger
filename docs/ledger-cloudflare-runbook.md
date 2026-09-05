@@ -317,7 +317,9 @@ proxied CNAME 在公网 DNS 中会 flatten，因此不用公网 `resolveCname(le
   -VerifyRateLimit
 ```
 
-仅在 MCP 已按既有交互流程启用且独立 MCP token 存在时，再加入 `-McpTokenPath`。脚本把 token 只读入内存，只向经过固定 HTTPS host 校验的 Ledger URL 发送；API 只把 `401/403` 视为明确拒绝，MCP 只接受 `401/403/404`。其他状态必须先有上游实现证明并核对精确拒绝语义，不能把任意非 2xx 当成通过。暂停点观察到的 API `400` 仍须按续接文档实现 `ErrIPForbidden` 的 `200020` 精确判定。脚本不得输出 Authorization、token、响应正文或原始异常。
+仅在 MCP 已按既有交互流程启用且独立 MCP token 存在时，再加入 `-McpTokenPath`。脚本把 token 只读入内存，只向经过固定 HTTPS host 校验的 Ledger URL 发送。API 继续接受 `401/403`；此外，仅当 HTTP 状态为 `400`、响应为 JSON 对象，且 `success === false`、`errorCode === 200020`、`path === '/api/v1/accounts/list.json'` 同时成立时，才接受为 API token 的 IP 限制拒绝。判定依据是 ezBookkeeping v1.6.1 的 [API token IP middleware](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/middlewares/api_token_ip_limit.go#L10-L36)、[ErrIPForbidden 定义](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/errs/global.go#L7-L29)、[错误码计算](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/errs/error.go#L66-L69) 和 [API 错误响应](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/utils/api.go#L28-L64)。MCP 仍只接受 `401/403/404`，不能复用 API 的 `400` 例外。
+
+其他 `400`、无效 JSON、缺失或类型不符的必需字段、不同 path/errorCode 和其他意外状态均须失败；所有接受的拒绝响应仍须通过无缓存检查。API 响应正文只短暂读入内存；`400` 正文在 JSON 解析结束时立即通过内层 `finally` 清空，再进行字段和缓存判定。外层 `finally` 清除其余状态的正文及解析对象的引用，成功、解析失败、语义不符和缓存失败都执行清理。`errorMessage` 不参与判定；脚本不得输出、保存或返回原始正文或该错误文本，也不得输出 Authorization、token 或原始异常。
 
 公网必须证明：
 

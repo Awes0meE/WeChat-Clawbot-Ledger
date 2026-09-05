@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 
 const projectDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const configPath = join(projectDirectory, 'config', 'cloudflare-ledger-rules.example.json');
@@ -44,6 +45,65 @@ function assertPowerShellParses(path) {
     `$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile('${escaped}', [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count) { exit 1 }`,
   ]);
   assert.equal(result.status, 0, result.stderr || result.stdout);
+}
+
+function credentialBoundaryProbe(response) {
+  const source = readRequired(publicHelperPath);
+  const names = ['fail', 'headerValue', 'assertNotCached', 'assertCredentialRejected'];
+  const functions = names.map((name) => {
+    const definition = source.match(new RegExp(`(?:async )?function ${name}\\([^]*?\\n\\}`, 'u'))?.[0];
+    assert.ok(definition, `missing public helper function: ${name}`);
+    return definition;
+  });
+  const requests = [];
+  const output = [];
+  const recordOutput = (...values) => output.push(...values);
+  const boundary = runInNewContext(`${functions.join('\n')}\nassertCredentialRejected;`, {
+    LEDGER_HOST: ledgerHost,
+    readToken: () => 'SYNTHETIC-TEST-TOKEN',
+    request: async (options, timeoutMs) => {
+      requests.push({ ...options, timeoutMs });
+      return response;
+    },
+    console: { log: recordOutput, error: recordOutput },
+    process: { stdout: { write: recordOutput }, stderr: { write: recordOutput } },
+    writeFileSync: recordOutput,
+  });
+  return { boundary, requests, output };
+}
+
+function apiIpRejection(overrides = {}) {
+  return {
+    success: false,
+    errorCode: 200020,
+    errorMessage: 'SYNTHETIC-PRIVATE-ERROR-MUST-NOT-LEAK',
+    path: '/api/v1/accounts/list.json',
+    ...overrides,
+  };
+}
+
+async function checkCredentialBoundary({ kind = 'api', statusCode = 400, body, headers = {}, errorCode }) {
+  const response = { statusCode, headers, body };
+  const { boundary, requests, output } = credentialBoundaryProbe(response);
+  const invoke = () => boundary(kind, 'synthetic-token-path', 1234);
+  if (errorCode) {
+    await assert.rejects(invoke, (error) => {
+      assert.equal(error.message, errorCode);
+      assert.equal(error.safeCode, errorCode);
+      assert.equal(error.cause, undefined);
+      return true;
+    });
+  } else {
+    assert.equal(await invoke(), undefined);
+  }
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, kind === 'api' ? 'GET' : 'POST');
+  assert.equal(requests[0].url, `https://${ledgerHost}${kind === 'api' ? '/api/v1/accounts/list.json' : '/mcp'}`);
+  assert.equal(requests[0].headers.Authorization, 'Bearer SYNTHETIC-TEST-TOKEN');
+  assert.equal(requests[0].timeoutMs, 1234);
+  assert.equal(Boolean(requests[0].readBody), kind === 'api');
+  assert.equal(response.body, '');
+  assert.deepEqual(output, []);
 }
 
 test('Cloudflare manifest is credential-free and scopes every control to Ledger', () => {
@@ -151,7 +211,7 @@ test('public and restart acceptance scripts parse in Windows PowerShell 5.1', ()
   }
 });
 
-test('public acceptance is bounded, bodyless, credential-redacting, and portfolio-aware', () => {
+test('public acceptance is bounded, response-redacting, credential-redacting, and portfolio-aware', () => {
   const wrapper = readRequired(publicTestPath);
   const helper = readRequired(publicHelperPath);
   const source = `${wrapper}\n${helper}`;
@@ -204,6 +264,113 @@ test('public acceptance is bounded, bodyless, credential-redacting, and portfoli
   assert.doesNotMatch(wrapper, /Write-(?:Host|Output|Verbose|Warning)[^\r\n]*(?:body|content|token|credential)/iu);
   assert.doesNotMatch(wrapper, /Out-File|Export-Clixml|Start-Transcript|Tee-Object/iu);
   assert.doesNotMatch(helper, /console\.(?:log|error)|process\.(?:stdout|stderr)\.write\([^\r\n]*(?:body|content|token|credential)/iu);
+});
+
+test('API credential boundary accepts only the exact HTTP 400 IP-forbidden envelope', async (t) => {
+  for (const [name, document] of [
+    ['upstream envelope', apiIpRejection()],
+    ['required fields without error message', { success: false, errorCode: 200020, path: '/api/v1/accounts/list.json' }],
+  ]) {
+    await t.test(name, () => checkCredentialBoundary({ body: JSON.stringify(document) }));
+  }
+});
+
+test('API credential boundary clears the parsed response body before inspecting cache headers', async () => {
+  let headerReads = 0;
+  const response = {
+    statusCode: 400,
+    body: JSON.stringify(apiIpRejection()),
+    get headers() {
+      headerReads += 1;
+      assert.equal(response.body === '', true, 'body must already be cleared before cache inspection');
+      return {};
+    },
+  };
+  const { boundary, output } = credentialBoundaryProbe(response);
+  assert.equal(await boundary('api', 'synthetic-token-path', 1234), undefined);
+  assert.ok(headerReads > 0);
+  assert.equal(response.body, '');
+  assert.deepEqual(output, []);
+});
+
+test('API credential boundary rejects invalid HTTP 400 bodies without leaking parser or upstream text', async (t) => {
+  const valid = apiIpRejection();
+  const cases = [
+    ['malformed JSON', '{"errorMessage":"SYNTHETIC-PRIVATE-ERROR-MUST-NOT-LEAK"'],
+    ['empty body', ''],
+    ['HTML error', '<html>SYNTHETIC-PRIVATE-ERROR-MUST-NOT-LEAK</html>'],
+    ['null', 'null'],
+    ['array', JSON.stringify([valid])],
+    ['string', JSON.stringify('SYNTHETIC-PRIVATE-ERROR-MUST-NOT-LEAK')],
+    ['number', '200020'],
+    ['boolean', 'false'],
+    ['empty object', '{}'],
+    ['missing success', JSON.stringify(apiIpRejection({ success: undefined }))],
+    ['true success', JSON.stringify(apiIpRejection({ success: true }))],
+    ['string success', JSON.stringify(apiIpRejection({ success: 'false' }))],
+    ['numeric success', JSON.stringify(apiIpRejection({ success: 0 }))],
+    ['null success', JSON.stringify(apiIpRejection({ success: null }))],
+    ['missing error code', JSON.stringify(apiIpRejection({ errorCode: undefined }))],
+    ['different error code', JSON.stringify(apiIpRejection({ errorCode: 200021 }))],
+    ['string error code', JSON.stringify(apiIpRejection({ errorCode: '200020' }))],
+    ['array error code', JSON.stringify(apiIpRejection({ errorCode: [200020] }))],
+    ['null error code', JSON.stringify(apiIpRejection({ errorCode: null }))],
+    ['missing path', JSON.stringify(apiIpRejection({ path: undefined }))],
+    ['different path', JSON.stringify(apiIpRejection({ path: '/api/v1/transactions/list.json' }))],
+    ['path with query', JSON.stringify(apiIpRejection({ path: '/api/v1/accounts/list.json?probe=1' }))],
+    ['array path', JSON.stringify(apiIpRejection({ path: ['/api/v1/accounts/list.json'] }))],
+    ['null path', JSON.stringify(apiIpRejection({ path: null }))],
+  ];
+  for (const [name, body] of cases) {
+    await t.test(name, () => checkCredentialBoundary({
+      body,
+      errorCode: 'LEDGER_PUBLIC_CREDENTIAL_BOUNDARY_FAILED',
+    }));
+  }
+});
+
+test('credential boundary preserves API and MCP status rejection rules and clears transient bodies', async (t) => {
+  for (const [kind, acceptedStatuses] of [['api', [401, 403]], ['mcp', [401, 403, 404]]]) {
+    for (const statusCode of acceptedStatuses) {
+      await t.test(`${kind} accepts ${statusCode}`, () => checkCredentialBoundary({
+        kind, statusCode, body: 'SYNTHETIC-PRIVATE-ERROR-MUST-NOT-LEAK',
+      }));
+    }
+    for (const statusCode of [200, 204, 301, 302, 404, 429, 500, 503, '400']) {
+      if (acceptedStatuses.includes(statusCode)) continue;
+      await t.test(`${kind} rejects ${typeof statusCode} ${statusCode}`, () => checkCredentialBoundary({
+        kind, statusCode, body: JSON.stringify(apiIpRejection()),
+        errorCode: 'LEDGER_PUBLIC_CREDENTIAL_BOUNDARY_FAILED',
+      }));
+    }
+  }
+  await t.test('MCP rejects the API HTTP 400 envelope', () => checkCredentialBoundary({
+    kind: 'mcp', body: JSON.stringify(apiIpRejection()),
+    errorCode: 'LEDGER_PUBLIC_CREDENTIAL_BOUNDARY_FAILED',
+  }));
+});
+
+test('credential boundary rejects cached rejection responses and clears the body on cache failures', async (t) => {
+  const cachedHeaders = [
+    ...['HIT', 'STALE', 'REVALIDATED', 'UPDATING', ' hit '].map((value) => ({ 'cf-cache-status': value })),
+    { 'cache-control': 'public, max-age=0' },
+    { 'cache-control': 'private, max-age=60' },
+  ];
+  for (const [kind, statusCode] of [['api', 400], ['api', 401], ['mcp', 403]]) {
+    for (const headers of cachedHeaders) {
+      await t.test(`${kind} ${statusCode} ${JSON.stringify(headers)}`, () => checkCredentialBoundary({
+        kind, statusCode, headers, body: JSON.stringify(apiIpRejection()),
+        errorCode: 'LEDGER_PUBLIC_CACHE_FAILED',
+      }));
+    }
+  }
+});
+
+test('credential boundary drops its parsed JSON reference in finally and never reads upstream error text', () => {
+  const source = readRequired(publicHelperPath);
+  const boundary = source.match(/async function assertCredentialRejected[^]*?\n\}/u)?.[0] ?? '';
+  assert.match(boundary, /finally\s*\{[^]*?document\s*=\s*null/u);
+  assert.doesNotMatch(boundary, /errorMessage/u);
 });
 
 test('portfolio baseline capture handles a Cloudflare-flattened apex without comparing rotating addresses', () => {

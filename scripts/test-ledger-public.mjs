@@ -372,14 +372,16 @@ function assertNotCached(response) {
 
 async function assertCredentialRejected(kind, tokenPath, timeoutMs) {
   let token = readToken(tokenPath);
+  let response;
+  let document;
   try {
     const headers = { Authorization: `Bearer ${token}` };
-    let response;
     if (kind === 'api') {
       response = await request({
         method: 'GET',
         url: `https://${LEDGER_HOST}/api/v1/accounts/list.json`,
         headers,
+        readBody: true,
       }, timeoutMs);
     } else {
       response = await request({
@@ -390,9 +392,26 @@ async function assertCredentialRejected(kind, tokenPath, timeoutMs) {
       }, timeoutMs);
     }
     const allowedStatuses = kind === 'api' ? [401, 403] : [401, 403, 404];
-    if (!allowedStatuses.includes(response.statusCode)) fail('LEDGER_PUBLIC_CREDENTIAL_BOUNDARY_FAILED');
+    if (kind === 'api' && response.statusCode === 400) {
+      try {
+        document = JSON.parse(response.body);
+      } catch {
+        fail('LEDGER_PUBLIC_CREDENTIAL_BOUNDARY_FAILED');
+      } finally {
+        response.body = '';
+      }
+      if (!document || typeof document !== 'object' || Array.isArray(document)
+          || document.success !== false || document.errorCode !== 200020
+          || document.path !== '/api/v1/accounts/list.json') {
+        fail('LEDGER_PUBLIC_CREDENTIAL_BOUNDARY_FAILED');
+      }
+    } else if (!allowedStatuses.includes(response.statusCode)) {
+      fail('LEDGER_PUBLIC_CREDENTIAL_BOUNDARY_FAILED');
+    }
     assertNotCached(response);
   } finally {
+    if (response) response.body = '';
+    document = null;
     token = null;
   }
 }
