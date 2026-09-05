@@ -34,9 +34,11 @@ Browser -> https://ledger.66ccff-labs.com -> Cloudflare Tunnel
 | 专用代理 allowlist | `record_expense`、`prepare_expense`、`resolve_expense_confirmation`、`summarize_expenses`、`ezbookkeeping__query_transactions` |
 | 灵活历史查询 | 代码与最小权限契约已就绪；截至 2026-09-05，本机 `enable_mcp=false` 且独立 MCP token 尚未生成，因此尚未上线 |
 
-当前 Ledger 网页已通过正式登录、一次性记录的新增/修改/删除、HSTS 后公网安全与作品集回归，以及服务重启和失败关闭验收。2026-09-05 真实 Windows 重启后的完整恢复、Cloudflare 核验、微信记账与 HTTP 汇总实测均已通过，测试记录已清理且三个数据哈希恢复基线。平台重复投递同一消息的真实验证仍缺触发入口，全部上线验收尚未闭环。新的开发会话必须先阅读 [2026-09-05 GPT-6 续接点](docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)，从既有 Tunnel、DNS、规则和证据继续。
+Ledger 网页已通过正式登录、一次性记录的新增/修改/删除、公网安全与作品集回归、服务重启和失败关闭验收。2026-09-05 真实 Windows 重启恢复、Cloudflare 核验以及当时的微信记账与 HTTP 汇总实测通过，已知测试记录清理后三个数据哈希恢复基线。基础部署证据见 [GPT-6 续接点](docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)。
 
-日常源码维护以同步后的 `main` 为基线。本次整合保留 `93543ab` 的中文金额解析与新可信消息优先修复；Git 合并不切换生产代码。当前生产仍加载 `D:\Clawbot\releases\1cf2f739ca92898feed5f24372e9a407ced34b0a`，后续发布须另按运维手册创建、验证并显式切换 immutable release，不能由 `main` 的内容推断微信已加载全部新修复。
+随后两次新微信消息重复收到上一笔回执，已确认旧生产 release `1cf2f739ca92898feed5f24372e9a407ced34b0a` 未包含 `93543ab` 的新可信消息优先修复。`c5e2e25` 进一步阻止多候选和确认决定不匹配时回退旧成功回执；回复回归 516/516 通过。**生产现已切换到 `0e7c2d7f1f0369552d17d054e2ef24b75be7a482`**，发布校验、切换脚本及 Gateway/channel/plugin/Codex/model 检查通过，旧 release 完整回滚校验也已通过。
+
+managed `session-memory` 保护已安装并确认运行注册，只跳过 `bookkeeper`，其余代理保持官方行为；旧 workspace 的四个 memory 文件已按哈希保全迁出。修正仓库 PowerShell 换行约定后，切换后的严格本机验收 14/14 通过、退出码 0；未修改已部署 Tunnel 脚本或放宽校验。当前步骤见 [微信旧回执修复交接](docs/handoffs/2026-09-05-wechat-stale-reply-repair.md)：现有会话中的两条全新微信消息验收仍待用户回应，修复部署不改账或补账。平台同一 message ID 的真实重放仍无触发入口，不能报告全部上线验收完成。
 
 ## 助理行为
 
@@ -97,6 +99,7 @@ HTTP API token 与原生 MCP token 是两份不同的本机秘密：前者供定
 | `openclaw-plugins/clawbot-bookkeeping/` | 可信写入、确定性汇总、owner-only MCP resolver 及测试 |
 | `openclaw-plugins/clawbot-bookkeeping/categories.mjs` | 运行时权威分类契约 `CATEGORY_DEFINITIONS` |
 | `openclaw-plugins/openclaw-weixin-stable-id/` | 保留腾讯消息 ID 和发送者元数据的本地微信插件变体 |
+| `openclaw-hooks/session-memory/` | 版本与双哈希固定的 managed hook；保护 bookkeeper immutable workspace，其余代理使用官方行为 |
 | `openclaw-workspace/AGENTS.md` | 专用 Codex 记账代理的运行提示 |
 | `config/expense-categories.json` | 脱敏的 11/45 分类导入与部署快照，不是运行时真源 |
 | `config/*.example.json` | 不含真实身份和凭据的 OpenClaw 配置模板 |
@@ -209,4 +212,4 @@ openclaw models status --agent bookkeeper --json
 
 经用户明确授权，账本请求与必要查询结果会发送到当前 ChatGPT OAuth 下的 Codex 会话；本机 token、Cloudflare 身份、微信身份、消息 ID、SQLite、交易内容、日志和 OpenClaw 状态仍不得上传或提交。
 
-上线与维护必须完整遵循 [Ledger Cloudflare Tunnel 运维手册](docs/ledger-cloudflare-runbook.md) 和 [WINDOWS-HANDOFF.md](WINDOWS-HANDOFF.md)；当前未完成状态见 [2026-09-05 GPT-6 续接点](docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)。
+上线与维护必须完整遵循 [Ledger Cloudflare Tunnel 运维手册](docs/ledger-cloudflare-runbook.md) 和 [WINDOWS-HANDOFF.md](WINDOWS-HANDOFF.md)；当前未完成状态见 [微信旧回执修复交接](docs/handoffs/2026-09-05-wechat-stale-reply-repair.md)。

@@ -892,6 +892,7 @@ export default definePluginEntry({
         }
       }
       let recoveredByDurableBridge = false;
+      let hasPendingDurableInbound = false;
       if (!slot && toolCallKey && toolContext.senderIsOwner === true) {
         const recipientKey = trustedRecipientKey({
           channel: toolContext.messageChannel,
@@ -907,13 +908,16 @@ export default definePluginEntry({
                 || typeof trusted.observedAt !== 'number'
                 || now - trusted.observedAt < 0
                 || now - trusted.observedAt > TRUSTED_PROMPT_CORRELATION_MAX_AGE_MS) return false;
-              if (toolName !== 'resolve_expense_confirmation') return true;
-              const decision = params && typeof params === 'object'
-                ? (params as { decision?: unknown }).decision
-                : undefined;
-              return (decision === 'confirm' || decision === 'cancel')
-                && typeof trusted.content === 'string'
-                && confirmationDecision(trusted.content) === decision;
+              hasPendingDurableInbound = true;
+              if (toolName === 'resolve_expense_confirmation') {
+                const decision = params && typeof params === 'object'
+                  ? (params as { decision?: unknown }).decision
+                  : undefined;
+                if ((decision !== 'confirm' && decision !== 'cancel')
+                  || typeof trusted.content !== 'string'
+                  || confirmationDecision(trusted.content) !== decision) return false;
+              }
+              return true;
             },
             now,
           ) as InboundMessage | undefined
@@ -941,7 +945,8 @@ export default definePluginEntry({
           recoveredByDurableBridge = true;
         }
       }
-      if (!slot && deferredCachedRecovery) {
+      // Pending messages rule out stale recovery even when ambiguity or decision mismatch prevents a claim.
+      if (!slot && deferredCachedRecovery && !hasPendingDurableInbound) {
         [resolvedToolCallKey, slot] = deferredCachedRecovery;
         recoveredByExecutionContext = true;
       }

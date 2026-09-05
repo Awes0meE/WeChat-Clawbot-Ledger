@@ -4,6 +4,8 @@
 
 正式网页登录与一次性记录 CRUD、HSTS 后公网安全、作品集回归、ServiceCycle、失败关闭恢复、真实 Windows 重启后的完整恢复，以及微信记账/HTTP 汇总/测试数据清理均已通过。**真实平台同 message ID 重放仍缺触发入口与证据，不能报告全部上线验收完成。** 本文集中记录当前续接点，长期操作合同见 [运维手册](../ledger-cloudflare-runbook.md)。设计已确认，不再 brainstorming。
 
+同日后续微信连续记账出现重复上一笔回执，已确认当时旧生产 release 尚未包含已合入 Git 的修复。现已显式切换至 `0e7c2d7f1f0369552d17d054e2ef24b75be7a482`，包含新可信消息优先和待处理消息阻止旧缓存回退的保护；Gateway、插件、模型与微信通道检查通过。两条新消息的现场验收仍待完成，最新运行检查与续接顺序见 [微信旧回执修复交接](2026-09-05-wechat-stale-reply-repair.md)。下列重启和首次微信验收属于此次修复前的历史证据。
+
 ## 开始前必须读取
 
 1. 根目录 [AGENTS.md](../../AGENTS.md)。
@@ -37,7 +39,7 @@
 
 ## 当前部署与验收证据
 
-生产继续使用 `D:\Clawbot\releases\1cf2f739ca92898feed5f24372e9a407ced34b0a`，不直接加载 Git checkout。正式 `127.0.0.1:8888`、隔离测试 `127.0.0.1:18888`、Gateway loopback；旧 `8180` 无监听。正式注册与无效密码找回关闭，API/MCP/trusted-proxy allowlist 保持精确 loopback。生产模型仍是 `gpt-5.6-sol` 与官方 Codex harness，已上线查询能力为 HTTP 确定性汇总。
+本文首次验收使用 `D:\Clawbot\releases\1cf2f739ca92898feed5f24372e9a407ced34b0a`；同日回执修复已切换至 `D:\Clawbot\releases\0e7c2d7f1f0369552d17d054e2ef24b75be7a482`，不直接加载 Git checkout。正式 `127.0.0.1:8888`、隔离测试 `127.0.0.1:18888`、Gateway loopback；旧 `8180` 无监听。正式注册与无效密码找回关闭，API/MCP/trusted-proxy allowlist 保持精确 loopback。生产模型仍是 `gpt-5.6-sol` 与官方 Codex harness，已上线查询能力为 HTTP 确定性汇总。
 
 Tunnel 使用本机 `D:\Clawbot\cloudflared\ledger.yml`，真实 UUID、credential 文件名与 Cloudflare IDs 仅在本机读取后立即处理，不进入本文。已核验官方 cloudflared SHA-256 为 `83E726ED18EA78C5AD5213C4C3A3A27051393950D2BC8ED4DE69BEC12D14EAAE`。只有 `ledger.66ccff-labs.com` 对外发布；Cloudflare Access 未启用，apex/`www` 路由保持不变。
 
@@ -78,5 +80,5 @@ Tunnel 使用本机 `D:\Clawbot\cloudflared\ledger.yml`，真实 UUID、credenti
 2. 平台级同 message ID 重放仍缺真实入口与证据。当前代码保留稳定腾讯 ID 并有插件层合成重放测试，但 monitor/API/命令没有真实 replay 入口；不得重置游标、伪造可信 hooks、直接调用入站处理器或把同正文的新消息当作平台重放。
 3. 持久去重表的一条 created 记录及单条交易只能证明当前结果与可信关联，不能证明平台确实投递过两次或历史 POST 次数。待回复记录在发送成功与过期清理时都会删除，且没有发送计数字段；本轮的单条回执结论来自用户现场观察。
 4. 有了安全、可核验的真实平台重放能力后，再针对已确认消息取得重复投递及不增写证据；当前只保留此缺口，不为凑齐验收改写生产消息队列或扩大工具权限。
-5. 继续按运维手册证据矩阵核验当前状态；任何新代码修改须 TDD、相关回归和独立提交。无新代码、失败或未解决疑虑时不重复全套测试。本次 Git 整合不切换生产 release，不能据此宣称微信已加载 `93543ab` 的修复；后续发布须独立验证与显式切换。
-6. 所有必需真实证据闭环后，才把未完成状态改为完成。当前可报告网页与微信日常功能实测通过，并明确平台重放尚未验证。
+5. 继续按运维手册证据矩阵核验当前状态；任何新代码修改须 TDD、相关回归和独立提交。无新代码、失败或未解决疑虑时不重复全套测试。此前 Git 整合本身没有切换生产；同日回执故障修复已另外完成新 release 的验证与显式切换，后续从新的回执修复交接继续。
+6. 所有必需真实证据闭环后，才把未完成状态改为完成。本文记录的网页、单条微信写入与 HTTP 汇总属于此前已通过的验收；同日回执修复切换后的双新消息现场验收仍待完成，平台重放也尚未验证。

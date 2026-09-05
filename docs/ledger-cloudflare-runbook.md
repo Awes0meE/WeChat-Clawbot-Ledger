@@ -118,6 +118,18 @@ Supervisor 自动化夹具使用每个 fixture 独立的本地测试 mutex；同
 
 ## 5. 发布并切换正式 OpenClaw release
 
+### 专用 workspace 的 session-memory 保护
+
+`openclaw-hooks/session-memory/` 的 `HOOK.md`、`handler.js`、`guard.mjs` 必须作为同一版本安装到 `%USERPROFILE%\.openclaw\hooks\session-memory\`。这是 OpenClaw 支持的同名 managed 覆盖；保留既有 `session-memory` enabled 设置，不另建不同名称、不加 `extraDirs`，不修改 bundled 源码。目录入口必须为 `handler.js`，OpenClaw 2026.8.2 不发现 `handler.mjs`。
+
+入口只接受 Windows npm-global OpenClaw 2026.8.2，并在 import 前核验官方 bundled `handler.js` 与 `HOOK.md` 的固定 SHA-256。升级 OpenClaw 必须先审核上游变化并更新 pin。版本、哈希或加载不符时阻止 release 切换；同名覆盖加载失败不会自动回退 bundled hook。guard 只跳过 `event.context.agentId === 'bookkeeper'` 的 session-memory 处理，其余事件原样交给官方 handler；不改变会话 reset 策略或普通 transcript 持久化。
+
+安装后先验证 managed 入口可加载，再在授权维护窗口重启 Gateway 并确认实际注册。OpenClaw 2026.8.2 的官方 `openclaw gateway stop` 在非交互维护时需要 `--force`，随后使用官方 `openclaw gateway start`；只操作已识别的 Gateway，不停止账本或 Tunnel。`hooks.status`/CLI inventory 只证明发现与 eligibility，不能单独证明进程已注册：须同时核对 Gateway 启动 INFO 的实际加载计数、唯一 managed 条目及 loader 失败数。
+
+如果旧 release workspace 已有运行时生成的 memory 文件，只针对经确认的文件清单在仓库外受限目录保全迁出，逐个比较迁出前后 SHA-256。不得读取正文、模糊清理、删除未知文件或改写 manifest 来接受额外文件；完成后重新运行旧 release 全量 verifier。2026-09-05 的四文件保全与本次部署状态见 [微信旧回执修复交接](handoffs/2026-09-05-wechat-stale-reply-repair.md)。
+
+### 创建与切换
+
 先确保 Git 源在发布前后都干净且 HEAD 不变。`scripts/publish-openclaw-release.ps1` 使用固定 allowlist、lockfile 和禁用 lifecycle scripts 的安装生成 sibling staging；校验所有依赖、manifest、相对路径、长度、SHA-256 和 reparse point 后才原子发布到 `D:\Clawbot\releases`。既有 release 不可覆盖。
 
 发布与切换是两次独立执行；后一次必须显式传入前一次创建的同一 commit release，且两次的 source/release/backup/config 根必须完全相同：
@@ -154,6 +166,8 @@ $releaseArguments = @{
 
 任一后置检查失败，恢复经验证的 OpenClaw 配置备份并重启 Gateway 回到原状态。
 
+2026-09-05 旧回执修复已返回 `OPENCLAW_RELEASE_SWITCHED`、退出码 0，生产插件与 workspace 已确认指向新 release；新版本发布校验、旧版本 PS 5.1 全量回滚校验和 managed hook 实际注册均通过。仓库 PowerShell 换行约定修正后，严格本机重验 14/14 全部通过、退出码 0，未修改已部署 Tunnel 脚本或放宽 verifier。双新微信消息验收仍待用户回应；版本、归档、公网检查范围与后续状态集中见 [微信旧回执修复交接](handoffs/2026-09-05-wechat-stale-reply-repair.md)。修复发布和切换不得改账、补账或重放此前业务消息；现场验收须使用所有者明确发送的全新消息。
+
 ## 6. 本机业务回归
 
 只在 release 已切换且 Tunnel task 已安装/启动后运行 `scripts/test-ledger-local.ps1`；显式传入 `-ReleasePath`、`-CredentialPath`、`-TunnelConfigPath` 以及从独立官方 checksum 校验后得到的 `-ExpectedCloudflaredSha256`。脚本只输出固定 pass/fail 码。它验证：
@@ -167,6 +181,8 @@ $releaseArguments = @{
 随后用一个明确的、一次性的正式验收记录执行本地 API create/query/delete。脚本不得保存或打印内容；删除后必须证明初始账户/聚合不变量恢复。
 
 由所有者从真实可信 WeChat channel 发一条新的验收记账消息。验证恰好一个 API 写入和一个 API 成功后的权威回复；重复投递同一可信 message ID 不得创建第二条；支持的 HTTP 汇总必须正确且不写入。仅在 MCP 已明确激活后额外验证灵活历史查询；未激活时记录为未启用。最后只删除已知验收记录，不能模糊清理或删除未知交易。
+
+旧回执修复须在现有微信会话中连续验收两条金额不同的全新消息，不先 reset：每条都对应自己的唯一交易和 API 成功后回执，第二条不得复用第一条金额或文本；微信回复条数由所有者现场确认。先在本机内存准备账户/分类/交易哈希基线并确认测试标记不存在，最后只清理精确匹配的验收记录并复核基线。用不同消息 ID 重发相同正文不等于平台重放测试。当前真实平台同一 message ID 重放缺少触发入口，该缺口必须保留，不能用合成测试或单条去重状态替代。
 
 ## 7. 安装并登录 cloudflared
 

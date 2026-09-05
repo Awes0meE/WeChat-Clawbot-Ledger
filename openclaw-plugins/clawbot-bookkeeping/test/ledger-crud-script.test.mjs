@@ -18,7 +18,7 @@ const crudScriptPath = join(projectDirectory, 'scripts', 'test-ledger-crud.ps1')
 
 function readRequired(path) {
   assert.equal(existsSync(path), true, `missing required artifact: ${path}`);
-  return readFileSync(path, 'utf8');
+  return readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
 }
 
 function runPowerShell(arguments_, options = {}) {
