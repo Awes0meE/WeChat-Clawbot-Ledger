@@ -122,7 +122,6 @@ ezBookkeeping 正式目录为 `D:\Clawbot\ezbookkeeping`，配置文件为 `D:\C
 .\scripts\install-ledger-test-instance.ps1 -WhatIf
 .\scripts\migrate-ledger-production.ps1 -WhatIf
 .\scripts\publish-openclaw-release.ps1 -ReleaseOnly -WhatIf
-.\scripts\configure-ezbookkeeping-mcp.ps1 -WhatIf
 ```
 
 实际安装及配置：
@@ -132,10 +131,16 @@ ezBookkeeping 正式目录为 `D:\Clawbot\ezbookkeeping`，配置文件为 `D:\C
 .\scripts\install-ledger-test-instance.ps1
 .\scripts\migrate-ledger-production.ps1
 .\scripts\publish-openclaw-release.ps1 -SwitchOpenClaw
-.\scripts\configure-ezbookkeeping-mcp.ps1
 ```
 
 生产 OpenClaw 不再加载 Git checkout。发布器从干净且 HEAD 不变的提交创建 immutable release，使用 lockfile 安装运行依赖，对全部 payload 记录长度和 SHA-256，并拒绝 missing/extra/changed/reparse/out-of-root。切换前只生成不含 token/owner/channel 的最小 patch，先 dry-run；任何 post-patch 失败恢复 owner-only 配置备份并重启 Gateway。
+
+MCP 激活是独立可选操作，不属于 Ledger 网页上线的默认步骤。截至 2026-09-05 它仍未启用；只有用户再次明确选择激活后，才在可见终端预演并执行：
+
+```powershell
+.\scripts\configure-ezbookkeeping-mcp.ps1 -WhatIf
+.\scripts\configure-ezbookkeeping-mcp.ps1
+```
 
 MCP 配置脚本会：
 
@@ -167,6 +172,7 @@ Set-Location ..\openclaw-weixin-stable-id
 npm.cmd run build
 node --test test\inbound-message-id.test.mjs
 
+Set-Location ..\..\
 openclaw gateway status
 openclaw channels status --probe
 openclaw plugins info clawbot-bookkeeping
@@ -176,7 +182,7 @@ openclaw plugins info clawbot-bookkeeping
 .\scripts\test-ledger-restart.ps1 -ReleasePath '<VERIFIED_LOCAL_RELEASE>' -PortfolioBaselinePath '<OUTSIDE_GIT_BASELINE>' -WhatIf
 ```
 
-动态 MCP 只由插件 manifest 和 requester-scoped resolver 声明，不得为诊断方便新增顶层 `mcp.servers` 静态连接。任何运行时配置或部署变更前，必须先执行 `WINDOWS-HANDOFF.md` 的只读属性名断言；若顶层 `mcp.servers` 下存在 `ezbookkeeping`，停止部署并另行审核移除，不能自动删除或显示其内容。该断言与账本插件自动化测试共同证明没有静态后备项，且 manifest、resolver 和代理 allowlist 只允许 `query_transactions`、源码和测试明确排除 `add_transaction`；stable-ID 插件另有独立测试。最后由所有者在微信发起真实历史查询，闭合可信上下文中的端到端证据链，并核对写入、确认、汇总和查询不会越权。
+动态 MCP 只由插件 manifest 和 requester-scoped resolver 声明，不得为诊断方便新增顶层 `mcp.servers` 静态连接。任何运行时配置或部署变更前，必须先执行 `WINDOWS-HANDOFF.md` 的只读属性名断言；若顶层 `mcp.servers` 下存在 `ezbookkeeping`，停止部署并另行审核移除，不能自动删除或显示其内容。该断言与账本插件自动化测试共同证明没有静态后备项，且 manifest、resolver 和代理 allowlist 只允许 `query_transactions`、源码和测试明确排除 `add_transaction`；stable-ID 插件另有独立测试。由所有者在微信核对写入、确认及支持的 HTTP 汇总不会越权；仅在 MCP 已激活后，再以真实历史查询闭合该动态连接的端到端证据。未激活时记录为未启用，不为完成网页验收而生成 MCP token。
 
 仓库秘密扫描不得跳过测试或示例目录。若从包含多个 worktree 的上级仓库运行，应只排除嵌套 `.worktrees` 副本以避免重复结果；每一条匹配仍须人工核验，不能因它位于 fixture/example 中就自动视为安全。具体命令和处置标准见 `WINDOWS-HANDOFF.md`。
 

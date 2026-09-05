@@ -281,7 +281,7 @@ $openclawConfigPath = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.
 Assert-NoStaticEzBookkeepingMcpFallback -ConfigPath $openclawConfigPath
 ```
 
-只有看到 `STATIC_EZBOOKKEEPING_MCP_FALLBACK_ABSENT` 才能继续。若检查失败或发现该属性，停止部署；不要显示其内容，也不要自动删除，必须另开一次有审核的移除操作。此断言、manifest/resolver/allowlist 自动化测试和所有者微信历史查询共同闭合“无静态后备连接”的证据链。
+只有看到 `STATIC_EZBOOKKEEPING_MCP_FALLBACK_ABSENT` 才能继续。若检查失败或发现该属性，停止部署；不要显示其内容，也不要自动删除，必须另开一次有审核的移除操作。此断言与 manifest/resolver/allowlist 自动化测试证明没有静态后备连接；MCP 已激活时，再由所有者微信历史查询证明动态连接可用。
 
 ## Ledger 网页、隔离和上线顺序
 
@@ -371,7 +371,7 @@ bookkeeper 的 allowlist 只有五个账本工具，因此这里不依赖工具�
 
 ## 运行检查
 
-先确认 ezBookkeeping 健康，再判断 Gateway 和 MCP 是否成功：
+先确认 ezBookkeeping 与 Gateway 健康；MCP 只在用户已明确选择激活后额外验收：
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8888/healthz.json
@@ -390,9 +390,9 @@ openclaw models status --agent bookkeeper --json
 - Codex 插件状态为 loaded，`bookkeeper` 的 `openai/gpt-5.6-sol` 条目显式显示 `agentRuntime.id: codex`；
 - Codex 插件的 `codexDynamicToolsLoading` 为 `direct`，专用代理通过 Code Mode 直接调用 allowlist 中的账本工具，不查询 `ALL_TOOLS` 或搜索工具目录；
 - 自动化测试确认 manifest、requester-scoped resolver 和代理 allowlist 允许 `query_transactions`，且源码和测试明确排除 `add_transaction`；
-- 所有者从微信发起的历史查询实际返回账本记录，证明 `query_transactions` 在可信发送者上下文中可用。
+- 所有者从微信发起支持的确定性 HTTP 汇总，证明读取正常且不写入；仅在 MCP 已激活后，再用真实历史查询证明 `query_transactions` 在可信发送者上下文中可用。
 
-动态 MCP 由插件 manifest 和 requester-scoped resolver 声明，故意不配置顶层 `mcp.servers` 静态连接。第一版不使用 operator CLI 证明该动态连接；部署前属性名断言证明没有静态 `ezbookkeeping` 后备项，插件加载结果和自动化策略测试证明动态声明与最小工具目录，所有者微信历史查询证明可信上下文中的实际连接。
+动态 MCP 由插件 manifest 和 requester-scoped resolver 声明，故意不配置顶层 `mcp.servers` 静态连接。第一版不使用 operator CLI 证明该动态连接；部署前属性名断言证明没有静态 `ezbookkeeping` 后备项，插件加载结果和自动化策略测试证明动态声明与最小工具目录。MCP 未激活时记录为未启用，不生成 token；激活后才由所有者微信历史查询证明可信上下文中的实际连接。
 
 如 ezBookkeeping 不健康，先以只读方式核验任务动作和端口 owner。安装脚本不会替换漂移任务；不要由模型启动服务，也不要直接重启未经验证的同名任务：
 
@@ -444,14 +444,51 @@ node --test test\inbound-message-id.test.mjs
 
 账本插件当前完整测试必须零失败，stable-ID 插件 build 与 3 项测试必须全部通过；覆盖项还包括 runtime 隔离、release 完整性、Tunnel fail-closed 与公网规则范围。不要只依赖数量，任何失败都必须处理。
 
-仓库秘密扫描：
+从仓库根目录执行以下 tracked-only 扫描。先检查 Git 路径清单，禁止路径、符号链接或 junction 都在读取内容前失败关闭；不扫描未跟踪或被忽略文件。`testAccountInfo.txt` 只可另外检查是否存在及是否被 Git 忽略，绝不读取内容。结果只含文件、行号、规则名和计数，不输出匹配正文：
 
 ```powershell
-rg -n --hidden --glob '!**/node_modules/**' --glob '!**/.git/**' --glob '!**/.worktrees/**' 'Bearer\s+[A-Za-z0-9._-]{20,}|openclaw-weixin:[A-Za-z0-9_-]{8,}' .
-rg -n --hidden --glob '!**/node_modules/**' --glob '!**/.git/**' --glob '!**/.worktrees/**' '(?i)password\s*[:=]\s*["''][^<][^"'']{7,}["'']' .
+$ErrorActionPreference = 'Stop'
+$ledgerScanRoot = (Get-Location).ProviderPath.TrimEnd('\')
+$ledgerScanLines = $null
+try {
+    $ledgerTrackedOutput = & git -c "safe.directory=$ledgerScanRoot" -C $ledgerScanRoot ls-files -z
+    if ($LASTEXITCODE -ne 0) { throw 'TRACKED_FILE_LIST_FAILED' }
+    $ledgerTrackedPaths = @(($ledgerTrackedOutput -join "`n").Split([char]0) | Where-Object { $_.Length -gt 0 })
+    if ($ledgerTrackedPaths.Count -eq 0) { throw 'TRACKED_FILE_LIST_EMPTY' }
+    $ledgerForbiddenPath = '(?i)(^|/)(testAccountInfo\.txt|\.git|\.worktrees|\.openclaw|\.cloudflared|node_modules|backups|deployment-evidence|logs|secrets|data|storage)(/|$)|(^|/)\.env($|\.)|\.(db3?|sqlite3?)(-|$)|\.log($|\.)|\.(pem|key|p12|pfx|secret)$|^openclaw-workspace/memory/|^config/cloudflared-ledger\.(yml|credentials\.json)$'
+    foreach ($ledgerRelativePath in $ledgerTrackedPaths) {
+        if ($ledgerRelativePath -match $ledgerForbiddenPath -or $ledgerRelativePath -match '(^|/)\.\.(/|$)|[\r\n]') { throw 'FORBIDDEN_TRACKED_PATH' }
+        $ledgerFullPath = [IO.Path]::GetFullPath((Join-Path $ledgerScanRoot $ledgerRelativePath))
+        if (-not $ledgerFullPath.StartsWith($ledgerScanRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'OUTSIDE_REPOSITORY_PATH' }
+        for ($ledgerProbePath = $ledgerFullPath; $ledgerProbePath -ine $ledgerScanRoot; $ledgerProbePath = [IO.Path]::GetDirectoryName($ledgerProbePath)) {
+            if ((Get-Item -LiteralPath $ledgerProbePath -Force).LinkType -in @('SymbolicLink', 'Junction')) { throw 'LINKED_TRACKED_PATH' }
+        }
+    }
+    $ledgerScanRules = [ordered]@{
+        bearer = 'Bearer\s+[A-Za-z0-9._-]{20,}'
+        wechat_identity = 'openclaw-weixin:[A-Za-z0-9_-]{8,}'
+        password_literal = '(?i)password\s*[:=]\s*["''][^<][^"'']{7,}["'']'
+    }
+    $ledgerFindings = @(foreach ($ledgerRelativePath in $ledgerTrackedPaths) {
+        $ledgerScanLines = [IO.File]::ReadAllLines((Join-Path $ledgerScanRoot $ledgerRelativePath), [Text.Encoding]::UTF8)
+        for ($ledgerLineIndex = 0; $ledgerLineIndex -lt $ledgerScanLines.Length; $ledgerLineIndex++) {
+            foreach ($ledgerRuleName in $ledgerScanRules.Keys) {
+                if ([regex]::IsMatch($ledgerScanLines[$ledgerLineIndex], $ledgerScanRules[$ledgerRuleName])) {
+                    [pscustomobject]@{ File = $ledgerRelativePath; Line = $ledgerLineIndex + 1; Rule = $ledgerRuleName }
+                }
+            }
+        }
+        $ledgerScanLines = $null
+    })
+    [pscustomobject]@{ ScannedFiles = $ledgerTrackedPaths.Count; FindingCount = $ledgerFindings.Count; Findings = $ledgerFindings } | ConvertTo-Json -Depth 4
+} catch {
+    throw 'TRACKED_SECRET_SCAN_FAILED; no matched content was emitted.'
+} finally {
+    $ledgerScanLines = $null
+}
 ```
 
-`.worktrees` 仅因它是同一仓库的嵌套副本而排除，测试和示例目录不能排除。扫描可能命中固定的合成 fixture；必须人工检查每一条结果及其上下文，确认它不是现实 token、发送者身份或字面密码。任何无法解释的匹配都按真实泄露处理，不能为了得到“零命中”而盲目忽略 fixture/example。
+测试、示例、脚本和文档都必须包含在 tracked 清单中；禁止路径一旦被跟踪，应先处理该异常，不能跳过后继续宣布扫描通过。上述模式只是初筛，零命中不能独自证明没有秘密。每个命中都需核对是否为固定合成 fixture 或占位符；检查过程只返回脱敏结论，不把命中正文送入终端或模型上下文。无法证明为合成数据的命中必须停止发布并处理，不能为了零匹配扩大忽略范围。
 
 ## 微信验收
 

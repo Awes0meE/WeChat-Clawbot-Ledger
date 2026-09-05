@@ -70,7 +70,7 @@ git diff --check
 
 Supervisor 自动化夹具使用每个 fixture 独立的本地测试 mutex；同一 fixture 的源码、安装与 bundle 副本保持相同 mutex 和字节内容。测试不会争用生产 `Global\ClawbotLedgerTunnelSupervisor`，无需停止正式服务来运行回归。
 
-秘密扫描必须排除 `.git`、依赖和已知 worktree，但不能排除 `test`、`config`、`scripts` 或文档。匹配项由人工看上下文，不能为了零匹配扩大 ignore。
+秘密扫描使用 Git 已跟踪文件清单，先拒绝秘密、运行状态、数据库、日志、依赖与 worktree 路径，再读内容；禁止读取 `testAccountInfo.txt`。测试、示例、`config`、`scripts` 和文档都须覆盖，结果只输出位置、规则与计数，不能输出匹配正文。具体流程见 [`../WINDOWS-HANDOFF.md`](../WINDOWS-HANDOFF.md) 的仓库验证；不得为零匹配扩大 ignore。
 
 ## 2. 捕获部署前作品集基线
 
@@ -166,7 +166,7 @@ $releaseArguments = @{
 
 随后用一个明确的、一次性的正式验收记录执行本地 API create/query/delete。脚本不得保存或打印内容；删除后必须证明初始账户/聚合不变量恢复。
 
-由所有者从真实可信 WeChat channel 发一条新的验收记账消息。验证恰好一个 API 写入和一个 API 成功后的权威回复；重复投递同一可信 message ID 不得创建第二条；历史查询必须正确。最后只删除已知验收记录，不能模糊清理或删除未知交易。
+由所有者从真实可信 WeChat channel 发一条新的验收记账消息。验证恰好一个 API 写入和一个 API 成功后的权威回复；重复投递同一可信 message ID 不得创建第二条；支持的 HTTP 汇总必须正确且不写入。仅在 MCP 已明确激活后额外验证灵活历史查询；未激活时记录为未启用。最后只删除已知验收记录，不能模糊清理或删除未知交易。
 
 ## 7. 安装并登录 cloudflared
 
@@ -257,7 +257,6 @@ X-Robots-Tag: noindex, nofollow, noarchive
   -ComparePortfolioBaseline `
   -PortfolioBaselinePath 'D:\Clawbot\deployment-evidence\portfolio-before-v2.json' `
   -ApiTokenPath "$env:USERPROFILE\.openclaw\secrets\ezbookkeeping-token.txt" `
-  -McpTokenPath "$env:USERPROFILE\.openclaw\secrets\ezbookkeeping-mcp-token.txt" `
   -PreHstsValidation
 ```
 
@@ -329,7 +328,7 @@ proxied CNAME 在公网 DNS 中会 flatten，因此不用公网 `resolveCname(le
 - HTTPS 直接出现 ezBookkeeping 登录应用，没有 Cloudflare Access 页面；
 - `POST /api/register.json` 返回 Cloudflare `403`，`TRACE` 返回 Cloudflare WAF `403` 或边缘方法拒绝 `405`；两者都不得到达 origin；
 - HTML、JSON、API 和认证响应均没有 `HIT/STALE/REVALIDATED/UPDATING`；安全头与 host-only HSTS 正确；
-- 公网 API token 与 MCP token 均被拒绝，本机相同能力仍可用；
+- 公网 API token 被拒绝，本机 API 仍可用；MCP 已激活且独立 token 存在时同样验证本机可用、公网拒绝，未激活时只验证配置边界并记录未启用；
 - `8888` 从 LAN/公网不可直连。
 
 随后在维护窗口使用已批准 cloudflared SHA-256、正式 release、v2 基线与 API token 本地路径运行 `scripts/test-ledger-restart.ps1 -WhatIf`，核对目标后再用同一组参数执行 `-Phase ServiceCycle`。脚本只控制已严格识别的两个计划任务，不调用 `Stop-Process`，也不删除或禁用任务。每次启动正式任务前，`8888` 必须完全无监听；每次启动 Tunnel 任务前，必须不存在任何 cloudflared 进程。若 orphan 或未知 owner 仍存在，脚本以 `RECOVERY_INCOMPLETE` 失败并保持原状，不启动第二份实例。它验证：
@@ -366,12 +365,12 @@ proxied CNAME 在公网 DNS 中会 flatten，因此不用公网 `resolveCname(le
 | 类别 | 必须通过的证据 |
 | --- | --- |
 | 自动化 | 全部测试/build、PS 5.1 parse/WhatIf、endpoint/secret/data scan、manifest、`git diff --check` |
-| 本机 | `8888/18888` 精确 owner、独立 DB、正式安全配置、health/login、loopback token/MCP、release-only OpenClaw |
-| 公网 | DNS、HTTPS、login、无 Access、注册/TRACE block、限速、cache bypass、安全头、token/MCP 拒绝 |
+| 本机 | `8888/18888` 精确 owner、独立 DB、正式安全配置、health/login、loopback API token、release-only OpenClaw；MCP 已激活时再验证其连接 |
+| 公网 | DNS、HTTPS、login、无 Access、注册/TRACE block、限速、cache bypass、安全头、API token 拒绝；MCP 已激活时再验证其 token 拒绝 |
 | 重启 | task 恢复、origin 失效即 fail closed、错误 owner 不启动、无未知进程被停止 |
-| WeChat | 新消息恰好一次写入/回复、重复不增写、历史正确、已知验收数据被删除 |
+| WeChat | 新消息恰好一次写入/回复、重复不增写、支持的 HTTP 汇总正确、已知验收数据被删除；MCP 已激活时再验证历史查询 |
 | 作品集 | apex/`www` DNS、redirect、TLS、route 与 fingerprint 全部不变 |
-| Git | 分支提交完整；无秘密/数据；未 merge，未 push |
+| Git | 分支提交完整且工作区干净；无秘密/数据；按用户当前授权记录同步范围；功能分支推送后联网核对本地与远端 HEAD；未另获明确许可不得合并 `main` |
 
 任一行没有真实证据，就不能报告完成。
 
