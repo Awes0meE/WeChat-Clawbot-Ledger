@@ -23,7 +23,7 @@ test('correlates trusted metadata across isolated plugin instances', async () =>
   const toolHooks = new Map();
   let recordExpenseFactory;
   const pluginConfig = {
-    serverBaseUrl: 'http://127.0.0.1:8180',
+    serverBaseUrl: 'http://127.0.0.1:8888',
     tokenPath: join(tempDirectory, 'unused-token.txt'),
     stateDbPath,
     accountName: '日常支出',

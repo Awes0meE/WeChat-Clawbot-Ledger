@@ -14,11 +14,19 @@ config/weixin-bookkeeper-agent.batch.json
 .env
 .env.*
 !.env.example
+/testAccountInfo.txt
 *.pem
 *.key
 *.p12
 *.pfx
 *.secret
+
+# Ledger Tunnel local-only artifacts (real files belong outside this repository)
+.cloudflared/
+config/cloudflared-ledger.yml
+config/cloudflared-ledger.credentials.json
+deployment-evidence/
+backups/
 
 # Runtime data
 *.db
