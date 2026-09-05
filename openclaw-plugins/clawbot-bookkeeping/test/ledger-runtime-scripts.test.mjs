@@ -764,6 +764,25 @@ test('test-ledger initialization rejects non-test origins, missing markers, and 
   }
 });
 
+test('test-ledger initialization treats a fresh missing expense-category property as an empty list', () => {
+  const source = readFileSync(initializeTestLedgerScript, 'utf8');
+
+  assert.match(source, /\.PSObject\.Properties\[\$Name\]/u);
+  assert.doesNotMatch(source, /\$categoryResponse\.'2'/u);
+  assert.doesNotMatch(source, /\$verifiedCategoryResponse\.'2'/u);
+
+  const helperStart = source.indexOf('function Get-EbkCollectionProperty');
+  const helperEnd = source.indexOf('\nif ($ServerBaseUrl', helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  const helper = source.slice(helperStart, helperEnd);
+  const result = runPowerShell([
+    '-Command',
+    `Set-StrictMode -Version Latest\n${helper}\n$values = @(Get-EbkCollectionProperty -InputObject ([pscustomobject]@{}) -Name '2'); if ($values.Count -ne 0) { exit 2 }; 'EMPTY_PROPERTY_OK'`,
+  ]);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /EMPTY_PROPERTY_OK/u);
+});
+
 test('sanitized production and test templates encode the complete runtime boundary', () => {
   const production = readFileSync(join(configDirectory, 'ezbookkeeping-production.example.ini'), 'utf8');
   const isolatedTest = readFileSync(join(configDirectory, 'ezbookkeeping-test.example.ini'), 'utf8');

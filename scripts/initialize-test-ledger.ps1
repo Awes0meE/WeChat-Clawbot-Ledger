@@ -52,6 +52,22 @@ function Invoke-EbkApi {
     return $response.result
 }
 
+function Get-EbkCollectionProperty {
+    param(
+        [AllowNull()][object]$InputObject,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    if ($null -eq $InputObject) {
+        return @()
+    }
+    $property = $InputObject.PSObject.Properties[$Name]
+    if ($null -eq $property -or $null -eq $property.Value) {
+        return @()
+    }
+    return @($property.Value)
+}
+
 if ($ServerBaseUrl -cne 'http://127.0.0.1:18888') {
     throw 'ServerBaseUrl must be the exact isolated test endpoint http://127.0.0.1:18888.'
 }
@@ -186,7 +202,7 @@ if ($matchingAccounts.Count -eq 0) {
 }
 
 $categoryResponse = Invoke-EbkApi -Method GET -Path 'transaction/categories/list.json'
-$expenseCategories = if ($null -ne $categoryResponse -and $null -ne $categoryResponse.'2') { @($categoryResponse.'2') } else { @() }
+$expenseCategories = @(Get-EbkCollectionProperty -InputObject $categoryResponse -Name '2')
 
 for ($categoryIndex = 0; $categoryIndex -lt $configuredCategories.Count; $categoryIndex++) {
     $configuredPrimary = $configuredCategories[$categoryIndex]
@@ -209,7 +225,7 @@ for ($categoryIndex = 0; $categoryIndex -lt $configuredCategories.Count; $catego
         $primary = $primaryMatches[0]
     }
 
-    $existingSubcategories = @($primary.subCategories)
+    $existingSubcategories = @(Get-EbkCollectionProperty -InputObject $primary -Name 'subCategories')
     foreach ($subcategoryName in $configuredPrimary.subcategories) {
         $subcategoryMatches = @($existingSubcategories | Where-Object { $_.name -eq $subcategoryName })
         if ($subcategoryMatches.Count -gt 1) {
@@ -231,9 +247,11 @@ for ($categoryIndex = 0; $categoryIndex -lt $configuredCategories.Count; $catego
 
 $verifiedAccounts = @(Invoke-EbkApi -Method GET -Path 'accounts/list.json')
 $verifiedCategoryResponse = Invoke-EbkApi -Method GET -Path 'transaction/categories/list.json'
-$verifiedExpenseCategories = @($verifiedCategoryResponse.'2')
+$verifiedExpenseCategories = @(Get-EbkCollectionProperty -InputObject $verifiedCategoryResponse -Name '2')
 $primaryCount = $verifiedExpenseCategories.Count
-$subcategoryCount = @($verifiedExpenseCategories | ForEach-Object { @($_.subCategories) }).Count
+$subcategoryCount = @($verifiedExpenseCategories | ForEach-Object {
+    @(Get-EbkCollectionProperty -InputObject $_ -Name 'subCategories')
+}).Count
 $expectedPrimaryCount = $configuredCategories.Count
 $expectedSubcategoryCount = @($configuredCategories | ForEach-Object { @($_.subcategories) }).Count
 
