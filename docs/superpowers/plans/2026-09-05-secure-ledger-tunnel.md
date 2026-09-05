@@ -1,5 +1,7 @@
 # Secure Ledger Tunnel Implementation Plan
 
+> **2026-09-05 progress:** Tasks 1–3 and the Task 4 code/operations body are committed. Live deployment has reached the guarded Tunnel, Ledger-only rules, DNS, and local acceptance, but final acceptance is incomplete. Continue only from the [dated GPT-6 handoff](../../handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md); do not recreate or overwrite existing local or Cloudflare resources. Historical checkboxes below remain the original implementation plan and are not a live progress tracker.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkboxes (`- [ ]`) for tracking.
 
 **Goal:** Publish the existing ezBookkeeping web UI at `https://ledger.66ccff-labs.com` through a fail-closed Cloudflare Tunnel while isolating production, test, and development state and preserving the existing portfolio routes.

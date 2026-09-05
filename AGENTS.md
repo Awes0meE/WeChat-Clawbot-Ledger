@@ -2,7 +2,7 @@
 
 ## Scope
 
-This repository contains the reproducible source, tests, documentation, and sanitized configuration templates for the personal WeChat bookkeeping system. It does not contain live credentials, WeChat identities, OpenClaw transcripts, or ezBookkeeping data.
+This repository contains the reproducible source, tests, documentation, and sanitized configuration templates for the personal WeChat bookkeeping system. Git-tracked content does not contain live credentials, WeChat identities, OpenClaw transcripts, or ezBookkeeping data.
 
 ## Current architecture
 
@@ -26,6 +26,7 @@ Browser -> ledger.66ccff-labs.com -> Cloudflare Tunnel
 ## Safety boundaries
 
 - Never commit tokens, passwords, account IDs, sender IDs, QR data, transcripts, SQLite files, or OpenClaw state.
+- An ignored root file named `testAccountInfo.txt` may exist for the isolated `18888` test account. Never read it with output-producing commands, place it in model context, stage it, commit it, or upload it. Only a non-echoing local test-login process may consume it.
 - Keep production ezBookkeeping bound to `127.0.0.1:8888`, isolated test ezBookkeeping bound to `127.0.0.1:18888`, and OpenClaw Gateway bound to loopback. Never run repository tests against `8888`.
 - `ledger.66ccff-labs.com` is the only public Tunnel hostname. Do not enable Cloudflare Access, expose an origin port, or change `66ccff-labs.com`/`www.66ccff-labs.com` routing.
 - Registration and ineffective password recovery stay disabled server-side. API token, MCP, and trusted-proxy allowlists stay exact loopback.
@@ -50,6 +51,6 @@ openclaw gateway status
 openclaw channels status --probe
 ```
 
-For production/test migration, immutable release publication, Tunnel installation, public checks, restart/fail-closed checks, WeChat regression, and portfolio regression, follow `docs/ledger-cloudflare-runbook.md`. Real Cloudflare authorization occurs only in a visible local terminal/browser and never through copied credentials.
+For production/test migration, immutable release publication, Tunnel installation, public checks, restart/fail-closed checks, WeChat regression, and portfolio regression, follow `docs/ledger-cloudflare-runbook.md`. The active 2026-09-05 continuation checkpoint is `docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md`. Real Cloudflare authorization occurs only in a visible local terminal/browser and never through copied credentials.
 
 Update `README.md` and `WINDOWS-HANDOFF.md` when the live architecture, service state, tools, or user workflow changes.

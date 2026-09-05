@@ -2,6 +2,19 @@
 
 更新于 2026-09-05，时区 `Asia/Singapore`。这是 Windows 接手、恢复和验收的第一入口。仓库描述发布契约；任何“正在运行”结论都必须在当前主机重新探测，并以 `docs/ledger-cloudflare-runbook.md` 的完整矩阵闭环。
 
+## 2026-09-05 暂停点：下一轮从这里继续
+
+完整、脱敏的续接上下文见 [`docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md`](docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)。下一轮开发助手可使用 GPT-6；这不改变生产 `bookkeeper` 的运行模型，后者继续固定为 `gpt-5.6-sol` 与官方 Codex harness。
+
+- 在分支 `feat/secure-ledger-tunnel` 继续；分支必须包含设计基准 `c59da14` 和已验证代码检查点 `fc7c4ec`。本地 `main` 与 `origin/main` 当前指向独立提交 `93543ab`，不得自动 merge、rebase、reset，也不得触碰相邻 `fix/clear-expense-intent` worktree。
+- 已完成并需先只读复核：正式 `127.0.0.1:8888`、隔离测试 `127.0.0.1:18888`、immutable OpenClaw release、受控 Tunnel、Ledger DNS、五条 Ledger 规则与 Windows PowerShell 5.1 本机验收 14/14。不要重建或覆盖这些资源。
+- Cloudflare header rule 仍未加入 HSTS。当前公网验收停在 API-token 边界：loopback 为 `200`，公网同一 token 为 `400`，但现有脚本只接受 `401/403`。不得把任意 `400` 或任意非 2xx 当成安全证明。
+- 下一步须先按 ezBookkeeping v1.6.1 的 `ErrIPForbidden` 精确语义做 TDD：仅当 JSON 同时满足 `success=false`、`errorCode=200020`、`path=/api/v1/accounts/list.json` 时接受该 `400`，且响应体只能短暂存在内存、解析后清空，不能打印或落盘。
+- pre-HSTS 公网验收和正式网页登录 CRUD 通过后，才可给已精确 readback 的 header rule 添加 host-only `Strict-Transport-Security: max-age=86400`。之后仍须完成公网限速、ServiceCycle/fail-closed、真实 Windows 重启、微信去重/查询和作品集最终回归。
+- 根目录可能存在被 Git 忽略的 `testAccountInfo.txt`。不得读取到终端输出、模型上下文或 Git；它只可由不回显的本机流程用于 `18888` 测试登录，不能代替正式网页登录凭据。
+
+截至暂停点，分支未合并、未推送。任何实时状态均可能在会话间漂移，新会话先按续接文档执行只读核验。
+
 ## 不变边界
 
 - Windows 是唯一在线接收端，原 Mac 接收端已停止。不要让两台 iLink Gateway 同时轮询。
@@ -328,7 +341,9 @@ bookkeeper 的 allowlist 只有五个账本工具，因此这里不依赖工具�
 
 脚本只接受不存在的任务，或动作已经完全匹配的根任务 `Clawbot ezBookkeeping`；不使用 blind `-Force` 覆盖未知任务。正式动作直接执行规范化的 `ezbookkeeping.exe --conf-path "D:\Clawbot\ezbookkeeping\conf\ezbookkeeping.ini" server run`，工作目录固定为安装目录。生产迁移前，旧的直接 `server run` 动作只能由 `migrate-ledger-production.ps1` 在完成任务定义备份后转换一次。
 
-### 2. 启用 MCP 并生成独立 token
+### 2. 可选：启用 MCP 并生成独立 token
+
+截至 2026-09-05，MCP 仍关闭且独立 token 未生成。除非用户再次明确选择启用，否则跳过本节，不要把它夹带进 Ledger 上线收尾。
 
 先预演；此步骤不得修改任何状态，也不会询问密码：
 
@@ -455,8 +470,8 @@ rg -n --hidden --glob '!**/node_modules/**' --glob '!**/.git/**' --glob '!**/.wo
 
 ## 故障文案
 
-- 汇总或历史读取失败：`账本暂时连不上，本次没有读取任何数据，请稍后再试。`
-- 写入在提交前失败：`账本暂时连不上，本次没有写入任何数据，请稍后再试。`
+- 汇总或历史读取失败：`账本暂时连不上，这次没有读取任何数据～ 稍后再试试吧。`
+- 写入在提交前失败：`账本暂时连不上，这次没有写入任何数据～ 稍后再试试吧。`
 - 写入请求已提交但结果不确定：`记账请求已发送，但结果暂时无法确认。请先打开账本核对，不要重复发送这条消费。`
 - 期间无支出：使用对应期间加 `还没有支出记录～`。
 - 信息不足：自然追问唯一缺失信息，不再统一回复“记账失败，请重新发送一条新消息”。
@@ -467,6 +482,7 @@ rg -n --hidden --glob '!**/node_modules/**' --glob '!**/.git/**' --glob '!**/.wo
 | --- | --- |
 | `README.md` | 发布架构、行为与快速验证 |
 | `WINDOWS-HANDOFF.md` | 本文件；部署、运行、恢复与微信验收 |
+| `docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md` | 当前分支、真实部署暂停点、唯一阻塞与剩余验收顺序 |
 | `docs/bookkeeping-deployment-brief.md` | 方案与安全权衡摘要 |
 | `docs/expense-categories.md` | 11/45 分类可读表 |
 | `openclaw-plugins/clawbot-bookkeeping/categories.mjs` | 运行时权威分类契约 `CATEGORY_DEFINITIONS` |

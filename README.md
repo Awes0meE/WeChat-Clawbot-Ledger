@@ -32,7 +32,9 @@ Browser -> https://ledger.66ccff-labs.com -> Cloudflare Tunnel
 | 账户与币种 | 唯一可见 SGD 账户 `日常支出`；回执显示 `日常账本` |
 | 分类 | 运行时以 `openclaw-plugins/clawbot-bookkeeping/categories.mjs` 的不可变 `CATEGORY_DEFINITIONS` 为权威契约，固定为 11 个一级、45 个二级分类 |
 | 专用代理 allowlist | `record_expense`、`prepare_expense`、`resolve_expense_confirmation`、`summarize_expenses`、`ezbookkeeping__query_transactions` |
-| 灵活历史查询 | 代码与最小权限契约已就绪；截至 2026-09-04，本机 `enable_mcp=false` 且独立 MCP token 尚未生成，因此尚未上线 |
+| 灵活历史查询 | 代码与最小权限契约已就绪；截至 2026-09-05，本机 `enable_mcp=false` 且独立 MCP token 尚未生成，因此尚未上线 |
+
+当前 Ledger 上线尚未完成。新的开发会话必须先阅读 [2026-09-05 GPT-6 续接点](docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)，从已存在的 Tunnel、DNS 和规则状态继续，不得重建或覆盖资源。
 
 ## 助理行为
 
@@ -63,7 +65,7 @@ Codex 先在内部理解消费时间、金额、币种、正式分类和语义�
 写入结果有明确的终态语义：
 
 - `created`：ezBookkeeping 已明确返回交易 ID，才允许发送成功回执。
-- `failed`：失败发生在提交交易之前，回复“本次没有写入任何数据”，稍后可重新发送新消息。
+- `failed`：失败发生在提交交易之前，回复“账本暂时连不上，这次没有写入任何数据～ 稍后再试试吧。”，稍后可重新发送新消息。
 - `unknown`：交易请求已经发出，但响应结果不确定；必须先打开账本核对，**不要重复发送这条消费**。
 - 同一消息重放：插件说明已处理、失败或状态未确认，并保证不重复提交。
 
@@ -169,6 +171,7 @@ if ($actualCloudflaredSha256 -cne $approvedCloudflaredSha256) { throw 'cloudflar
   -TunnelConfigPath $tunnelConfigPath `
   -ExpectedCloudflaredSha256 $approvedCloudflaredSha256
 
+# 可选：仅在用户明确决定启用 MCP 后运行
 .\scripts\configure-ezbookkeeping-mcp.ps1 -WhatIf
 .\scripts\configure-ezbookkeeping-mcp.ps1
 ```
@@ -204,4 +207,4 @@ openclaw models status --agent bookkeeper --json
 
 经用户明确授权，账本请求与必要查询结果会发送到当前 ChatGPT OAuth 下的 Codex 会话；本机 token、Cloudflare 身份、微信身份、消息 ID、SQLite、交易内容、日志和 OpenClaw 状态仍不得上传或提交。
 
-上线与维护必须完整遵循 [Ledger Cloudflare Tunnel 运维手册](docs/ledger-cloudflare-runbook.md) 和 [WINDOWS-HANDOFF.md](WINDOWS-HANDOFF.md)。
+上线与维护必须完整遵循 [Ledger Cloudflare Tunnel 运维手册](docs/ledger-cloudflare-runbook.md) 和 [WINDOWS-HANDOFF.md](WINDOWS-HANDOFF.md)；当前未完成状态见 [2026-09-05 GPT-6 续接点](docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)。

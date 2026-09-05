@@ -2,6 +2,8 @@
 
 本文说明如何把现有 ezBookkeeping 通过 `https://ledger.66ccff-labs.com` 安全发布，同时保持 `66ccff-labs.com` 和 `www.66ccff-labs.com` 的作品集不变。它是实施手册，不是凭据存放处；任何真实账户、密码、token、Tunnel UUID、Cloudflare 身份、微信身份、SQLite、交易正文、响应正文和运行日志都必须留在 Git 与仓库之外。
 
+2026-09-05 未完成部署的精确续接点见 [`handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md`](handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)。恢复工作前先只读核验，不能重复创建已存在的 Tunnel、DNS 或规则。
+
 ## 固定合同
 
 | 用途 | 固定值 |
@@ -19,7 +21,7 @@
 
 ## 本机目录边界
 
-以下是推荐的真实运行目录；创建时必须关闭 ACL 继承，只授权运行账户、`SYSTEM` 和确有需要的 Administrators。不要把它们放在仓库或 OneDrive 中。
+以下是推荐的真实运行目录；不要把它们放在仓库或 OneDrive 中，也不要对所有对象套用一个笼统 ACL 模板。正式 ezBookkeeping 配置必须 owner-only；Tunnel config、credential、binary、runtime、log 与 marker 必须关闭继承并只保留当前运行用户和 `SYSTEM` 的精确 ACE；immutable release 则遵循 release verifier 的合同，由 Administrators 持有，并只给 Administrators/`SYSTEM` 完全控制与运行身份读取执行权限。
 
 ```text
 D:\Clawbot\ezbookkeeping\                 正式程序、配置和 SQLite
@@ -315,7 +317,7 @@ proxied CNAME 在公网 DNS 中会 flatten，因此不用公网 `resolveCname(le
   -VerifyRateLimit
 ```
 
-仅在 MCP 已按既有交互流程启用且独立 MCP token 存在时，再加入 `-McpTokenPath`。脚本把 token 只读入内存，只向经过固定 HTTPS host 校验的 Ledger URL 发送，并只接受非 2xx；不输出 Authorization、token、响应正文或原始异常。
+仅在 MCP 已按既有交互流程启用且独立 MCP token 存在时，再加入 `-McpTokenPath`。脚本把 token 只读入内存，只向经过固定 HTTPS host 校验的 Ledger URL 发送；API 只把 `401/403` 视为明确拒绝，MCP 只接受 `401/403/404`。其他状态必须先有上游实现证明并核对精确拒绝语义，不能把任意非 2xx 当成通过。暂停点观察到的 API `400` 仍须按续接文档实现 `ErrIPForbidden` 的 `200020` 精确判定。脚本不得输出 Authorization、token、响应正文或原始异常。
 
 公网必须证明：
 
