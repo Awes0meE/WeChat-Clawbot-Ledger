@@ -2,7 +2,7 @@
 
 日期：2026-09-05（Asia/Singapore）
 
-正式网页登录与一次性记录 CRUD、HSTS 后公网安全、作品集回归、ServiceCycle 和失败关闭恢复均已通过。重启前证据已生成；**真实 Windows 重启后的恢复与微信消息验收仍未完成，不能报告全部上线验收完成。** 本文集中记录当前续接点，长期操作合同见 [运维手册](../ledger-cloudflare-runbook.md)。设计已确认，不再 brainstorming。
+正式网页登录与一次性记录 CRUD、HSTS 后公网安全、作品集回归、ServiceCycle、失败关闭恢复、真实 Windows 重启后的完整恢复，以及微信记账/HTTP 汇总/测试数据清理均已通过。**真实平台同 message ID 重放仍缺触发入口与证据，不能报告全部上线验收完成。** 本文集中记录当前续接点，长期操作合同见 [运维手册](../ledger-cloudflare-runbook.md)。设计已确认，不再 brainstorming。
 
 ## 开始前必须读取
 
@@ -48,40 +48,34 @@ Tunnel 使用本机 `D:\Clawbot\cloudflared\ledger.yml`，真实 UUID、credenti
 | HSTS | pre-HSTS 与浏览器闸门通过后，对现有 header rule 执行一次 PATCH，仅添加 `Strict-Transport-Security: max-age=86400`；无 `includeSubDomains`/`preload`，其余四个 header 和规则字段保持。 |
 | 公网/作品集 | HSTS 后完整公网探测含 `-VerifyRateLimit` 通过；同一 API token 的 loopback `200` 与公网精确 IP 拒绝配对验证，作品集基线比较通过。 |
 | ServiceCycle | 先 WhatIf，再实际完成精确 Tunnel 停启、origin 停止时失败关闭、已知模拟错误 owner 时不启动 Tunnel、最终本机/公网/OpenClaw 恢复。未停止未知进程。 |
-| Cloudflare | ServiceCycle 后 12:22 UTC 只读 22/22 通过，Tunnel healthy/4 connections；Ledger DNS、五条规则、五个 header、Access、作品集 DNS/redirect 与全局设置均精确符合预期。本轮不再写 Cloudflare。 |
-| 重启前 | 新建 owner-only `ledger-reboot-v1.json` 已成功；它记录真实 boot/capture 时间，不得覆盖、复用旧版本或以 ServiceCycle 代替重启。 |
-| 发布前扫描 | 对拟推送历史的 41 个提交、172 个不同 blob 与提交说明进行检查；禁止产物、强秘密模式和未解释的匹配均为零。最终文档提交仍需增量检查。远端仓库为 private，未配置 GitHub workflows；不得声称远端 CI 已通过。 |
+| Cloudflare | 真实重启后 12:52 UTC 只读 22/22 通过，Tunnel healthy/4 connections；Ledger DNS、五条规则、五个 header、Access、作品集 DNS/redirect 与全局设置均精确符合预期。主代理独立核验新证据的 22 项布尔值及 owner-only ACL，本轮 Cloudflare 零写入。 |
+| 真实重启 | 用户执行 Windows 重启；实际 boot 时间严格晚于原 `ledger-reboot-v1.json` 的 boot/capture 时间。WhatIf 后，12:56 UTC 完整 `VerifyPostReboot` 返回 `LEDGER_REBOOT_ACCEPTANCE_OK` 且退出码 0，本机/发布包/公网/作品集/OpenClaw 检查通过。基线保留不覆盖。 |
+| 微信写入/回执 | 用户只发送一条新的测试消息并现场确认只收到一条完整回执；后台精确标记对应一笔金额、分类、时间正确的交易。只读 SQLite 审计 7/7 通过：created 状态、稳定消息 ID、clientSession 绑定、可信队列领取与 API 交易对应；私密字段只在本机内存处理。 |
+| 微信汇总/清理 | 用户确认按唯一标记筛选的 HTTP 汇总正确，本机同范围结果一致，查询前后三个规范化哈希不变。复核交易 ID、标记与内容哈希后只删除该已知记录，标记消失，账户/分类/交易三个哈希全部恢复测试前基线。 |
+| 发布前扫描 | 既有 41 个提交、172 个不同 blob 与提交说明已扫描，最终四份文档增量也通过，随后同步至 `457d758`。本次重启后再次联网确认本地/上游/远端相同、工作区干净、main 未变。后续文档仍须增量检查再提交。远端仓库为 private，未配置 GitHub workflows；不得声称远端 CI 已通过。 |
 
 仓库外证据目录为 `D:\Clawbot\deployment-evidence`，下列证据文件已核验为 owner-only，只含哈希、时间与脱敏检查结果：
 
-- `continuation-checkpoint-20260905T122500Z.json`：当前汇总，明确 `deploymentComplete=false`。
+- `reboot-wechat-checkpoint-20260905T130459Z.json`：本轮重启与微信实测汇总，保留平台重放待办与 `deploymentComplete=false`。
+- `continuation-checkpoint-20260905T122500Z.json`：重启前汇总，明确 `deploymentComplete=false`。
 - `browser-crud-baseline-20260905T121124Z.json` 与 `browser-crud-pass-20260905T121429Z.json`：三个规范化哈希基线与完整恢复结果。
 - `cloudflare-hsts-patch-20260905T121428Z.json`：一次 HSTS PATCH 与精确回读。
-- `cloudflare-readback-post-service-cycle-20260905T122215Z.json`：最新 Cloudflare 22/22。
-- `ledger-reboot-v1.json`：已经捕获、等待真实 Windows 重启后的核对基线。
+- `cloudflare-readback-post-service-cycle-20260905T122215Z.json`：ServiceCycle 后 Cloudflare 22/22。
+- `cloudflare-readback-post-reboot-20260905T125234Z.json`：真实重启后 Cloudflare 22/22，零写入。
+- `post-reboot-pass-20260905T125623Z.json`：真实重启与完整恢复通过；仍记录 `deploymentComplete=false`。
+- `ledger-reboot-v1.json`：已用于此次真实重启比对的原基线，继续保留。
 - `portfolio-before-v2.json`：持续使用的上线前作品集基线。
+- `wechat-baseline-20260905T125054Z.json`：微信验收前三个规范化哈希与测试标记不存在的只读证据。
+- `wechat-write-pass-20260905T130007Z.json`：精确一条测试交易、金额/分类/时间与用户确认的单条回执；包括查询前哈希与已知交易内容哈希。
+- `wechat-trusted-state-pass-20260905T130223Z.json`：只读可信状态关联 7/7；不代表平台重放或数据库可证明发送次数。
+- `wechat-query-pass-20260905T130304Z.json`：用户与本机汇总结果一致，查询前后三个哈希不变。
+- `wechat-cleanup-20260905T130304Z.json`：只删除已知测试记录、标记消失，三个原始基线哈希恢复；仍记录 `deploymentComplete=false`。
 
-## 剩余步骤：严格按顺序
+## 剩余项与续接边界
 
-1. 保留当前服务运行，由用户现场执行真实 Windows 重启；用户在外时不要自动重启主机。重启前证据已经完成，不必再次 `CapturePreReboot`。
-2. 用户确认已重启后，在仓库根目录的 **Windows PowerShell 5.1** 中重建以下参数，先 WhatIf，再运行 `VerifyPostReboot`。只接受 `LEDGER_REBOOT_ACCEPTANCE_OK`，并确认退出码成功；执行输出须按运维保密合同处理。
-
-   ```powershell
-   $restartArguments = @{
-     ReleasePath = 'D:\Clawbot\releases\1cf2f739ca92898feed5f24372e9a407ced34b0a'
-     PortfolioBaselinePath = 'D:\Clawbot\deployment-evidence\portfolio-before-v2.json'
-     ExpectedCloudflaredSha256 = '83E726ED18EA78C5AD5213C4C3A3A27051393950D2BC8ED4DE69BEC12D14EAAE'
-     ApiTokenPath = "$env:USERPROFILE\.openclaw\secrets\ezbookkeeping-token.txt"
-   }
-   .\scripts\test-ledger-restart.ps1 @restartArguments `
-     -Phase VerifyPostReboot `
-     -RebootEvidencePath 'D:\Clawbot\deployment-evidence\ledger-reboot-v1.json' `
-     -WhatIf
-   .\scripts\test-ledger-restart.ps1 @restartArguments `
-     -Phase VerifyPostReboot `
-     -RebootEvidencePath 'D:\Clawbot\deployment-evidence\ledger-reboot-v1.json'
-   ```
-
-3. 由用户从可信微信发送新的验收消息。证明一次写入、一次权威回复、平台级同一消息重放不增写、支持的 HTTP 汇总正确，再只删除已知验收记录。不得把发送相同正文的新消息当作同一 message ID 重放，也不能用浏览器 CRUD 或服务探测替代微信端到端证据。MCP 未启用，历史查询不计为已上线。
-4. 按运维手册完整证据矩阵收尾：复核本机/release、公网、Cloudflare、作品集和 Git 当前状态；任何新代码修改须 TDD、相关回归和独立提交。现有全套测试通过后，只有新改动、失败或未解决疑虑才需要重复全套测试。
-5. 只有上述全部通过，才把当前未完成状态改为已完成。缺少实际重启或微信证据时明确保留待办，不重做已有资源、不自动恢复正式数据库、不制造通过结果。
+1. 本次真实重启、微信新消息写入、用户现场单条回执确认、HTTP 汇总与测试记录清理均已完成。不要让用户重新发送刚才的记账测试；原测试记录已不存在，业务数据已恢复基线。
+2. 平台级同 message ID 重放仍缺真实入口与证据。当前代码保留稳定腾讯 ID 并有插件层合成重放测试，但 monitor/API/命令没有真实 replay 入口；不得重置游标、伪造可信 hooks、直接调用入站处理器或把同正文的新消息当作平台重放。
+3. 持久去重表的一条 created 记录及单条交易只能证明当前结果与可信关联，不能证明平台确实投递过两次或历史 POST 次数。待回复记录在发送成功与过期清理时都会删除，且没有发送计数字段；本轮的单条回执结论来自用户现场观察。
+4. 有了安全、可核验的真实平台重放能力后，再针对已确认消息取得重复投递及不增写证据；当前只保留此缺口，不为凑齐验收改写生产消息队列或扩大工具权限。
+5. 继续按运维手册证据矩阵核验当前状态；任何新代码修改须 TDD、相关回归和独立提交。无新代码、失败或未解决疑虑时不重复全套测试。用户尚未授权合并 main；功能分支同步仍须完整检查及联网核对。
+6. 所有必需真实证据闭环后，才把未完成状态改为完成。当前可报告网页与微信日常功能实测通过，并明确平台重放尚未验证。

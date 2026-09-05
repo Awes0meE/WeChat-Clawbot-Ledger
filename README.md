@@ -34,7 +34,7 @@ Browser -> https://ledger.66ccff-labs.com -> Cloudflare Tunnel
 | 专用代理 allowlist | `record_expense`、`prepare_expense`、`resolve_expense_confirmation`、`summarize_expenses`、`ezbookkeeping__query_transactions` |
 | 灵活历史查询 | 代码与最小权限契约已就绪；截至 2026-09-05，本机 `enable_mcp=false` 且独立 MCP token 尚未生成，因此尚未上线 |
 
-当前 Ledger 网页已通过正式登录、一次性记录的新增/修改/删除、HSTS 后公网安全与作品集回归，以及服务重启和失败关闭验收。重启前证据已生成；真实 Windows 重启后的恢复与微信消息验收仍待完成，因此尚不能报告全部上线验收完成。新的开发会话必须先阅读 [2026-09-05 GPT-6 续接点](docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)，从既有 Tunnel、DNS、规则和证据继续。
+当前 Ledger 网页已通过正式登录、一次性记录的新增/修改/删除、HSTS 后公网安全与作品集回归，以及服务重启和失败关闭验收。2026-09-05 真实 Windows 重启后的完整恢复、Cloudflare 核验、微信记账与 HTTP 汇总实测均已通过，测试记录已清理且三个数据哈希恢复基线。平台重复投递同一消息的真实验证仍缺触发入口，全部上线验收尚未闭环。新的开发会话必须先阅读 [2026-09-05 GPT-6 续接点](docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)，从既有 Tunnel、DNS、规则和证据继续。
 
 ## 助理行为
 

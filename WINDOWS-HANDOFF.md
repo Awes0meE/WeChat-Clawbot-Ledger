@@ -2,7 +2,7 @@
 
 更新于 2026-09-05，时区 `Asia/Singapore`。这是 Windows 接手、恢复和验收的第一入口。仓库描述发布契约；任何“正在运行”结论都必须在当前主机重新探测，并以 `docs/ledger-cloudflare-runbook.md` 的完整矩阵闭环。
 
-## 2026-09-05 续接点：等待真实重启与微信验收
+## 2026-09-05 续接点：重启与微信实测通过，平台重放待验证
 
 完整、脱敏的续接上下文见 [`docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md`](docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)。下一轮开发助手可使用 GPT-6；这不改变生产 `bookkeeper` 的运行模型，后者继续固定为 `gpt-5.6-sol` 与官方 Codex harness。
 
@@ -10,12 +10,13 @@
 - 正式 `127.0.0.1:8888`、隔离测试 `127.0.0.1:18888`、immutable OpenClaw release、受控 Tunnel、Ledger DNS 与五条规则已部署。本机 14/14 通过；续接先只读复核，保留既有资源。
 - 正式网页登录及一次性记录的新增、显示、修改、删除已完成；仅删除已知验收记录，账户/分类/交易三个规范化哈希全部恢复基线。凭据未写入本地文件。
 - pre-HSTS 闸门通过后，仅给现有 Ledger header rule 添加 `Strict-Transport-Security: max-age=86400`，无 `includeSubDomains` 或 `preload`。随后完整公网限速/token/缓存/安全头、作品集回归和 Cloudflare 只读 22/22 通过。
-- `ServiceCycle` 与恢复验证通过，包括 origin 停止及错误端口 owner 时 Tunnel 失败关闭。新的 owner-only `D:\Clawbot\deployment-evidence\ledger-reboot-v1.json` 已捕获；不要再次创建或覆盖它。
+- `ServiceCycle` 与恢复验证通过，包括 origin 停止及错误端口 owner 时 Tunnel 失败关闭。用户已执行真实 Windows 重启，启动时间严格晚于 owner-only `ledger-reboot-v1.json` 基线；12:56 UTC 的 `VerifyPostReboot` 完整通过，本机、公网、作品集和 OpenClaw 均恢复。原基线保留，不要覆盖。
 - 最新源码基线 `37b5fbf` 的完整测试 511/511、stable-ID build 与 3/3、15 个 PowerShell 5.1 脚本解析全部通过。实现修复、独立审查、脱敏证据路径与余下步骤集中记录在续接文档。
-- 下一步由用户现场真实重启 Windows，再执行 `VerifyPostReboot`；之后完成可信微信的新消息写入/回复、平台级重放去重、HTTP 汇总与已知数据清理。MCP 仍关闭，不是本轮默认启用步骤。
+- 微信新消息已确认对应恰好一笔金额/分类正确的交易，用户现场确认只收到一条完整回执；只读持久状态审计确认稳定消息 ID、可信队列领取、created 去重状态和 API 交易对应。用户确认 HTTP 标记筛选汇总正确，查询前后三个哈希不变；只删除已知测试记录后，三个哈希均恢复原基线。
+- 项目目前没有真实平台同 message ID 重放入口，该项仍需独立真实证据；重复发送同正文、插件合成测试、单条 created 去重状态均不能代替。回复条数来自用户现场观察，不能把已删除的待回复状态当作发送次数证据。MCP 仍关闭，不是本轮默认启用步骤。
 - 根目录可能存在被 Git 忽略的 `testAccountInfo.txt`。不得读取到终端输出、模型上下文或 Git；它只可由不回显的本机流程用于 `18888` 测试登录，不能代替正式网页登录凭据。
 
-功能分支同步以联网核对本地 HEAD、upstream 与远端 HEAD 一致为准；`main` 保持原状。当前仍缺真实重启和微信验收，不能报告全部上线完成。实时状态可能在会话间漂移，新会话先按续接文档执行只读核验。
+功能分支同步以联网核对本地 HEAD、upstream 与远端 HEAD 一致为准；`main` 保持原状。当前仍缺真实平台重放证据，不能报告全部上线完成。实时状态可能在会话间漂移，新会话先按续接文档执行只读核验。
 
 ## 不变边界
 
