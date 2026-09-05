@@ -52,7 +52,9 @@ function Assert-ReleaseTreeAcl {
         $expectedRights[$systemSid] = [int][Security.AccessControl.FileSystemRights]::FullControl
         $expectedRights[$administratorsSid] = [int][Security.AccessControl.FileSystemRights]::FullControl
         if (-not $expectedRights.ContainsKey($runtimeSid)) {
-            $expectedRights[$runtimeSid] = [int][Security.AccessControl.FileSystemRights]::ReadAndExecute
+            # Windows normalizes an allow ACE for ReadAndExecute by adding Synchronize.
+            # Keep the comparison exact so no write, delete, or ACL-management rights pass.
+            $expectedRights[$runtimeSid] = [int]([Security.AccessControl.FileSystemRights]::ReadAndExecute -bor [Security.AccessControl.FileSystemRights]::Synchronize)
         }
 
         $items = @((Get-Item -LiteralPath $RootPath -Force -ErrorAction Stop))

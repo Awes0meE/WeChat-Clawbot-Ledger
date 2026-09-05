@@ -74,6 +74,23 @@ function runPowerShell(script, arguments_ = [], env = {}) {
   );
 }
 
+function runNativeWindowsPowerShell(script, arguments_ = [], env = {}) {
+  const windowsPowerShellModulePath = [
+    join(process.env.USERPROFILE, 'Documents', 'WindowsPowerShell', 'Modules'),
+    join(process.env.ProgramFiles, 'WindowsPowerShell', 'Modules'),
+    join(process.env.SystemRoot, 'system32', 'WindowsPowerShell', 'v1.0', 'Modules'),
+  ].join(';');
+  return spawnSync(
+    'powershell.exe',
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, ...arguments_],
+    {
+      encoding: 'utf8',
+      windowsHide: true,
+      env: { ...process.env, ...env, PSModulePath: windowsPowerShellModulePath },
+    },
+  );
+}
+
 function assertSucceeded(result) {
   assert.equal(result.status, 0, result.stderr || result.stdout);
 }
@@ -528,6 +545,21 @@ test('hardens and verifies the release ACL before publication or activation', ()
     assertFailed(unsafe, /ACL|immutable|release|protect/iu);
     assert.deepEqual(normalizedOpenClawTrace(fixture), []);
     assert.deepEqual(JSON.parse(readFileSync(fixture.configPath, 'utf8')), fixture.config);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('accepts the native Windows ReadAndExecute ACL normalization for immutable releases', () => {
+  const fixture = createFixture();
+  try {
+    const arguments_ = publishArguments(fixture, ['-ReleaseOnly']);
+    const aclArgumentIndex = arguments_.indexOf('-AclExecutable');
+    assert.notEqual(aclArgumentIndex, -1);
+    arguments_.splice(aclArgumentIndex, 2);
+
+    assertSucceeded(runNativeWindowsPowerShell(publishScript, arguments_, fixture.env));
+    assertSucceeded(runNativeWindowsPowerShell(verifyScript, ['-ReleasePath', fixture.releasePath], fixture.env));
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
