@@ -2,26 +2,29 @@
 
 更新于 2026-09-05，时区 `Asia/Singapore`。这是 Windows 接手、恢复和验收的第一入口。仓库描述发布契约；任何“正在运行”结论都必须在当前主机重新探测，并以 `docs/ledger-cloudflare-runbook.md` 的完整矩阵闭环。
 
-## 2026-09-05 续接点：旧回执修复已部署，双消息微信验收待完成
+## 2026-09-05 续接点：旧回执双消息验收通过，平台重放仍待验证
 
 本次故障、修复及待办见 [微信旧回执修复交接](docs/handoffs/2026-09-05-wechat-stale-reply-repair.md)；此前 Tunnel、重启和验收证据见 [GPT-6 续接点](docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)。生产 `bookkeeper` 继续固定为 `gpt-5.6-sol` 与官方 Codex harness。
 
 - 用户已明确授权全量 neat、推送、提 PR、合并 `main`、清理无用分支及同步远近端。删除旧分支/worktree 前必须核对无独有提交、未提交文件、运行依赖或活动任务，不得 reset、rebase 或丢弃工作。Git 合并不切换生产代码。
 - 两次新微信消息重复收到上一笔回执，已确认运行中的旧 release `1cf2f739ca92898feed5f24372e9a407ced34b0a` 未部署 `93543ab` 的新可信消息优先修复。新增 `c5e2e25` 拒绝多候选和错误确认决定触发的旧成功回执回退，回复回归 516/516 通过；`48225a1` 仅修正测试中的 Windows CRLF 兼容。
 - `0e7c2d7f1f0369552d17d054e2ef24b75be7a482` 包含 managed `session-memory` 保护，完整 `npm test` 退出码为 0，独立 hook 测试 14/14。新 release 已发布且 verifier 通过，现已返回 `OPENCLAW_RELEASE_SWITCHED`、退出码 0；脚本中的 Gateway/channel/plugin/Codex/model 检查通过。切换后 workspace 和两条 plugin 路径均为新 release，正式 `8888` 的 loopback、唯一 owner、程序与配置正确，Gateway loopback 恢复。修正仓库 `.ps1` 的 CRLF/LF 约定后，严格本机重验 14/14 全部通过、退出码 0；已部署 Tunnel 脚本未变，verifier 未放宽。
-- 旧 release 的 PS 5.1 全量 verifier 已返回 `ROLLBACK_RELEASE_VERIFIED`、退出码 0，保留用于回滚。同次维护在切换前运行了带 `ApiTokenPath` 与 `ComparePortfolioBaseline` 的公网验收，返回 `LEDGER_PUBLIC_ACCEPTANCE_OK`；本次没有额外重跑限速验证。两条全新微信消息的现场验收尚未完成，不能据此宣称全部上线通过。
+- 旧 release 的 PS 5.1 全量 verifier 已返回 `ROLLBACK_RELEASE_VERIFIED`、退出码 0，保留用于回滚。同次维护在切换前运行了带 `ApiTokenPath` 与 `ComparePortfolioBaseline` 的公网验收，返回 `LEDGER_PUBLIC_ACCEPTANCE_OK`；本次没有额外重跑限速验证。两条全新微信消息的现场验收已通过，平台同一 message ID 重放仍未验证，不能据此宣称全部上线通过。
 - managed hook 三个文件已安装，direct import 验证通过；Gateway 启动 INFO 的实际 `loadedCount=1`，配置与 eligibility 均为 1 且唯一条目为 managed `session-memory`，loader 失败数为 0，已证明运行注册成功。只跳过 `context.agentId === 'bookkeeper'`；`main` 及其他代理保持官方处理。官方上游固定 OpenClaw 2026.8.2 与 handler/descriptor 双 SHA-256，升级时须先审核再更新 pin。
-- 旧 workspace 的四个 memory 文件已迁至仓库外受限归档，迁出前后哈希 4/4 一致；未读取正文，未删除文件。修复与代码切换不改账、不补账、不重放此前业务消息。已在本机内存建立账户/分类/交易三哈希基线并确认本次测试标记不存在；双消息验收使用现有微信会话，不先 reset，完成后只清理精确识别的验收记录并复核基线。
+- 旧 workspace 的四个 memory 文件已迁至仓库外受限归档，迁出前后哈希 4/4 一致；未读取正文，未删除文件。修复与代码切换未补账或重放此前业务消息，仅按验收流程创建并精确清理两个已知测试交易。
+- 双消息验收在同一既有微信会话中完成，未 reset：两条全新可信消息分别为 0.01、0.02 SGD，各自对应唯一成功 receipt 和 API transaction，message key、clientSessionId、transaction ID 均独立。用户确认第一条正确，第二条未重复第一条回执。
+- 两个已知测试交易已精确删除，两次 API 响应均严格满足 `success=true`、`result=true`；删除后两 ID 与标记均消失，交易数减少 2。相对于此次删除前快照，非目标交易与分类完全未变，目标独立账户余额仅增加 3 minor（0.03 SGD），完整预期账户状态吻合。
+- 原始发消息前的账户/分类/交易三哈希基线因测试标记实际大小写差异，未能由旧进程完成比较，不能报告原三哈希恢复。新核验对 ASCII 标记精确不分大小写定位，随后对实际原文、金额、ID 和完整目标内容哈希严格复核；未修改测试正文，未修改未知交易。
 - 正式 `127.0.0.1:8888`、隔离测试 `127.0.0.1:18888`、immutable OpenClaw release、受控 Tunnel、Ledger DNS 与五条规则已部署，此前本机验收 14/14 通过；续接先只读复核，保留既有资源。
-- 正式网页登录及一次性记录的新增、显示、修改、删除已完成；仅删除已知验收记录，账户/分类/交易三个规范化哈希全部恢复基线。凭据未写入本地文件。
+- 此前正式网页登录及一次性记录的新增、显示、修改、删除已完成；该次仅删除已知验收记录，账户/分类/交易三个规范化哈希全部恢复基线。这是历史验收结果，不能代替本次清理的比较范围。凭据未写入本地文件。
 - pre-HSTS 闸门通过后，仅给现有 Ledger header rule 添加 `Strict-Transport-Security: max-age=86400`，无 `includeSubDomains` 或 `preload`。随后完整公网限速/token/缓存/安全头、作品集回归和 Cloudflare 只读 22/22 通过。
 - `ServiceCycle` 与恢复验证通过，包括 origin 停止及错误端口 owner 时 Tunnel 失败关闭。用户已执行真实 Windows 重启，启动时间严格晚于 owner-only `ledger-reboot-v1.json` 基线；12:56 UTC 的 `VerifyPostReboot` 完整通过，本机、公网、作品集和 OpenClaw 均恢复。原基线保留，不要覆盖。
 - 此前整合提交 `bedefb0` 的完整测试 513/513、stable-ID build 与 3/3、15 个 PowerShell 5.1 脚本解析全部通过；这些历史结果不能替代本次修复后的现场验收。
-- 此前单条微信记账与 HTTP 标记筛选汇总验收通过，只删除已知测试记录后三个哈希恢复原基线；本次故障说明单条测试不足以覆盖跨轮旧回执问题，须补充连续两条新消息验收。
+- 此前单条微信记账与 HTTP 标记筛选汇总验收通过，只删除已知测试记录后三个哈希恢复原基线；本次故障说明单条测试不足以覆盖跨轮旧回执问题，现已补充并通过连续两条新消息验收。
 - 项目目前没有真实平台同 message ID 重放入口，该项仍需独立真实证据；重复发送同正文、插件合成测试、单条 created 去重状态均不能代替。回复条数来自用户现场观察，不能把已删除的待回复状态当作发送次数证据。MCP 仍关闭，不是本轮默认启用步骤。
 - 根目录可能存在被 Git 忽略的 `testAccountInfo.txt`。不得读取到终端输出、模型上下文或 Git；它只可由不回显的本机流程用于 `18888` 测试登录，不能代替正式网页登录凭据。
 
-PR 合并与清理完成以联网核对本地 `main`、upstream、远端 `main` 一致，目标提交均在其历史中且工作区干净为准。新会话先按本次修复交接只读核验 active release、hook 注册和服务状态；测试通过不等于微信现场验收通过。当前双新消息验收仍待用户对第一条的回应，真实平台重放缺口保留。
+PR #5 已合并至 `main` 的 `5c128bb`；生产仍为 `0e7c2d7f1f0369552d17d054e2ef24b75be7a482`，本次验收文档更新无须重新部署。PR 合并与清理完成以联网核对本地 `main`、upstream、远端 `main` 一致，目标提交均在其历史中且工作区干净为准。新会话先按本次修复交接只读核验 active release、hook 注册和服务状态；双新消息验收与已知测试交易清理已完成，但不能称原始发消息前三哈希恢复。真实平台同一 message ID 重放仍未验证，`deploymentComplete=false`。
 
 ## 不变边界
 
