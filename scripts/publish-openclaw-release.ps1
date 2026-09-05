@@ -139,18 +139,32 @@ function Read-StrictUtf8 {
     }
 }
 
-function Get-Sha256 {
+function Get-FileIntegrity {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    $extendedPath = Get-WindowsExtendedPath -Path $Path
+    $stream = [IO.File]::Open($extendedPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
     $algorithm = [Security.Cryptography.SHA256]::Create()
     try {
+        $length = [long]$stream.Length
         $bytes = $algorithm.ComputeHash($stream)
-        return [BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant()
+        if ([long]$stream.Length -ne $length) {
+            throw 'A file changed while its integrity metadata was being calculated.'
+        }
+        return [PSCustomObject][ordered]@{
+            length = $length
+            sha256 = [BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant()
+        }
     } finally {
         $algorithm.Dispose()
         $stream.Dispose()
     }
+}
+
+function Get-Sha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    return (Get-FileIntegrity -Path $Path).sha256
 }
 
 function Get-RelativeChildPath {
@@ -503,51 +517,85 @@ function Write-Utf8NoBom {
     [IO.File]::WriteAllText($Path, $Value, (New-Object Text.UTF8Encoding($false)))
 }
 
-function Get-ReleasePayloadFiles {
+function Get-ExtendedReleaseTreeEntries {
     param([Parameter(Mandatory = $true)][string]$Root)
 
-    $rootItem = Get-Item -LiteralPath $Root -Force -ErrorAction Stop
-    if (Test-ReparsePoint -Item $rootItem) {
+    $extendedRoot = (Get-WindowsExtendedPath -Path $Root).TrimEnd([char[]]@('\', '/'))
+    if (-not [IO.Directory]::Exists($extendedRoot)) {
+        throw 'The staged release root is missing.'
+    }
+    $rootAttributes = [IO.File]::GetAttributes($extendedRoot)
+    if (($rootAttributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
         throw 'The staged release root cannot be a reparse point.'
     }
+    if (($rootAttributes -band [IO.FileAttributes]::Directory) -eq 0) {
+        throw 'The staged release root is not a directory.'
+    }
+
     $pending = New-Object 'System.Collections.Generic.Stack[string]'
-    $files = New-Object 'System.Collections.Generic.List[string]'
-    $pending.Push($Root)
+    $entries = New-Object 'System.Collections.Generic.List[object]'
+    $entries.Add([PSCustomObject][ordered]@{
+        ExtendedPath = $extendedRoot
+        RelativePath = ''
+        IsDirectory = $true
+    })
+    $pending.Push($extendedRoot)
+    $prefixLength = $extendedRoot.Length + 1
     while ($pending.Count -gt 0) {
         $directory = $pending.Pop()
-        foreach ($item in @(Get-ChildItem -LiteralPath $directory -Force -ErrorAction Stop)) {
-            if (Test-ReparsePoint -Item $item) {
+        foreach ($entryPath in [IO.Directory]::EnumerateFileSystemEntries($directory)) {
+            $attributes = [IO.File]::GetAttributes($entryPath)
+            if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
                 throw 'The staged release contains a reparse-point entry.'
             }
-            if ($item.PSIsContainer) {
-                $pending.Push($item.FullName)
-            } elseif ($item.Name -cne 'release-manifest.json' -or (Get-FullPath -Path $item.DirectoryName) -cne (Get-FullPath -Path $Root)) {
-                $files.Add($item.FullName)
+            if (-not $entryPath.StartsWith($extendedRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'The staged release contains an entry outside its root.'
+            }
+            $isDirectory = (($attributes -band [IO.FileAttributes]::Directory) -ne 0)
+            $relativePath = $entryPath.Substring($prefixLength).Replace('\', '/')
+            if ([string]::IsNullOrWhiteSpace($relativePath)) {
+                throw 'The staged release contains an invalid entry path.'
+            }
+            $entries.Add([PSCustomObject][ordered]@{
+                ExtendedPath = $entryPath
+                RelativePath = $relativePath
+                IsDirectory = $isDirectory
+            })
+            if ($isDirectory) {
+                $pending.Push($entryPath)
             }
         }
     }
-    return $files.ToArray()
+    return $entries.ToArray()
 }
 
 function Write-ReleaseManifest {
     param([Parameter(Mandatory = $true)][string]$StagingRoot)
 
-    $entries = New-Object 'System.Collections.Generic.List[object]'
-    [string[]]$payloadFiles = @(Get-ReleasePayloadFiles -Root $StagingRoot)
-    [Array]::Sort($payloadFiles, [StringComparer]::Ordinal)
-    foreach ($filePath in $payloadFiles) {
-        $relativePath = Get-RelativeChildPath -Root $StagingRoot -Child $filePath
-        $fileInfo = Get-Item -LiteralPath $filePath -Force -ErrorAction Stop
-        $entries.Add([PSCustomObject][ordered]@{
+    $manifestEntries = New-Object 'System.Collections.Generic.List[object]'
+    $payloadByPath = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in @(Get-ExtendedReleaseTreeEntries -Root $StagingRoot)) {
+        if (-not $entry.IsDirectory -and $entry.RelativePath -cne 'release-manifest.json') {
+            if ($payloadByPath.ContainsKey($entry.RelativePath)) {
+                throw 'The staged release contains duplicate case-insensitive paths.'
+            }
+            $payloadByPath.Add($entry.RelativePath, $entry)
+        }
+    }
+    [string[]]$payloadPaths = @($payloadByPath.Keys)
+    [Array]::Sort($payloadPaths, [StringComparer]::Ordinal)
+    foreach ($relativePath in $payloadPaths) {
+        $integrity = Get-FileIntegrity -Path $payloadByPath[$relativePath].ExtendedPath
+        $manifestEntries.Add([PSCustomObject][ordered]@{
             path = $relativePath
-            length = [long]$fileInfo.Length
-            sha256 = Get-Sha256 -Path $filePath
+            length = [long]$integrity.length
+            sha256 = $integrity.sha256
         })
     }
-    if ($entries.Count -eq 0) {
+    if ($manifestEntries.Count -eq 0) {
         throw 'The staged release contains no payload files.'
     }
-    $manifestJson = ConvertTo-Json -InputObject $entries.ToArray() -Depth 4
+    $manifestJson = ConvertTo-Json -InputObject $manifestEntries.ToArray() -Depth 4
     Write-Utf8NoBom -Path (Join-Path $StagingRoot 'release-manifest.json') -Value ($manifestJson + "`n")
 }
 
@@ -568,12 +616,13 @@ function Protect-ReleaseTree {
         $systemSid = New-Object Security.Principal.SecurityIdentifier([Security.Principal.WellKnownSidType]::LocalSystemSid, $null)
         $administratorsSid = New-Object Security.Principal.SecurityIdentifier([Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
 
-        $items = @((Get-Item -LiteralPath $Path -Force -ErrorAction Stop))
-        $items += @(Get-ChildItem -LiteralPath $Path -Force -Recurse -ErrorAction Stop)
-        $items = @($items | Sort-Object { $_.FullName.Length } -Descending)
+        $items = @(Get-ExtendedReleaseTreeEntries -Root $Path | Sort-Object { $_.ExtendedPath.Length } -Descending)
         foreach ($item in $items) {
-            if (Test-ReparsePoint -Item $item) { throw 'reparse point' }
-            if ($item.PSIsContainer) {
+            $attributes = [IO.File]::GetAttributes($item.ExtendedPath)
+            if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'reparse point' }
+            $isDirectory = (($attributes -band [IO.FileAttributes]::Directory) -ne 0)
+            if ($isDirectory -ne $item.IsDirectory) { throw 'entry type changed' }
+            if ($isDirectory) {
                 $acl = New-Object Security.AccessControl.DirectorySecurity
                 $inheritance = [Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'
             } else {
@@ -589,7 +638,11 @@ function Protect-ReleaseTree {
             if ($runtimeSid.Value -cne $systemSid.Value -and $runtimeSid.Value -cne $administratorsSid.Value) {
                 $null = $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($runtimeSid, [Security.AccessControl.FileSystemRights]::ReadAndExecute, $inheritance, $propagation, $allow)))
             }
-            Set-Acl -LiteralPath $item.FullName -AclObject $acl -ErrorAction Stop
+            if ($isDirectory) {
+                [IO.Directory]::SetAccessControl([string]$item.ExtendedPath, $acl)
+            } else {
+                [IO.File]::SetAccessControl([string]$item.ExtendedPath, $acl)
+            }
         }
     } catch {
         throw 'Protecting the immutable release ACL failed.'

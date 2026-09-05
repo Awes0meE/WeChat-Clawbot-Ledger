@@ -162,7 +162,7 @@ if ($joined -eq 'ci --omit=dev --ignore-scripts') {
     $nativeFailureCode = $LASTEXITCODE
     exit $nativeFailureCode
   }
-  if ($env:CLAWBOT_TEST_NPM_CREATE_DEEP_FAILURE -eq '1') {
+  if ($env:CLAWBOT_TEST_NPM_CREATE_DEEP_FAILURE -eq '1' -or $env:CLAWBOT_TEST_NPM_CREATE_DEEP_SUCCESS -eq '1') {
     $deepPath = $modules
     foreach ($index in 1..5) {
       $segment = 'deep-' + (('x' * 55) -join '') + $index
@@ -171,7 +171,7 @@ if ($joined -eq 'ci --omit=dev --ignore-scripts') {
     $extendedDeepPath = '\\?\' + [IO.Path]::GetFullPath($deepPath)
     [IO.Directory]::CreateDirectory($extendedDeepPath) | Out-Null
     [IO.File]::WriteAllText([IO.Path]::Combine($extendedDeepPath, 'deep-runtime-file.js'), 'deep fixture', (New-Object Text.UTF8Encoding($false)))
-    exit 110
+    if ($env:CLAWBOT_TEST_NPM_CREATE_DEEP_FAILURE -eq '1') { exit 110 }
   }
   foreach ($dependency in @('openclaw', 'qrcode-terminal', 'zod')) {
     New-Item -ItemType Directory -Path (Join-Path $modules $dependency) -Force | Out-Null
@@ -1057,6 +1057,79 @@ test('cleans an owned deep-path staging tree without masking the publication fai
     assertFailed(result, /stable-ID runtime dependencies|installing locked stable-ID/iu);
     assert.equal(existsSync(fixture.releasePath), false);
     assert.deepEqual(readdirSync(fixture.releases).filter((name) => name.startsWith('.staging-')), []);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('publishes and verifies deep dependency paths with native ACLs under Windows PowerShell 5.1', () => {
+  const fixture = createFixture();
+  try {
+    const arguments_ = publishArguments(fixture, ['-ReleaseOnly']);
+    arguments_.splice(arguments_.indexOf('-AclExecutable'), 2);
+    const result = runNativeWindowsPowerShell(
+      publishScript,
+      arguments_,
+      { ...fixture.env, CLAWBOT_TEST_NPM_CREATE_DEEP_SUCCESS: '1' },
+    );
+    assertSucceeded(result);
+
+    const deepSegments = Array.from({ length: 5 }, (_, index) => `deep-${'x'.repeat(55)}${index + 1}`);
+    const deepPath = join(
+      fixture.releasePath,
+      'openclaw-plugins',
+      'openclaw-weixin-stable-id',
+      'node_modules',
+      ...deepSegments,
+      'deep-runtime-file.js',
+    );
+    assert.ok(deepPath.length > 260);
+    assert.equal(existsSync(deepPath), true);
+
+    const verification = runNativeWindowsPowerShell(
+      verifyScript,
+      ['-ReleasePath', fixture.releasePath, '-ExpectedCommit', fullCommit],
+    );
+    assertSucceeded(verification);
+    assert.deepEqual(readdirSync(fixture.releases).filter((name) => name.startsWith('.staging-')), []);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('detects a modified deep dependency without leaking its contents', () => {
+  const fixture = createFixture();
+  try {
+    const result = runNativeWindowsPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-ReleaseOnly']),
+      { ...fixture.env, CLAWBOT_TEST_NPM_CREATE_DEEP_SUCCESS: '1' },
+    );
+    assertSucceeded(result);
+
+    const deepSegments = Array.from({ length: 5 }, (_, index) => `deep-${'x'.repeat(55)}${index + 1}`);
+    const deepPath = join(
+      fixture.releasePath,
+      'openclaw-plugins',
+      'openclaw-weixin-stable-id',
+      'node_modules',
+      ...deepSegments,
+      'deep-runtime-file.js',
+    );
+    assert.ok(deepPath.length > 260);
+    writeFileSync(deepPath, 'SENSITIVE-DEEP-TAMPER-MUST-NOT-APPEAR', 'utf8');
+
+    const verification = runNativeWindowsPowerShell(
+      verifyScript,
+      [
+        '-ReleasePath', fixture.releasePath,
+        '-ExpectedCommit', fullCommit,
+        '-AclExecutable', fixture.aclShim,
+      ],
+      fixture.env,
+    );
+    assertFailed(verification, /length|hash|changed/iu);
+    assert.equal(`${verification.stdout}\n${verification.stderr}`.includes('SENSITIVE-DEEP-TAMPER-MUST-NOT-APPEAR'), false);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

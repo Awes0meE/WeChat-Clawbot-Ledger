@@ -16,18 +16,101 @@ function Test-ReparsePoint {
     return (($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
 }
 
-function Get-Sha256 {
+function Get-FullPath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    return [IO.Path]::GetFullPath($Path).TrimEnd([char[]]@('\', '/'))
+}
+
+function Get-WindowsExtendedPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $fullPath = Get-FullPath -Path $Path
+    if ($fullPath.StartsWith('\\?\', [StringComparison]::Ordinal)) { return $fullPath }
+    if ($fullPath.StartsWith('\\', [StringComparison]::Ordinal)) {
+        return '\\?\UNC\' + $fullPath.Substring(2)
+    }
+    return '\\?\' + $fullPath
+}
+
+function Get-FileIntegrity {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $extendedPath = Get-WindowsExtendedPath -Path $Path
+    $stream = [IO.File]::Open($extendedPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
     $algorithm = [Security.Cryptography.SHA256]::Create()
     try {
+        $length = [long]$stream.Length
         $bytes = $algorithm.ComputeHash($stream)
-        return [BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant()
+        if ([long]$stream.Length -ne $length) {
+            throw 'A release file changed while its integrity metadata was being calculated.'
+        }
+        return [PSCustomObject][ordered]@{
+            length = $length
+            sha256 = [BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant()
+        }
     } finally {
         $algorithm.Dispose()
         $stream.Dispose()
     }
+}
+
+function Get-Sha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    return (Get-FileIntegrity -Path $Path).sha256
+}
+
+function Get-ExtendedReleaseTreeEntries {
+    param([Parameter(Mandatory = $true)][string]$RootPath)
+
+    $extendedRoot = (Get-WindowsExtendedPath -Path $RootPath).TrimEnd([char[]]@('\', '/'))
+    if (-not [IO.Directory]::Exists($extendedRoot)) {
+        throw 'Release directory is missing.'
+    }
+    $rootAttributes = [IO.File]::GetAttributes($extendedRoot)
+    if (($rootAttributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'Release verification rejected a reparse-point root.'
+    }
+    if (($rootAttributes -band [IO.FileAttributes]::Directory) -eq 0) {
+        throw 'Release root is not a directory.'
+    }
+
+    $entries = New-Object 'System.Collections.Generic.List[object]'
+    $entries.Add([PSCustomObject][ordered]@{
+        ExtendedPath = $extendedRoot
+        RelativePath = ''
+        IsDirectory = $true
+    })
+    $pending = New-Object 'System.Collections.Generic.Stack[string]'
+    $pending.Push($extendedRoot)
+    $prefixLength = $extendedRoot.Length + 1
+    while ($pending.Count -gt 0) {
+        $directory = $pending.Pop()
+        foreach ($entryPath in [IO.Directory]::EnumerateFileSystemEntries($directory)) {
+            $attributes = [IO.File]::GetAttributes($entryPath)
+            if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw 'Release verification rejected a reparse-point entry.'
+            }
+            if (-not $entryPath.StartsWith($extendedRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'Release verification rejected an out-of-root entry.'
+            }
+            $isDirectory = (($attributes -band [IO.FileAttributes]::Directory) -ne 0)
+            $relativePath = $entryPath.Substring($prefixLength).Replace('\', '/')
+            if ([string]::IsNullOrWhiteSpace($relativePath)) {
+                throw 'Release verification rejected an invalid entry path.'
+            }
+            $entries.Add([PSCustomObject][ordered]@{
+                ExtendedPath = $entryPath
+                RelativePath = $relativePath
+                IsDirectory = $isDirectory
+            })
+            if ($isDirectory) {
+                $pending.Push($entryPath)
+            }
+        }
+    }
+    return $entries.ToArray()
 }
 
 function Assert-ReleaseTreeAcl {
@@ -57,11 +140,18 @@ function Assert-ReleaseTreeAcl {
             $expectedRights[$runtimeSid] = [int]([Security.AccessControl.FileSystemRights]::ReadAndExecute -bor [Security.AccessControl.FileSystemRights]::Synchronize)
         }
 
-        $items = @((Get-Item -LiteralPath $RootPath -Force -ErrorAction Stop))
-        $items += @(Get-ChildItem -LiteralPath $RootPath -Force -Recurse -ErrorAction Stop)
+        $aclSections = [Security.AccessControl.AccessControlSections]::Access -bor [Security.AccessControl.AccessControlSections]::Owner
+        $items = @(Get-ExtendedReleaseTreeEntries -RootPath $RootPath)
         foreach ($item in $items) {
-            if (Test-ReparsePoint -Item $item) { throw 'reparse point' }
-            $acl = Get-Acl -LiteralPath $item.FullName -ErrorAction Stop
+            $attributes = [IO.File]::GetAttributes($item.ExtendedPath)
+            if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'reparse point' }
+            $isDirectory = (($attributes -band [IO.FileAttributes]::Directory) -ne 0)
+            if ($isDirectory -ne $item.IsDirectory) { throw 'entry type changed' }
+            if ($isDirectory) {
+                $acl = [IO.Directory]::GetAccessControl([string]$item.ExtendedPath, $aclSections)
+            } else {
+                $acl = [IO.File]::GetAccessControl([string]$item.ExtendedPath, $aclSections)
+            }
             $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
             $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
             if (-not $acl.AreAccessRulesProtected -or
@@ -86,36 +176,8 @@ function Assert-ReleaseTreeAcl {
     }
 }
 
-function Get-ReleaseFilesWithoutReparsePoints {
-    param([Parameter(Mandatory = $true)][string]$RootPath)
-
-    $rootItem = Get-Item -LiteralPath $RootPath -Force -ErrorAction Stop
-    if (Test-ReparsePoint -Item $rootItem) {
-        throw 'Release verification rejected a reparse-point root.'
-    }
-
-    $pending = New-Object 'System.Collections.Generic.Stack[string]'
-    $files = New-Object 'System.Collections.Generic.List[string]'
-    $pending.Push($RootPath)
-    while ($pending.Count -gt 0) {
-        $directory = $pending.Pop()
-        foreach ($item in @(Get-ChildItem -LiteralPath $directory -Force -ErrorAction Stop)) {
-            if (Test-ReparsePoint -Item $item) {
-                throw 'Release verification rejected a reparse-point entry.'
-            }
-            if ($item.PSIsContainer) {
-                $pending.Push($item.FullName)
-            } else {
-                $files.Add($item.FullName)
-            }
-        }
-    }
-    return $files.ToArray()
-}
-
-function Resolve-ManifestEntryPath {
+function Assert-ManifestEntryPath {
     param(
-        [Parameter(Mandatory = $true)][string]$RootPath,
         [Parameter(Mandatory = $true)][string]$RelativePath
     )
 
@@ -129,16 +191,9 @@ function Resolve-ManifestEntryPath {
     if ($segments.Count -eq 0 -or @($segments | Where-Object { $_ -eq '' -or $_ -eq '.' -or $_ -eq '..' }).Count -gt 0) {
         throw 'Release manifest paths must remain inside the release root.'
     }
-
-    $candidate = [IO.Path]::GetFullPath((Join-Path $RootPath ($segments -join [IO.Path]::DirectorySeparatorChar)))
-    $rootPrefix = $RootPath.TrimEnd([char[]]@('\', '/')) + [IO.Path]::DirectorySeparatorChar
-    if (-not $candidate.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'Release manifest path resolves outside the release root.'
-    }
-    return $candidate
 }
 
-$releaseRoot = [IO.Path]::GetFullPath($ReleasePath).TrimEnd([char[]]@('\', '/'))
+$releaseRoot = Get-FullPath -Path $ReleasePath
 if (-not [IO.Directory]::Exists($releaseRoot)) {
     throw 'Release directory is missing.'
 }
@@ -148,14 +203,15 @@ if (-not [IO.File]::Exists($manifestPath)) {
     throw 'Release manifest is missing.'
 }
 
-$allFiles = @(Get-ReleaseFilesWithoutReparsePoints -RootPath $releaseRoot)
-$manifestItem = Get-Item -LiteralPath $manifestPath -Force -ErrorAction Stop
-if (Test-ReparsePoint -Item $manifestItem) {
+$allEntries = @(Get-ExtendedReleaseTreeEntries -RootPath $releaseRoot)
+$manifestExtendedPath = Get-WindowsExtendedPath -Path $manifestPath
+$manifestAttributes = [IO.File]::GetAttributes($manifestExtendedPath)
+if (($manifestAttributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
     throw 'Release verification rejected a reparse-point manifest.'
 }
 
 try {
-    $manifestText = [IO.File]::ReadAllText($manifestPath, $script:StrictUtf8Encoding)
+    $manifestText = [IO.File]::ReadAllText($manifestExtendedPath, $script:StrictUtf8Encoding)
     if (-not $manifestText.TrimStart().StartsWith('[', [StringComparison]::Ordinal)) {
         throw 'not an array'
     }
@@ -184,7 +240,7 @@ foreach ($entry in $manifestEntries) {
     if ($relativePath -ceq 'release-manifest.json') {
         throw 'Release manifest cannot hash itself.'
     }
-    $null = Resolve-ManifestEntryPath -RootPath $releaseRoot -RelativePath $relativePath
+    Assert-ManifestEntryPath -RelativePath $relativePath
     if ($entry.length -isnot [int] -and $entry.length -isnot [long]) {
         throw 'Release manifest length is invalid.'
     }
@@ -198,16 +254,15 @@ foreach ($entry in $manifestEntries) {
 }
 
 $actualByPath = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([StringComparer]::OrdinalIgnoreCase)
-$rootPrefixLength = $releaseRoot.TrimEnd([char[]]@('\', '/')).Length + 1
-foreach ($filePath in $allFiles) {
-    if ([string]::Equals($filePath, $manifestPath, [StringComparison]::OrdinalIgnoreCase)) {
+foreach ($fileEntry in $allEntries) {
+    if ($fileEntry.IsDirectory -or $fileEntry.RelativePath -ceq 'release-manifest.json') {
         continue
     }
-    $relativePath = $filePath.Substring($rootPrefixLength).Replace('\', '/')
+    $relativePath = $fileEntry.RelativePath
     if ($actualByPath.ContainsKey($relativePath)) {
         throw 'Release contains duplicate case-insensitive paths.'
     }
-    $actualByPath.Add($relativePath, $filePath)
+    $actualByPath.Add($relativePath, $fileEntry.ExtendedPath)
 }
 
 foreach ($relativePath in $manifestByPath.Keys) {
@@ -259,12 +314,11 @@ foreach ($relativePath in $actualByPath.Keys) {
 foreach ($relativePath in $manifestByPath.Keys) {
     $entry = $manifestByPath[$relativePath]
     $filePath = $actualByPath[$relativePath]
-    $item = Get-Item -LiteralPath $filePath -Force -ErrorAction Stop
-    if ([long]$entry.length -ne [long]$item.Length) {
+    $integrity = Get-FileIntegrity -Path $filePath
+    if ([long]$entry.length -ne [long]$integrity.length) {
         throw 'Release payload length changed.'
     }
-    $actualHash = Get-Sha256 -Path $filePath
-    if ($actualHash -cne [string]$entry.sha256) {
+    if ($integrity.sha256 -cne [string]$entry.sha256) {
         throw 'Release payload hash changed.'
     }
 }
