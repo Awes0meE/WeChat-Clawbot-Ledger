@@ -6,7 +6,7 @@ Clawbot 是一个私有、Windows 托管的微信个人账本助理。当前发�
 WeChat -> OpenClaw immutable release -> owner-bound OpenAI GPT-5.6 Sol (official Codex harness)
   -> record_expense | prepare_expense | resolve_expense_confirmation
      -> trusted write/confirmation adapter -> 127.0.0.1:8888 ezBookkeeping HTTP API
-  -> summarize_expenses -> deterministic read adapter -> ezBookkeeping HTTP API
+  -> summarize_expenses | find_expenses -> deterministic read adapter -> ezBookkeeping HTTP API
   -> ezbookkeeping__query_transactions -> requester-scoped read-only MCP
      (code-ready; local MCP activation still pending)
 
@@ -18,7 +18,7 @@ Browser -> https://ledger.66ccff-labs.com -> Cloudflare Tunnel
 
 ## 当前基线
 
-以下运行合同更新于 2026-09-05；实时上线状态必须以 `docs/ledger-cloudflare-runbook.md` 的完整验收为准，不能仅凭配置或文档推断。
+以下运行合同更新于 2026-09-06；实时上线状态必须以 `docs/ledger-cloudflare-runbook.md` 的完整验收为准，不能仅凭配置或文档推断。
 
 | 组件 | 当前约束 |
 | --- | --- |
@@ -31,26 +31,28 @@ Browser -> https://ledger.66ccff-labs.com -> Cloudflare Tunnel
 | 生产代码 | OpenClaw 只加载仓库外、manifest 校验过的 immutable release，不直接加载开发工作区 |
 | 账户与币种 | 唯一可见 SGD 账户 `日常支出`；回执显示 `日常账本` |
 | 分类 | 运行时以 `openclaw-plugins/clawbot-bookkeeping/categories.mjs` 的不可变 `CATEGORY_DEFINITIONS` 为权威契约，固定为 11 个一级、45 个二级分类 |
-| 专用代理 allowlist | `record_expense`、`prepare_expense`、`resolve_expense_confirmation`、`summarize_expenses`、`ezbookkeeping__query_transactions` |
+| 专用代理 allowlist | `record_expense`、`prepare_expense`、`resolve_expense_confirmation`、`summarize_expenses`、`ezbookkeeping__query_transactions`、`find_expenses` |
 | 灵活历史查询 | 代码与最小权限契约已就绪；截至 2026-09-05，本机 `enable_mcp=false` 且独立 MCP token 尚未生成，因此尚未上线 |
 
 Ledger 网页已通过正式登录、一次性记录的新增/修改/删除、公网安全与作品集回归、服务重启和失败关闭验收。2026-09-05 真实 Windows 重启恢复、Cloudflare 核验以及当时的微信记账与 HTTP 汇总实测通过，已知测试记录清理后三个数据哈希恢复基线。基础部署证据见 [GPT-6 续接点](docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)。
 
-随后两次新微信消息重复收到上一笔回执，已确认旧生产 release `1cf2f739ca92898feed5f24372e9a407ced34b0a` 未包含 `93543ab` 的新可信消息优先修复。`c5e2e25` 进一步阻止多候选和确认决定不匹配时回退旧成功回执；回复回归 516/516 通过。**生产现已切换到 `0e7c2d7f1f0369552d17d054e2ef24b75be7a482`**，发布校验、切换脚本及 Gateway/channel/plugin/Codex/model 检查通过，旧 release 完整回滚校验也已通过。
+随后两次新微信消息重复收到上一笔回执，已确认旧生产 release `1cf2f739ca92898feed5f24372e9a407ced34b0a` 未包含 `93543ab` 的新可信消息优先修复。`c5e2e25` 进一步阻止多候选和确认决定不匹配时回退旧成功回执；回复回归 516/516 通过。生产当时切换到 `0e7c2d7f1f0369552d17d054e2ef24b75be7a482`，发布校验、切换脚本及 Gateway/channel/plugin/Codex/model 检查通过，旧 release 完整回滚校验也已通过。2026-09-06 的后续生产版本见下方金额查询发布状态。
 
 managed `session-memory` 保护已安装并确认运行注册，只跳过 `bookkeeper`，其余代理保持官方行为；旧 workspace 的四个 memory 文件已按哈希保全迁出。修正仓库 PowerShell 换行约定后，切换后的严格本机验收 14/14 通过、退出码 0；未修改已部署 Tunnel 脚本或放宽校验。
 
 双消息微信现场验收已通过：在同一既有会话、不 reset 的条件下，两条全新可信消息分别记录 0.01、0.02 SGD，各自对应唯一成功收据和 API 交易，message key、clientSessionId 与交易 ID 均独立。用户确认第一条正确、第二条没有重复第一条。两个已知测试交易已精确删除，两次删除均严格返回 `success=true`、`result=true`，随后两 ID 与标记均消失、交易数减少 2；历史业务消息未回放或补账。
 
-本次清理以删除前快照为比较基准：非目标交易与分类完全未变，目标独立账户余额仅增加 3 minor（0.03 SGD），完整预期账户状态吻合。原始发消息前三哈希基线因测试标记实际大小写差异，未能由旧进程完成比较，**不能称已恢复原三哈希基线**。新核验仅对 ASCII 标记做精确不分大小写定位，随后严格核对实际原文、金额、ID 和完整目标内容哈希，未修改测试正文。详情见 [微信旧回执修复交接](docs/handoffs/2026-09-05-wechat-stale-reply-repair.md)。PR #5 已合入 `main` 的 `5c128bb`；本次文档更新无须重新部署，生产仍为上述 release。平台同一 message ID 的真实重放仍未验证，`deploymentComplete=false`，不能报告全部上线验收完成。
+本次清理以删除前快照为比较基准：非目标交易与分类完全未变，目标独立账户余额仅增加 3 minor（0.03 SGD），完整预期账户状态吻合。原始发消息前三哈希基线因测试标记实际大小写差异，未能由旧进程完成比较，**不能称已恢复原三哈希基线**。新核验仅对 ASCII 标记做精确不分大小写定位，随后严格核对实际原文、金额、ID 和完整目标内容哈希，未修改测试正文。详情见 [微信旧回执修复交接](docs/handoffs/2026-09-05-wechat-stale-reply-repair.md)。PR #5 已合入 `main` 的 `5c128bb`；该次文档更新没有重新部署；当前生产版本见金额查询发布状态。平台同一 message ID 的真实重放仍未验证，`deploymentComplete=false`，不能报告全部上线验收完成。
 
-## 金额查询开发状态（2026-09-06）
+## 金额查询发布状态（2026-09-06）
 
 `feat/amount-transaction-search` 新增只读 `find_expenses`，用于“账本里有没有 3.36 的账”。未指定日期时查询当前日常支出 SGD 账户的全部历史，精确匹配单笔金额；可指定自然时间范围或自定义起止日。默认显示最近 3 笔，最多 10 笔，包含日期、金额、分类及备注；有更多匹配时明确提示，不把返回条数当作总数。接口失败或返回不可信数据时不能回答“没有记录”。
 
 实现使用 ezBookkeeping 已有 HTTP 金额过滤，不依赖尚未激活的 MCP，也不读取全库后让模型筛选。`3.36` 转为整数分 `336`，请求 `amount_filter=eq:336`；只取一页至多 `limit+1` 条并严格验证账户、类型、金额、时间和分页结果。参数及单位依据 [v1.6.1 查询模型](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/models/transaction.go#L400-L432)。
 
-**这是分支中的开发能力，尚未发布到生产。** 本次只读状态核验仍为旧 release `0e7c2d7`、`enable_mcp=false`，在线 allowlist 没有 `find_expenses`。发布时需同时更新受控 allowlist 与 immutable release，再由所有者微信实测；当前微信不会因修改 Git 文件自动获得新工具。
+**生产现已切换到 `1d487943433869d0422f1bf4446fd046717c3647`，在线 allowlist 已加入 `find_expenses`。** immutable release 完整哈希与 ACL、Gateway/channel/plugin/Codex/model、本机 14/14、公网与作品集回归均通过；当前 Gateway 的 managed session-memory hook 注册也已确认。原 `0e7c2d7` release 保留并通过完整回滚校验，MCP 仍关闭。
+
+用户在微信只发送一次原金额查询，确认只收到一条正常结果、显示 1 笔 3.36 SGD；新发布包的严格只读 API 查询与此一致。查询前后账户、分类、交易三个规范化哈希及结果格式化摘要均相同，没有新增测试交易。金额查询的发布记录与回滚注意事项见 [金额查询发布交接](docs/handoffs/2026-09-06-amount-search-release.md)。此前平台同一 message ID 的真实重放未验证这一缺口仍保留，不能把本次功能验收扩大为全部历史验收完成。
 
 ## 助理行为
 
@@ -89,7 +91,8 @@ Codex 先在内部理解消费时间、金额、币种、正式分类和语义�
 
 - `summarize_expenses` 处理今天、本周、本月、上月、今年或自定义日期范围的精确汇总，可再按正式分类或备注关键词筛选。金额以整数分累加，返回总额、笔数、所有非零一级分类和最大三笔。
 - `ezbookkeeping__query_transactions` 处理“最近三笔是什么”“上月在某商家买过什么”等灵活历史查询。默认 3 条、最多 10 条是专用代理的回复策略，不是原生 MCP 上由项目包装器强制执行的安全上限；安全边界仍是 owner-only resolver 和工具 allowlist。
-- 上述灵活历史查询是已实现但未激活的能力。在用户于可见终端运行 `scripts/configure-ezbookkeeping-mcp.ps1` 并完成密码输入前，不得宣称“最近几笔/商家明细”查询已可用；当前已上线的查账能力是 `summarize_expenses` 确定性汇总。
+- `find_expenses` 按单笔 SGD 支出金额精确查询，默认全部历史，也可限定日期；默认返回最近 3 笔，最多 10 笔，有更多时明确提示。
+- 上述 MCP 灵活历史查询是已实现但未激活的能力。在用户于可见终端运行 `scripts/configure-ezbookkeeping-mcp.ps1` 并完成密码输入前，不得宣称 MCP 的“最近几笔/商家明细”查询已可用；当前已上线的是 `summarize_expenses` 确定性汇总和 `find_expenses` 精确金额查询。
 - 查询意图优先于数字识别；问题中的日期或数量不能触发记账。写入与查询同时出现时，本轮只处理一次明确写入，查询须另发消息。
 - 所有回复只展示最终结果，不展示思考过程、工具名、JSON、参数、候选分类或重试过程。
 
@@ -139,7 +142,7 @@ openclaw plugins enable codex --accept-capabilities
 openclaw models auth login --provider openai --agent bookkeeper
 ```
 
-`config/weixin-bookkeeper-agent.example.json` 将 `openai/gpt-5.6-sol` 显式绑定到 `agentRuntime.id: codex`，并把 Codex 动态工具加载设为 `direct`。专用代理只有五个经过 allowlist 的账本工具；直接加载让 Code Mode 可通过 `exec` 中现成的 `tools.<账本工具>` 调用，而不先搜索工具目录。包装返回字符串时必须原样输出完整字符串。这是 fail-closed 配置：Codex harness 不可用时该轮失败，不自动退回本地 Qwen 或其他模型。
+`config/weixin-bookkeeper-agent.example.json` 将 `openai/gpt-5.6-sol` 显式绑定到 `agentRuntime.id: codex`，并把 Codex 动态工具加载设为 `direct`。专用代理 allowlist 有六项账本工具，其中 MCP 仍须独立启用；直接加载让 Code Mode 可通过 `exec` 中现成的 `tools.<账本工具>` 调用，而不先搜索工具目录。包装返回字符串时必须原样输出完整字符串。这是 fail-closed 配置：Codex harness 不可用时该轮失败，不自动退回本地 Qwen 或其他模型。
 
 账本插件还会把当前可信微信接收者的哈希身份绑定到工具回执，并把短期工具绑定、待确认项与权威回执交接保存到本地 SQLite。即使 Codex 内层工具轮次和微信外层发送轮次落在不同插件实例、使用不同运行编号，最后一跳也只会在接收者唯一匹配时预留并替换为工具生成的权威文本。发送成功后才消费回执，发送失败则释放预留；接收者不同或候选不唯一时拒绝猜测。原始微信身份不会写入日志或仓库。
 
