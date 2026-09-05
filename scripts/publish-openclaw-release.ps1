@@ -383,17 +383,24 @@ function Invoke-ExternalCommand {
         $global:LASTEXITCODE = 0
         $previousConsoleOut = [Console]::Out
         $previousConsoleError = [Console]::Error
+        $previousErrorActionPreference = $ErrorActionPreference
         try {
             [Console]::SetOut([IO.TextWriter]::Null)
             [Console]::SetError([IO.TextWriter]::Null)
+            # Windows PowerShell 5.1 promotes native stderr to a terminating
+            # RemoteException under Stop even when the process exits zero.
+            # Capture it privately and let the native exit code decide success.
+            $ErrorActionPreference = 'Continue'
             $capturedOutput = @(& $Executable @Arguments *>&1)
+            $exitCode = $LASTEXITCODE
         } catch {
             throw $FailureMessage
         } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
             [Console]::SetOut($previousConsoleOut)
             [Console]::SetError($previousConsoleError)
         }
-        if ($LASTEXITCODE -ne 0) {
+        if ($exitCode -ne 0) {
             throw $FailureMessage
         }
         return $capturedOutput

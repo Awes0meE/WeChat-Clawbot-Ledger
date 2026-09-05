@@ -133,6 +133,10 @@ function createNpmShim(root) {
   const path = join(root, 'npm-shim.ps1');
   write(path, String.raw`
 $joined = $args -join ' '
+if ($env:CLAWBOT_TEST_NPM_STDERR_WARNING -eq '1') {
+  & cmd.exe /d /c 'echo harmless-npm-warning 1>&2'
+  if ($LASTEXITCODE -ne 0) { exit 93 }
+}
 if ($joined -eq 'run build') {
   Add-Content -LiteralPath $env:CLAWBOT_TEST_BUILD_TRACE -Value 'stable-id-build' -Encoding UTF8
   Add-Content -LiteralPath $env:CLAWBOT_TEST_LIFECYCLE_TRACE -Value 'stable-id-build' -Encoding UTF8
@@ -153,6 +157,11 @@ if ($joined -eq 'ci --omit=dev --omit=peer --ignore-scripts') {
 if ($joined -eq 'ci --omit=dev --ignore-scripts') {
   Add-Content -LiteralPath $env:CLAWBOT_TEST_BUILD_TRACE -Value 'stable-id-production-dependencies' -Encoding UTF8
   $modules = Join-Path (Get-Location) 'node_modules'
+  if ($env:CLAWBOT_TEST_NPM_STDERR_FAILURE -eq '1') {
+    & cmd.exe /d /c 'echo SENSITIVE-NATIVE-STDERR-MUST-NOT-APPEAR 1>&2 & exit /b 111'
+    $nativeFailureCode = $LASTEXITCODE
+    exit $nativeFailureCode
+  }
   if ($env:CLAWBOT_TEST_NPM_CREATE_DEEP_FAILURE -eq '1') {
     $deepPath = $modules
     foreach ($index in 1..5) {
@@ -1025,6 +1034,39 @@ test('cleans an owned deep-path staging tree without masking the publication fai
       { ...fixture.env, CLAWBOT_TEST_NPM_CREATE_DEEP_FAILURE: '1' },
     );
     assertFailed(result, /stable-ID runtime dependencies|installing locked stable-ID/iu);
+    assert.equal(existsSync(fixture.releasePath), false);
+    assert.deepEqual(readdirSync(fixture.releases).filter((name) => name.startsWith('.staging-')), []);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('accepts native stderr warnings when the command exits successfully', () => {
+  const fixture = createFixture();
+  try {
+    const result = runNativeWindowsPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-ReleaseOnly']),
+      { ...fixture.env, CLAWBOT_TEST_NPM_STDERR_WARNING: '1' },
+    );
+    assertSucceeded(result);
+    assert.equal(`${result.stdout}\n${result.stderr}`.includes('harmless-npm-warning'), false);
+    assert.equal(existsSync(fixture.releasePath), true);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('rejects nonzero native stderr without leaking diagnostics or retaining staging', () => {
+  const fixture = createFixture();
+  try {
+    const result = runNativeWindowsPowerShell(
+      publishScript,
+      publishArguments(fixture, ['-ReleaseOnly']),
+      { ...fixture.env, CLAWBOT_TEST_NPM_STDERR_FAILURE: '1' },
+    );
+    assertFailed(result, /stable-ID runtime dependencies|installing locked stable-ID/iu);
+    assert.equal(`${result.stdout}\n${result.stderr}`.includes('SENSITIVE-NATIVE-STDERR-MUST-NOT-APPEAR'), false);
     assert.equal(existsSync(fixture.releasePath), false);
     assert.deepEqual(readdirSync(fixture.releases).filter((name) => name.startsWith('.staging-')), []);
   } finally {
