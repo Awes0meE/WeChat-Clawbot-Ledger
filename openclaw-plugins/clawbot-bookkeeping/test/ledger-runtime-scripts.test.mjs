@@ -326,8 +326,9 @@ function Export-ScheduledTask {
 }
 function New-ScheduledTaskAction { [CmdletBinding()] param([string]$Execute, [string]$Argument, [string]$WorkingDirectory) return [pscustomobject]@{ Execute = $Execute; Arguments = $Argument; WorkingDirectory = $WorkingDirectory } }
 function Set-ScheduledTask {
-    [CmdletBinding()] param([object]$InputObject, [object]$Action)
+    [CmdletBinding()] param([object]$InputObject)
     if ($InputObject -ne $global:task) { throw 'Wrong task object.' }
+    $Action = $InputObject.Actions[0]
     $global:task.Actions = @($Action)
     $global:trace += if ($Action.Arguments -eq 'server run') { 'task-legacy' } else { 'task-explicit' }
     if ($global:scenario -eq 'task-update-throws-after-change' -and $Action.Arguments -ne 'server run') { throw 'Simulated task update interruption.' }
@@ -1150,6 +1151,18 @@ try {
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('production migration uses a supported Windows task action parameter set', () => {
+  const source = readFileSync(migrationScript, 'utf8');
+
+  assert.doesNotMatch(source, /Set-ScheduledTask\s+-InputObject[^\r\n]*-Action/u);
+  assert.equal(
+    source.match(/Set-ScheduledTask\s+-InputObject\s+\$task\s+-ErrorAction\s+Stop/g)?.length,
+    2,
+  );
+  assert.match(source, /\$task\.Actions\s*=\s*@\(\$newAction\)/u);
+  assert.match(source, /\$task\.Actions\s*=\s*@\(\$legacyAction\)/u);
 });
 
 test('production migration rejects unsafe preflight states before task or process control', () => {

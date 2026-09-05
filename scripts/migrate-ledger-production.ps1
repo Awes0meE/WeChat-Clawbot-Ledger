@@ -309,7 +309,8 @@ try {
     $explicitArguments = Get-LedgerExplicitServiceArguments -ConfigPath $configPath
     $newAction = New-ScheduledTaskAction -Execute $executablePath -Argument $explicitArguments -WorkingDirectory $install
     $taskChangeAttempted = $true
-    $task = Set-ScheduledTask -InputObject $task -Action $newAction -ErrorAction Stop
+    $task.Actions = @($newAction)
+    $task = Set-ScheduledTask -InputObject $task -ErrorAction Stop
     $task = Get-LedgerExpectedTask -TaskName $TaskName -InstallDirectory $install -ExpectedExecutable $executablePath -ConfigPath $configPath -Mode Explicit
     Start-ScheduledTask -InputObject $task -ErrorAction Stop
     $taskStarted = $true
@@ -383,7 +384,8 @@ try {
             }
             if (-not $taskAlreadyLegacy) {
                 $legacyAction = New-ScheduledTaskAction -Execute $executablePath -Argument 'server run' -WorkingDirectory $install
-                $task = Set-ScheduledTask -InputObject $task -Action $legacyAction -ErrorAction Stop
+                $task.Actions = @($legacyAction)
+                $task = Set-ScheduledTask -InputObject $task -ErrorAction Stop
                 $task = Get-LedgerExpectedTask -TaskName $TaskName -InstallDirectory $install -ExpectedExecutable $executablePath -ConfigPath $configPath -Mode Legacy
             }
         }
