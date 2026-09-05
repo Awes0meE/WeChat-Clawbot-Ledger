@@ -83,6 +83,7 @@ test('declares the owner-only expense summary tool in the plugin manifest', () =
     'prepare_expense',
     'resolve_expense_confirmation',
     'summarize_expenses',
+    'find_expenses',
   ]);
   assert.deepEqual(manifest.toolMetadata.summarize_expenses, { profiles: ['minimal'] });
   assert.deepEqual(manifest.configSchema.properties.requestTimeoutMs, {

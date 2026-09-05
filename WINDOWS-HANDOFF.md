@@ -1,6 +1,26 @@
 # Windows 运行与交接：微信账本助理
 
-更新于 2026-09-05，时区 `Asia/Singapore`。这是 Windows 接手、恢复和验收的第一入口。仓库描述发布契约；任何“正在运行”结论都必须在当前主机重新探测，并以 `docs/ledger-cloudflare-runbook.md` 的完整矩阵闭环。
+更新于 2026-09-06，时区 `Asia/Singapore`。这是 Windows 接手、恢复和验收的第一入口。仓库描述发布契约；任何“正在运行”结论都必须在当前主机重新探测，并以 `docs/ledger-cloudflare-runbook.md` 的完整矩阵闭环。
+
+## 2026-09-06 续接点：金额查询已发布，微信只读验收通过
+
+分支 `feat/amount-transaction-search` 从已同步的 `e3af81b` 创建。开发前，原在线 `summarize_expenses` 只支持时间、分类与备注筛选，没有金额参数；当时只读核验确认生产为 `0e7c2d7`，MCP 未启用、独立 MCP token 不存在，在线工具 allowlist 未含 `find_expenses`。这证明当时的能力缺口；其后的实际发布与查询验收见本节下文。
+
+新工具 `find_expenses` 仅查固定的可见 SGD 日常支出账户：金额为十进制字符串，精确到整数分；默认全部历史，可指定今天、本周、本月、上月、今年或自定义日期，默认 3 笔、上限 10 笔。HTTP `transactions/list.json` 请求 `type=3`、精确 `account_ids`、`amount_filter=eq:<minor>`、`count=limit+1`、`page=1`，不请求总数，不遍历后续页。全部历史显式 `max_time=0`；日期边界使用新加坡时间转换后的交易序列 `min_time=startTime*1000`、`max_time=endTime*1000+999`，不能把秒直接传给这两个参数。契约依据 [查询模型](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/models/transaction.go#L400-L432) 与 [时间序列转换](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/utils/datetimes.go#L392-L403)。
+
+返回条目须逐笔验证类型、账户、精确金额、日期范围和唯一 ID，并按时间序列从新到旧展示；只输出必要日期、金额、分类和备注，不输出原始对象或业务 ID。有后续游标或多取到一条时明确仍有更多；失败及不完整分页不得显示“没有记录”。所有测试使用 fake fetch 和临时合成数据，没有查询或写入生产交易，也未读取 `testAccountInfo.txt`。
+
+微信查询在有当前绑定或可信执行上下文时领取持久消息关联，并在工具执行时保存成功或固定失败回执，供独立发送实例恢复；不依赖同实例的 `after_tool_call`，也不复用旧查询缓存。发布器固定清单已包含新模块；校验器在校验全部文件哈希后，仅对声明 `find_expenses` 的插件要求该模块，保留旧发布包作为回滚目标的兼容性。
+
+分支实现完成 TDD 与独立代码审查；新增金额查询相关测试 91/91，整套 bookkeeping 回归 625/625 通过（失败、跳过、取消均 0）。发布脚本独立回归 55/55 通过，两个修改的脚本均通过 PS 5.1 解析。这些是合成验证，不代替新工具发布后的真实微信只读验收。
+
+用户随后明确批准上线。当前生产 release 为 `1d487943433869d0422f1bf4446fd046717c3647`，发布包 38,396 个文件的哈希与 ACL 校验通过。既有 publisher 完成 release 切换；受限备份与官方 config patch 仅向 `tools.allow` 末尾追加 `find_expenses`，预演、配置完整比对及 Gateway 重启后检查通过。模型、所有者白名单和其他配置保持原合同；临时 patch 已清理，备份留在仓库及 OneDrive 外。
+
+新 release 的严格本机验收 14/14、带 API token 的公网检查及作品集基线比较通过；Gateway/channel/plugin/Codex/model 通过，当前 Gateway 启动实际注册一个 managed session-memory hook，文件哈希与仓库一致，没有 loader 失败。新包与旧 `0e7c2d7` 均通过完整 verifier，旧包保留。MCP 保持关闭；未改变 Tunnel、DNS 或规则。
+
+用户微信只发送一次“帮我查一下账本里有没有3.36的账”，确认只有一条正常回复、显示 1 笔 3.36 SGD。已发布 adapter 的只读查询返回相同匹配数量，查询前后账户、分类、交易三个规范化哈希及 formatter 摘要均未变；本次没有写入或清理测试交易。详细证据范围见 [金额查询发布交接](docs/handoffs/2026-09-06-amount-search-release.md)。此前同 message ID 的真实平台重放缺口继续保留，`deploymentComplete=false`。
+
+回滚金额功能时必须恢复合适的完整受限配置备份，或用同样严格的配置 patch 移除 `find_expenses`；随后核对路径，并通过 publisher 切换旧 release 和复验。权限 patch 前的备份制作于新包切换之后，单独恢复它只回退权限，不能回退代码。仅切旧 release 路径则会保留新工具的 allowlist 项。Git 文档更新或合并不自动改变上述生产 release。
 
 ## 2026-09-05 续接点：旧回执双消息验收通过，平台重放仍待验证
 
@@ -24,7 +44,7 @@
 - 项目目前没有真实平台同 message ID 重放入口，该项仍需独立真实证据；重复发送同正文、插件合成测试、单条 created 去重状态均不能代替。回复条数来自用户现场观察，不能把已删除的待回复状态当作发送次数证据。MCP 仍关闭，不是本轮默认启用步骤。
 - 根目录可能存在被 Git 忽略的 `testAccountInfo.txt`。不得读取到终端输出、模型上下文或 Git；它只可由不回显的本机流程用于 `18888` 测试登录，不能代替正式网页登录凭据。
 
-PR #5 已合并至 `main` 的 `5c128bb`；生产仍为 `0e7c2d7f1f0369552d17d054e2ef24b75be7a482`，本次验收文档更新无须重新部署。PR 合并与清理完成以联网核对本地 `main`、upstream、远端 `main` 一致，目标提交均在其历史中且工作区干净为准。新会话先按本次修复交接只读核验 active release、hook 注册和服务状态；双新消息验收与已知测试交易清理已完成，但不能称原始发消息前三哈希恢复。真实平台同一 message ID 重放仍未验证，`deploymentComplete=false`。
+PR #5 当时已合并至 `main` 的 `5c128bb`，当时生产为 `0e7c2d7f1f0369552d17d054e2ef24b75be7a482`，该次验收文档更新无须重新部署；当前生产版本见顶部金额查询续接点。PR 合并与清理完成以联网核对本地 `main`、upstream、远端 `main` 一致，目标提交均在其历史中且工作区干净为准。新会话先按本次修复交接只读核验 active release、hook 注册和服务状态；双新消息验收与已知测试交易清理已完成，但不能称原始发消息前三哈希恢复。真实平台同一 message ID 重放仍未验证，`deploymentComplete=false`。
 
 ## 不变边界
 
@@ -42,7 +62,7 @@ PR #5 已合并至 `main` 的 `5c128bb`；生产仍为 `0e7c2d7f1f0369552d17d054
 WeChat -> OpenClaw immutable release -> owner-bound OpenAI GPT-5.6 Sol (official Codex harness)
   -> record_expense | prepare_expense | resolve_expense_confirmation
      -> trusted write/confirmation adapter -> 127.0.0.1:8888 ezBookkeeping HTTP API
-  -> summarize_expenses -> deterministic read adapter -> ezBookkeeping HTTP API
+  -> summarize_expenses | find_expenses -> deterministic read adapter -> ezBookkeeping HTTP API
   -> ezbookkeeping__query_transactions -> requester-scoped read-only MCP
      (code-ready; local MCP activation still pending)
 
@@ -73,6 +93,7 @@ prepare_expense
 resolve_expense_confirmation
 summarize_expenses
 ezbookkeeping__query_transactions
+find_expenses
 ```
 
 `bookkeeping_health` 是插件自检工具，但不进入微信专用代理的最终 allowlist，也不能冒充查询。
@@ -332,7 +353,7 @@ openclaw models auth login --provider openai --agent bookkeeper
 openclaw config set plugins.entries.codex.config.codexDynamicToolsLoading direct
 ```
 
-bookkeeper 的 allowlist 只有五个账本工具，因此这里不依赖工具搜索。Codex Code Mode 仍可在 `exec` 中调用已经直接加载的 `tools.<账本工具>`；不得查询 `ALL_TOOLS` 或搜索工具目录。包装返回字符串时原样输出完整字符串。工具返回文本是最终账本事实；模型不得自行重建回执。设置后必须重启 Gateway。
+bookkeeper 的 allowlist 有六项账本工具，其中 MCP 仍须独立启用；这里不依赖工具搜索。Codex Code Mode 仍可在 `exec` 中调用已经直接加载的 `tools.<账本工具>`；不得查询 `ALL_TOOLS` 或搜索工具目录。包装返回字符串时原样输出完整字符串。工具返回文本是最终账本事实；模型不得自行重建回执。设置后必须重启 Gateway。
 
 默认安装目录是 `D:\Clawbot\ezbookkeeping`，实际配置文件位于嵌套目录 `D:\Clawbot\ezbookkeeping\conf\ezbookkeeping.ini`。
 

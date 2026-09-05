@@ -9,7 +9,8 @@
       "record_expense",
       "prepare_expense",
       "resolve_expense_confirmation",
-      "summarize_expenses"
+      "summarize_expenses",
+      "find_expenses"
     ]
   },
   "activation": {
@@ -38,6 +39,9 @@
       "profiles": ["minimal"]
     },
     "summarize_expenses": {
+      "profiles": ["minimal"]
+    },
+    "find_expenses": {
       "profiles": ["minimal"]
     }
   },
