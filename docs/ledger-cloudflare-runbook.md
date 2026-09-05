@@ -321,7 +321,7 @@ proxied CNAME 在公网 DNS 中会 flatten，因此不用公网 `resolveCname(le
 
 - Cloudflare API readback 证明 DNS 指向专用 Tunnel；HTTP 到 HTTPS 恰为 `301` 且保留 path/query；TLS 有效；
 - HTTPS 直接出现 ezBookkeeping 登录应用，没有 Cloudflare Access 页面；
-- `POST /api/register.json` 和 `TRACE` 被 Cloudflare 阻止；
+- `POST /api/register.json` 返回 Cloudflare `403`，`TRACE` 返回 Cloudflare WAF `403` 或边缘方法拒绝 `405`；两者都不得到达 origin；
 - HTML、JSON、API 和认证响应均没有 `HIT/STALE/REVALIDATED/UPDATING`；安全头与 host-only HSTS 正确；
 - 公网 API token 与 MCP token 均被拒绝，本机相同能力仍可用；
 - `8888` 从 LAN/公网不可直连。

@@ -233,6 +233,12 @@ test('public acceptance has an explicit pre-HSTS gate that requires HSTS to be a
   assert.match(helper, /!preHstsValidation[\s\S]*hstsMatch/u);
 });
 
+test('public acceptance accepts Cloudflare method rejection as a blocked TRACE request', () => {
+  const helper = readRequired(publicHelperPath);
+
+  assert.match(helper, /\[403,\s*405\]\.includes\(trace\.statusCode\)/u);
+});
+
 test('public acceptance rejects unsafe arguments before any network or credential output', () => {
   const result = runPowerShell([
     '-File',

@@ -359,7 +359,7 @@ async function assertLedgerSurface(timeoutMs, preHstsValidation) {
   if (registration.statusCode !== 403) fail('LEDGER_PUBLIC_REGISTRATION_NOT_BLOCKED');
   assertNotCached(registration);
   const trace = await request({ method: 'TRACE', url: `https://${LEDGER_HOST}/` }, timeoutMs);
-  if (trace.statusCode !== 403) fail('LEDGER_PUBLIC_TRACE_NOT_BLOCKED');
+  if (![403, 405].includes(trace.statusCode)) fail('LEDGER_PUBLIC_TRACE_NOT_BLOCKED');
   assertNotCached(trace);
 }
 
