@@ -241,10 +241,10 @@ function Get-ExpectedCloudflaredChild {
             throw 'An unknown cloudflared process is present; restart acceptance refused to adopt or terminate it.'
         }
         $validCommands = @(
-            '"' + $expectedExecutable + '" tunnel --config "' + $expectedConfig + '" run',
-            $expectedExecutable + ' tunnel --config "' + $expectedConfig + '" run',
-            '"' + $expectedExecutable + '" tunnel --config ' + $expectedConfig + ' run',
-            $expectedExecutable + ' tunnel --config ' + $expectedConfig + ' run'
+            ('"' + $expectedExecutable + '" tunnel --config "' + $expectedConfig + '" run')
+            ($expectedExecutable + ' tunnel --config "' + $expectedConfig + '" run')
+            ('"' + $expectedExecutable + '" tunnel --config ' + $expectedConfig + ' run')
+            ($expectedExecutable + ' tunnel --config ' + $expectedConfig + ' run')
         )
         if (-not ($validCommands -contains [string]$process.CommandLine)) {
             throw 'A cloudflared process has an unrecognized command line; restart acceptance refused it.'
