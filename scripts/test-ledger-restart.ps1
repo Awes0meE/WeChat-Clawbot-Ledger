@@ -119,20 +119,20 @@ function Get-ExpectedTunnelTaskArguments {
     $supervisor = Join-Path $Runtime 'ledger-tunnel-supervisor.ps1'
     $common = Join-Path $Runtime 'ledger-runtime-common.ps1'
     return @(
-        '-NoLogo',
-        '-NoProfile',
-        '-NonInteractive',
-        '-WindowStyle Hidden',
-        '-ExecutionPolicy Bypass',
-        '-File ' + (ConvertTo-RestartTaskQuotedArgument -Value $supervisor),
-        '-CommonScriptPath ' + (ConvertTo-RestartTaskQuotedArgument -Value $common),
-        '-RuntimeDirectory ' + (ConvertTo-RestartTaskQuotedArgument -Value $Runtime),
-        '-CloudflaredPath ' + (ConvertTo-RestartTaskQuotedArgument -Value $Cloudflared),
-        '-ExpectedCloudflaredSha256 ' + $CloudflaredSha256.ToUpperInvariant(),
-        '-TunnelConfigPath ' + (ConvertTo-RestartTaskQuotedArgument -Value $TunnelConfig),
-        '-EzBookkeepingExecutable ' + (ConvertTo-RestartTaskQuotedArgument -Value $EzBookkeeping),
-        '-EzBookkeepingConfigPath ' + (ConvertTo-RestartTaskQuotedArgument -Value $EzBookkeepingConfig),
-        '-LogPath ' + (ConvertTo-RestartTaskQuotedArgument -Value $SupervisorLog)
+        '-NoLogo'
+        '-NoProfile'
+        '-NonInteractive'
+        '-WindowStyle Hidden'
+        '-ExecutionPolicy Bypass'
+        ('-File ' + (ConvertTo-RestartTaskQuotedArgument -Value $supervisor))
+        ('-CommonScriptPath ' + (ConvertTo-RestartTaskQuotedArgument -Value $common))
+        ('-RuntimeDirectory ' + (ConvertTo-RestartTaskQuotedArgument -Value $Runtime))
+        ('-CloudflaredPath ' + (ConvertTo-RestartTaskQuotedArgument -Value $Cloudflared))
+        ('-ExpectedCloudflaredSha256 ' + $CloudflaredSha256.ToUpperInvariant())
+        ('-TunnelConfigPath ' + (ConvertTo-RestartTaskQuotedArgument -Value $TunnelConfig))
+        ('-EzBookkeepingExecutable ' + (ConvertTo-RestartTaskQuotedArgument -Value $EzBookkeeping))
+        ('-EzBookkeepingConfigPath ' + (ConvertTo-RestartTaskQuotedArgument -Value $EzBookkeepingConfig))
+        ('-LogPath ' + (ConvertTo-RestartTaskQuotedArgument -Value $SupervisorLog))
     ) -join ' '
 }
 
