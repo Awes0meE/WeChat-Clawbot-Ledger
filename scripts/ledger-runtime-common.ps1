@@ -574,11 +574,39 @@ function Assert-LedgerNoStaticMcpCredential {
     } catch {
         throw 'The OpenClaw configuration is not valid JSON.'
     }
+    if ($root -isnot [pscustomobject]) {
+        throw 'The OpenClaw configuration cannot be safely inspected for static MCP credentials.'
+    }
+
+    $mcpProperties = @($root.PSObject.Properties | Where-Object { $_.Name -ieq 'mcp' })
+    if ($mcpProperties.Count -gt 1) {
+        throw 'The OpenClaw configuration cannot be safely inspected for static MCP credentials.'
+    }
+    if ($mcpProperties.Count -eq 1) {
+        $mcp = $mcpProperties[0].Value
+        if ($null -eq $mcp -or $mcp -isnot [pscustomobject]) {
+            throw 'The OpenClaw configuration cannot be safely inspected for static MCP credentials.'
+        }
+        $serverProperties = @($mcp.PSObject.Properties | Where-Object { $_.Name -ieq 'servers' })
+        if ($serverProperties.Count -gt 1) {
+            throw 'The OpenClaw configuration cannot be safely inspected for static MCP credentials.'
+        }
+        if ($serverProperties.Count -eq 1) {
+            $servers = $serverProperties[0].Value
+            if ($null -eq $servers -or $servers -isnot [pscustomobject]) {
+                throw 'The OpenClaw configuration cannot be safely inspected for static MCP credentials.'
+            }
+            if (@($servers.PSObject.Properties | Where-Object { $_.Name -ieq 'ezbookkeeping' }).Count -gt 0) {
+                throw 'The OpenClaw configuration contains a static MCP credential fallback.'
+            }
+        }
+    }
+
     $pending = New-Object System.Collections.Stack
     $pending.Push($root)
     while ($pending.Count -gt 0) {
         $value = $pending.Pop()
-        if ($null -eq $value -or $value -is [string] -or $value.GetType().IsPrimitive) { continue }
+        if ($null -eq $value -or $value -is [string] -or $value -is [ValueType]) { continue }
         if ($value -is [System.Collections.IEnumerable] -and $value -isnot [pscustomobject]) {
             foreach ($item in $value) { $pending.Push($item) }
             continue

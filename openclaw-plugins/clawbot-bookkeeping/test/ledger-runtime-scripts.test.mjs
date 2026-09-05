@@ -116,6 +116,60 @@ test('listener queries treat the Windows no-match CIM error as an empty result o
   assert.match(transportFailure.stdout, /OTHER_ERROR_PROPAGATED/u);
 });
 
+test('static MCP credential scan terminates on PowerShell JSON timestamp values', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'clawbot-ledger-openclaw-config-'));
+  try {
+    const configPath = join(directory, 'openclaw.json');
+    writeFileSync(configPath, JSON.stringify({
+      meta: { lastTouchedAt: '2026-09-04T02:33:33.542Z' },
+      tools: { mcp: { enabled: false } },
+    }), 'utf8');
+    const commonPath = join(scriptsDirectory, 'ledger-runtime-common.ps1').replaceAll("'", "''");
+    const escapedConfigPath = configPath.replaceAll("'", "''");
+    const result = run('pwsh.exe', [
+      '-NoLogo',
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `. '${commonPath}'; Assert-LedgerNoStaticMcpCredential -OpenClawConfigPath '${escapedConfigPath}'; 'STATIC_MCP_SCAN_OK'`,
+    ], { timeout: 5_000 });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.match(result.stdout, /STATIC_MCP_SCAN_OK/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('static MCP credential scan rejects an ezbookkeeping server without disclosing its fields', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'clawbot-ledger-static-mcp-'));
+  const secretSentinel = 'static-secret-must-never-be-printed';
+  try {
+    const configPath = join(directory, 'openclaw.json');
+    writeFileSync(configPath, JSON.stringify({
+      mcp: {
+        servers: {
+          EzBookkeeping: {
+            url: 'http://127.0.0.1:8888/mcp',
+            headers: { 'X-Api-Key': secretSentinel },
+            env: { CUSTOM_TOKEN: secretSentinel },
+          },
+        },
+      },
+    }), 'utf8');
+    const commonPath = join(scriptsDirectory, 'ledger-runtime-common.ps1').replaceAll("'", "''");
+    const escapedConfigPath = configPath.replaceAll("'", "''");
+    const result = runPowerShell([
+      '-Command',
+      `. '${commonPath}'; Assert-LedgerNoStaticMcpCredential -OpenClawConfigPath '${escapedConfigPath}'`,
+    ]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /static MCP credential fallback/u);
+    assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, new RegExp(secretSentinel, 'u'));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 function sha256(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
