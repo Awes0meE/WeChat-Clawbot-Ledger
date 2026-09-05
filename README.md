@@ -38,7 +38,11 @@ Ledger 网页已通过正式登录、一次性记录的新增/修改/删除、�
 
 随后两次新微信消息重复收到上一笔回执，已确认旧生产 release `1cf2f739ca92898feed5f24372e9a407ced34b0a` 未包含 `93543ab` 的新可信消息优先修复。`c5e2e25` 进一步阻止多候选和确认决定不匹配时回退旧成功回执；回复回归 516/516 通过。**生产现已切换到 `0e7c2d7f1f0369552d17d054e2ef24b75be7a482`**，发布校验、切换脚本及 Gateway/channel/plugin/Codex/model 检查通过，旧 release 完整回滚校验也已通过。
 
-managed `session-memory` 保护已安装并确认运行注册，只跳过 `bookkeeper`，其余代理保持官方行为；旧 workspace 的四个 memory 文件已按哈希保全迁出。修正仓库 PowerShell 换行约定后，切换后的严格本机验收 14/14 通过、退出码 0；未修改已部署 Tunnel 脚本或放宽校验。当前步骤见 [微信旧回执修复交接](docs/handoffs/2026-09-05-wechat-stale-reply-repair.md)：现有会话中的两条全新微信消息验收仍待用户回应，修复部署不改账或补账。平台同一 message ID 的真实重放仍无触发入口，不能报告全部上线验收完成。
+managed `session-memory` 保护已安装并确认运行注册，只跳过 `bookkeeper`，其余代理保持官方行为；旧 workspace 的四个 memory 文件已按哈希保全迁出。修正仓库 PowerShell 换行约定后，切换后的严格本机验收 14/14 通过、退出码 0；未修改已部署 Tunnel 脚本或放宽校验。
+
+双消息微信现场验收已通过：在同一既有会话、不 reset 的条件下，两条全新可信消息分别记录 0.01、0.02 SGD，各自对应唯一成功收据和 API 交易，message key、clientSessionId 与交易 ID 均独立。用户确认第一条正确、第二条没有重复第一条。两个已知测试交易已精确删除，两次删除均严格返回 `success=true`、`result=true`，随后两 ID 与标记均消失、交易数减少 2；历史业务消息未回放或补账。
+
+本次清理以删除前快照为比较基准：非目标交易与分类完全未变，目标独立账户余额仅增加 3 minor（0.03 SGD），完整预期账户状态吻合。原始发消息前三哈希基线因测试标记实际大小写差异，未能由旧进程完成比较，**不能称已恢复原三哈希基线**。新核验仅对 ASCII 标记做精确不分大小写定位，随后严格核对实际原文、金额、ID 和完整目标内容哈希，未修改测试正文。详情见 [微信旧回执修复交接](docs/handoffs/2026-09-05-wechat-stale-reply-repair.md)。PR #5 已合入 `main` 的 `5c128bb`；本次文档更新无须重新部署，生产仍为上述 release。平台同一 message ID 的真实重放仍未验证，`deploymentComplete=false`，不能报告全部上线验收完成。
 
 ## 助理行为
 
