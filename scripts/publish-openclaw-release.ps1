@@ -618,32 +618,32 @@ function Assert-ReleaseModules {
     $bookkeepingPath = Join-Path $ReleasePath 'openclaw-plugins\clawbot-bookkeeping'
     $stablePath = Join-Path $ReleasePath 'openclaw-plugins\openclaw-weixin-stable-id'
     $bookkeepingValidation = @'
-import { createRequire } from "node:module";
-import { existsSync } from "node:fs";
-import { join, relative } from "node:path";
+import { createRequire } from 'node:module';
+import { existsSync } from 'node:fs';
+import { join, relative } from 'node:path';
 const root = process.argv.at(-1);
-const requireFromRelease = createRequire(join(root, "package.json"));
-const typeboxRoot = join(root, "node_modules", "typebox");
-const typeboxPath = requireFromRelease.resolve("typebox");
+const requireFromRelease = createRequire(join(root, 'package.json'));
+const typeboxRoot = join(root, 'node_modules', 'typebox');
+const typeboxPath = requireFromRelease.resolve('typebox');
 const typeboxRelative = relative(typeboxRoot, typeboxPath);
-if (typeboxRelative.startsWith("..") || typeboxRelative === "") throw new Error("typebox did not resolve from the release");
-if (existsSync(join(root, "node_modules", "openclaw"))) throw new Error("bookkeeping peer is bundled in the release");
+if (typeboxRelative.startsWith('..') || typeboxRelative === '') throw new Error('typebox did not resolve from the release');
+if (existsSync(join(root, 'node_modules', 'openclaw'))) throw new Error('bookkeeping peer is bundled in the release');
 '@
     $null = Invoke-ExternalCommand -Executable $NodeExecutable -Arguments @('--input-type=module', '-e', $bookkeepingValidation, $bookkeepingPath) -FailureMessage 'The bookkeeping release module-resolution validation failed.'
 
     $stableValidation = @'
-import { createRequire } from "node:module";
-import { join, relative } from "node:path";
-import { pathToFileURL } from "node:url";
+import { createRequire } from 'node:module';
+import { join, relative } from 'node:path';
+import { pathToFileURL } from 'node:url';
 const root = process.argv.at(-1);
-const requireFromRelease = createRequire(join(root, "package.json"));
-for (const [specifier, packageName] of [["zod", "zod"], ["qrcode-terminal", "qrcode-terminal"], ["openclaw/plugin-sdk/channel-config-schema", "openclaw"]]) {
-  const packageRoot = join(root, "node_modules", packageName);
+const requireFromRelease = createRequire(join(root, 'package.json'));
+for (const [specifier, packageName] of [['zod', 'zod'], ['qrcode-terminal', 'qrcode-terminal'], ['openclaw/plugin-sdk/channel-config-schema', 'openclaw']]) {
+  const packageRoot = join(root, 'node_modules', packageName);
   const resolvedPath = requireFromRelease.resolve(specifier);
   const resolvedRelative = relative(packageRoot, resolvedPath);
-  if (resolvedRelative.startsWith("..") || resolvedRelative === "") throw new Error(`${specifier} did not resolve from the release`);
+  if (resolvedRelative.startsWith('..') || resolvedRelative === '') throw new Error(specifier + ' did not resolve from the release');
 }
-await import(pathToFileURL(join(root, "dist", "index.js")).href);
+await import(pathToFileURL(join(root, 'dist', 'index.js')).href);
 '@
     $null = Invoke-ExternalCommand -Executable $NodeExecutable -Arguments @('--input-type=module', '-e', $stableValidation, $stablePath) -FailureMessage 'The stable-ID release module-resolution validation failed.'
 }

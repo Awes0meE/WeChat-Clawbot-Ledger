@@ -178,6 +178,9 @@ if ($joined -eq 'ci --omit=dev --ignore-scripts') {
     [IO.File]::WriteAllText((Join-Path $modules "$dependency\package.json"), ('{"name":"' + $dependency + '"}'), (New-Object Text.UTF8Encoding($false)))
     [IO.File]::WriteAllText((Join-Path $modules "$dependency\index.js"), 'export default {};', (New-Object Text.UTF8Encoding($false)))
   }
+  $openClawSdk = Join-Path $modules 'openclaw\plugin-sdk'
+  New-Item -ItemType Directory -Path $openClawSdk -Force | Out-Null
+  [IO.File]::WriteAllText((Join-Path $openClawSdk 'channel-config-schema.js'), 'export default {};', (New-Object Text.UTF8Encoding($false)))
   [IO.File]::WriteAllText((Join-Path $modules '.package-lock.json'), '{"lockfileVersion":3}', (New-Object Text.UTF8Encoding($false)))
   if ($env:CLAWBOT_TEST_STAGING_JUNCTION_TARGET) {
     $stagingRoot = Split-Path -Parent (Split-Path -Parent (Get-Location))
@@ -398,10 +401,11 @@ function createFixture() {
   ]) {
     write(join(bookkeeping, name), `bookkeeping:${name}`);
   }
+  write(join(bookkeeping, 'package.json'), '{"name":"bookkeeping-fixture","type":"module"}');
   write(join(bookkeeping, 'test', 'ignored.test.mjs'), 'must not ship');
   write(join(bookkeeping, 'node_modules', 'ignored', 'index.js'), 'must not ship');
 
-  write(join(stable, 'package.json'), '{"name":"stable-fixture"}');
+  write(join(stable, 'package.json'), '{"name":"stable-fixture","type":"module"}');
   write(join(stable, 'package-lock.json'), '{"lockfileVersion":3}');
   write(join(stable, 'openclaw.plugin.json'), '{"id":"openclaw-weixin"}');
   write(join(stable, 'dist', 'index.js'), 'export default {};');
@@ -565,6 +569,7 @@ test('publishes an immutable hash manifest from the explicit release allowlist',
       'openclaw-plugins/openclaw-weixin-stable-id/node_modules/.package-lock.json',
       'openclaw-plugins/openclaw-weixin-stable-id/node_modules/openclaw/index.js',
       'openclaw-plugins/openclaw-weixin-stable-id/node_modules/openclaw/package.json',
+      'openclaw-plugins/openclaw-weixin-stable-id/node_modules/openclaw/plugin-sdk/channel-config-schema.js',
       'openclaw-plugins/openclaw-weixin-stable-id/node_modules/qrcode-terminal/index.js',
       'openclaw-plugins/openclaw-weixin-stable-id/node_modules/qrcode-terminal/package.json',
       'openclaw-plugins/openclaw-weixin-stable-id/node_modules/zod/index.js',
@@ -1001,6 +1006,22 @@ test('revalidates isolated release module resolution before any OpenClaw command
     );
     assertFailed(result, /module|resolution|release|invalid/iu);
     assert.deepEqual(normalizedOpenClawTrace(fixture), []);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('validates release modules with real Node under Windows PowerShell 5.1', () => {
+  const fixture = createFixture();
+  try {
+    const realNodeFixture = { ...fixture, nodeShim: 'node' };
+    const result = runNativeWindowsPowerShell(
+      publishScript,
+      publishArguments(realNodeFixture, ['-ReleaseOnly']),
+      fixture.env,
+    );
+    assertSucceeded(result);
+    assert.equal(existsSync(fixture.releasePath), true);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
