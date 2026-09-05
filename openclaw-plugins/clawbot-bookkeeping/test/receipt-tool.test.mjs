@@ -1766,6 +1766,131 @@ test('prefers a fresh durable inbound over a cached result from an earlier run',
   }
 });
 
+test('records a fresh durable expense instead of replaying an earlier successful receipt', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const fetchImpl = successfulExpenseFetch(requests);
+  const hookHarness = createPluginHarness(tempDirectory, fetchImpl);
+  let toolHarness;
+
+  try {
+    toolHarness = createPluginHarness(tempDirectory, fetchImpl);
+    const cachedTool = toolHarness.rawRecordExpenseFactory(trustedOwnerContext());
+
+    await beginTrustedOwnerTurn(hookHarness.inboundHooks, {
+      content: '午饭7.2',
+      messageId: 'cached-success-first-message',
+      runId: 'cached-success-first-run',
+    });
+    await bindToolCallForTurn(hookHarness.inboundHooks, {
+      runId: 'cached-success-first-run',
+      toolCallId: 'cached-success-first-hook',
+      params: receivedExpenseParams({ amount: '7.2' }),
+    });
+    const first = await cachedTool.execute(
+      'cached-success-first-execute',
+      receivedExpenseParams({ amount: '7.2' }),
+    );
+
+    await beginTrustedOwnerTurn(hookHarness.inboundHooks, {
+      content: '晚饭9.5',
+      messageId: 'cached-success-second-message',
+      runId: 'cached-success-second-run',
+    });
+    await bindToolCallForTurn(hookHarness.inboundHooks, {
+      runId: 'cached-success-second-run',
+      toolCallId: 'cached-success-second-hook',
+      params: receivedExpenseParams({ amount: '9.5' }),
+    });
+    const second = await cachedTool.execute(
+      'cached-success-second-execute',
+      receivedExpenseParams({ amount: '9.5' }),
+    );
+
+    assert.equal(first.details.status, 'created');
+    assert.equal(second.details.status, 'created');
+    assert.equal(first.details.amountMinor, 720);
+    assert.equal(second.details.amountMinor, 950);
+    assert.notEqual(second.content[0].text, first.content[0].text);
+    assert.match(second.content[0].text, /9\.50/u);
+    const posted = requests
+      .filter(({ url }) => url.endsWith('/transactions/add.json'))
+      .map(({ options }) => JSON.parse(options.body));
+    assert.deepEqual(posted.map(({ sourceAmount }) => sourceAmount), [720, 950]);
+  } finally {
+    toolHarness?.restore();
+    hookHarness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('rejects ambiguous fresh durable expenses instead of replaying a cached successful receipt', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const fetchImpl = successfulExpenseFetch(requests);
+  const hookHarness = createPluginHarness(tempDirectory, fetchImpl);
+  let toolHarness;
+
+  try {
+    toolHarness = createPluginHarness(tempDirectory, fetchImpl);
+    const cachedTool = toolHarness.rawRecordExpenseFactory(trustedOwnerContext());
+
+    await beginTrustedOwnerTurn(hookHarness.inboundHooks, {
+      content: '午饭7.2',
+      messageId: 'ambiguous-cache-first-message',
+      runId: 'ambiguous-cache-first-run',
+    });
+    await bindToolCallForTurn(hookHarness.inboundHooks, {
+      runId: 'ambiguous-cache-first-run',
+      toolCallId: 'ambiguous-cache-first-hook',
+      params: receivedExpenseParams({ amount: '7.2' }),
+    });
+    const first = await cachedTool.execute(
+      'ambiguous-cache-first-execute',
+      receivedExpenseParams({ amount: '7.2' }),
+    );
+    assert.equal(first.details.status, 'created');
+
+    for (const [label, content, amount] of [
+      ['second', '晚饭9.5', '9.5'],
+      ['third', '早餐4.8', '4.8'],
+    ]) {
+      await beginTrustedOwnerTurn(hookHarness.inboundHooks, {
+        content,
+        messageId: `ambiguous-cache-${label}-message`,
+        runId: `ambiguous-cache-${label}-run`,
+      });
+      await bindToolCallForTurn(hookHarness.inboundHooks, {
+        runId: `ambiguous-cache-${label}-run`,
+        toolCallId: `ambiguous-cache-${label}-hook`,
+        params: receivedExpenseParams({ amount }),
+      });
+    }
+
+    let rejected = false;
+    try {
+      await cachedTool.execute(
+        'ambiguous-cache-second-execute',
+        receivedExpenseParams({ amount: '9.5' }),
+      );
+    } catch (error) {
+      assert.match(error.message, /可信元数据/u);
+      rejected = true;
+    }
+    const posted = requests
+      .filter(({ url }) => url.endsWith('/transactions/add.json'))
+      .map(({ options }) => JSON.parse(options.body));
+    assert.deepEqual(posted.map(({ sourceAmount }) => sourceAmount), [720]);
+    assert.equal(rejected, true, 'ambiguous durable expenses must reject rather than replay a cached receipt');
+  } finally {
+    toolHarness?.restore();
+    hookHarness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
 test('discards an uncorrelated query turn and fails closed without run metadata', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
@@ -2355,6 +2480,93 @@ test('resolves a cancellation after transient hook state is lost across plugin i
   } finally {
     secondHarness?.restore();
     firstHarness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('rejects a mismatched fresh durable cancellation instead of replaying a cached confirmation receipt', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const fetchImpl = successfulExpenseFetch(requests);
+  const hookHarness = createPluginHarness(tempDirectory, fetchImpl);
+  let toolHarness;
+
+  try {
+    await receiveTrustedOwnerMessage(hookHarness.inboundHooks, {
+      content: '午饭7.2吗',
+      messageId: 'cached-confirmation-first-proposal',
+    });
+    await hookHarness.prepareExpenseFactory(trustedOwnerContext()).execute(
+      'cached-confirmation-first-prepare',
+      receivedExpenseParams({ amount: '7.2' }),
+    );
+    toolHarness = createPluginHarness(tempDirectory, fetchImpl);
+    const cachedResolver = toolHarness.rawResolveExpenseConfirmationFactory(trustedOwnerContext());
+
+    await beginTrustedOwnerTurn(hookHarness.inboundHooks, {
+      content: '是',
+      messageId: 'cached-confirmation-first-answer',
+      runId: 'cached-confirmation-first-run',
+    });
+    await bindToolCallForTurn(hookHarness.inboundHooks, {
+      runId: 'cached-confirmation-first-run',
+      toolCallId: 'cached-confirmation-first-hook',
+      toolName: 'resolve_expense_confirmation',
+      params: { decision: 'confirm' },
+    });
+    const first = await cachedResolver.execute(
+      'cached-confirmation-first-execute',
+      { decision: 'confirm' },
+    );
+    assert.equal(first.details.status, 'created');
+
+    await receiveTrustedOwnerMessage(hookHarness.inboundHooks, {
+      content: '晚饭9.5吗',
+      messageId: 'cached-confirmation-second-proposal',
+    });
+    const prepared = await hookHarness.prepareExpenseFactory(trustedOwnerContext()).execute(
+      'cached-confirmation-second-prepare',
+      receivedExpenseParams({ amount: '9.5' }),
+    );
+    assert.equal(prepared.details.status, 'pending_confirmation');
+    await beginTrustedOwnerTurn(hookHarness.inboundHooks, {
+      content: '不是',
+      messageId: 'cached-confirmation-cancel-answer',
+      runId: 'cached-confirmation-cancel-run',
+    });
+    await bindToolCallForTurn(hookHarness.inboundHooks, {
+      runId: 'cached-confirmation-cancel-run',
+      toolCallId: 'cached-confirmation-cancel-hook',
+      toolName: 'resolve_expense_confirmation',
+      params: { decision: 'cancel' },
+    });
+
+    let rejected = false;
+    try {
+      await cachedResolver.execute(
+        'cached-confirmation-mismatched-execute',
+        { decision: 'confirm' },
+      );
+    } catch (error) {
+      assert.match(error.message, /可信元数据/u);
+      rejected = true;
+    }
+    const postedAmounts = () => requests
+      .filter(({ url }) => url.endsWith('/transactions/add.json'))
+      .map(({ options }) => JSON.parse(options.body).sourceAmount);
+    assert.deepEqual(postedAmounts(), [720]);
+    assert.equal(rejected, true, 'a fresh durable cancellation must reject a mismatched confirmation');
+
+    const cancelled = await cachedResolver.execute(
+      'cached-confirmation-corrected-cancel-execute',
+      { decision: 'cancel' },
+    );
+    assert.equal(cancelled.details.status, 'cancelled');
+    assert.deepEqual(postedAmounts(), [720]);
+  } finally {
+    toolHarness?.restore();
+    hookHarness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
   }
 });
