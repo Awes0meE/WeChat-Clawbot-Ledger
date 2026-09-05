@@ -323,6 +323,37 @@ foreach ($relativePath in $manifestByPath.Keys) {
     }
 }
 
+# Read the plugin contract only after every payload file has passed its manifest hash.
+# Older verified releases do not declare find_expenses and remain valid rollback targets.
+$bookkeepingManifestPath = $actualByPath['openclaw-plugins/clawbot-bookkeeping/openclaw.plugin.json']
+try {
+    $bookkeepingManifestText = [IO.File]::ReadAllText($bookkeepingManifestPath, $script:StrictUtf8Encoding)
+    $bookkeepingManifest = ConvertFrom-Json -InputObject $bookkeepingManifestText -ErrorAction Stop
+    if ($null -eq $bookkeepingManifest -or $bookkeepingManifest -isnot [PSCustomObject]) {
+        throw 'invalid plugin manifest'
+    }
+    $contractsProperty = $bookkeepingManifest.PSObject.Properties['contracts']
+    if ($null -eq $contractsProperty -or $contractsProperty.Value -isnot [PSCustomObject]) {
+        throw 'invalid plugin contracts'
+    }
+    $toolsProperty = $contractsProperty.Value.PSObject.Properties['tools']
+    if ($null -eq $toolsProperty -or $toolsProperty.Value -isnot [Array]) {
+        throw 'invalid plugin tool contracts'
+    }
+    $bookkeepingToolNames = $toolsProperty.Value
+    foreach ($toolName in $bookkeepingToolNames) {
+        if ($toolName -isnot [string] -or [string]::IsNullOrWhiteSpace($toolName)) {
+            throw 'invalid plugin tool name'
+        }
+    }
+} catch {
+    throw 'Release bookkeeping plugin tool contracts are invalid.'
+}
+if ($bookkeepingToolNames -ccontains 'find_expenses' -and
+    -not $actualByPath.ContainsKey('openclaw-plugins/clawbot-bookkeeping/expense-search.mjs')) {
+    throw 'Release find_expenses contract requires the amount-search module.'
+}
+
 $commitMarkerPath = Join-Path $releaseRoot 'release-commit.txt'
 if (-not [IO.File]::Exists($commitMarkerPath)) {
     throw 'Release commit marker is missing.'

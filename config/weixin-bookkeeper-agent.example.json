@@ -32,6 +32,7 @@
           "prepare_expense",
           "resolve_expense_confirmation",
           "summarize_expenses",
+          "find_expenses",
           "ezbookkeeping__query_transactions"
         ],
         "loopDetection": {

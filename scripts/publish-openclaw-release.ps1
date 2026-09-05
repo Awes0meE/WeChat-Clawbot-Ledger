@@ -283,6 +283,7 @@ function Copy-BookkeepingSource {
         'adapter.mjs',
         'bookkeeping-core.mjs',
         'categories.mjs',
+        'expense-search.mjs',
         'expense-summary.mjs',
         'index.ts',
         'mcp-connection.mjs',

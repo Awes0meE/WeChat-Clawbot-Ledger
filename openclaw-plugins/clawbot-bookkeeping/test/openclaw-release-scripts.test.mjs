@@ -392,6 +392,7 @@ function createFixture() {
     'adapter.mjs',
     'bookkeeping-core.mjs',
     'categories.mjs',
+    'expense-search.mjs',
     'expense-summary.mjs',
     'index.ts',
     'mcp-connection.mjs',
@@ -401,6 +402,10 @@ function createFixture() {
   ]) {
     write(join(bookkeeping, name), `bookkeeping:${name}`);
   }
+  write(join(bookkeeping, 'openclaw.plugin.json'), JSON.stringify({
+    id: 'clawbot-bookkeeping',
+    contracts: { tools: ['record_expense', 'summarize_expenses', 'find_expenses'] },
+  }));
   write(join(bookkeeping, 'package.json'), '{"name":"bookkeeping-fixture","type":"module"}');
   write(join(bookkeeping, 'test', 'ignored.test.mjs'), 'must not ship');
   write(join(bookkeeping, 'node_modules', 'ignored', 'index.js'), 'must not ship');
@@ -525,6 +530,30 @@ function releasePaths(releasePath) {
   };
 }
 
+function createVerifierFixture() {
+  const fixture = createFixture();
+  const destinations = releasePaths(fixture.releasePath);
+  for (const [source, destination] of [
+    [fixture.bookkeeping, destinations.bookkeeping],
+    [fixture.stable, destinations.stable],
+    [fixture.workspace, destinations.workspace],
+  ]) {
+    for (const name of readdirSync(source)) {
+      if (lstatSync(join(source, name)).isFile()) {
+        write(join(destination, name), readFileSync(join(source, name), 'utf8'));
+      }
+    }
+  }
+  cpSync(join(fixture.stable, 'dist'), join(destinations.stable, 'dist'), { recursive: true });
+  write(join(destinations.bookkeeping, 'node_modules', 'typebox', 'package.json'), '{"name":"typebox"}');
+  for (const name of ['openclaw', 'qrcode-terminal', 'zod']) {
+    write(join(destinations.stable, 'node_modules', name, 'package.json'), JSON.stringify({ name }));
+  }
+  write(join(fixture.releasePath, 'release-commit.txt'), `${fullCommit}\n`);
+  writeManifest(fixture.releasePath);
+  return fixture;
+}
+
 function normalizedOpenClawTrace(fixture) {
   if (!existsSync(fixture.tracePath)) return [];
   return readFileSync(fixture.tracePath, 'utf8')
@@ -554,6 +583,7 @@ test('publishes an immutable hash manifest from the explicit release allowlist',
       'openclaw-plugins/clawbot-bookkeeping/adapter.mjs',
       'openclaw-plugins/clawbot-bookkeeping/bookkeeping-core.mjs',
       'openclaw-plugins/clawbot-bookkeeping/categories.mjs',
+      'openclaw-plugins/clawbot-bookkeeping/expense-search.mjs',
       'openclaw-plugins/clawbot-bookkeeping/expense-summary.mjs',
       'openclaw-plugins/clawbot-bookkeeping/index.ts',
       'openclaw-plugins/clawbot-bookkeeping/mcp-connection.mjs',
@@ -625,6 +655,75 @@ test('publishes an immutable hash manifest from the explicit release allowlist',
     assertFailed(second, /already exists|immutable/iu);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('release verification requires the declared amount-search module even with a rebuilt hash manifest', () => {
+  const fixture = createVerifierFixture();
+  try {
+    assertSucceeded(runPowerShell(verifyScript, ['-ReleasePath', fixture.releasePath, '-AclExecutable', fixture.aclShim], fixture.env));
+    rmSync(join(releasePaths(fixture.releasePath).bookkeeping, 'expense-search.mjs'));
+    writeManifest(fixture.releasePath);
+    assertFailed(
+      runPowerShell(verifyScript, ['-ReleasePath', fixture.releasePath, '-AclExecutable', fixture.aclShim], fixture.env),
+      /find_expenses|amount.search|required|structure/iu,
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('release verification preserves old rollback releases without an amount-search contract or module', () => {
+  const fixture = createVerifierFixture();
+  try {
+    const bookkeeping = releasePaths(fixture.releasePath).bookkeeping;
+    const descriptorPath = join(bookkeeping, 'openclaw.plugin.json');
+    const descriptor = JSON.parse(readFileSync(descriptorPath, 'utf8'));
+    descriptor.contracts.tools = descriptor.contracts.tools.filter((name) => name !== 'find_expenses');
+    write(descriptorPath, JSON.stringify(descriptor));
+    rmSync(join(bookkeeping, 'expense-search.mjs'));
+    writeManifest(fixture.releasePath);
+    assertSucceeded(runPowerShell(verifyScript, ['-ReleasePath', fixture.releasePath, '-AclExecutable', fixture.aclShim], fixture.env));
+    assert.deepEqual(normalizedOpenClawTrace(fixture), []);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('release verification checks the amount-search module bytes against the manifest', () => {
+  const fixture = createVerifierFixture();
+  try {
+    const modulePath = join(releasePaths(fixture.releasePath).bookkeeping, 'expense-search.mjs');
+    const source = readFileSync(modulePath, 'utf8');
+    write(modulePath, source.replace('bookkeeping', 'BOOKKEEPING'));
+    assertFailed(
+      runPowerShell(verifyScript, ['-ReleasePath', fixture.releasePath, '-AclExecutable', fixture.aclShim], fixture.env),
+      /hash/iu,
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('release verification rejects malformed amount-search tool contracts after hash verification', () => {
+  for (const descriptor of [
+    '{invalid-json',
+    JSON.stringify({ contracts: { tools: 'find_expenses' } }),
+    JSON.stringify({ contracts: { tools: [null] } }),
+  ]) {
+    const fixture = createVerifierFixture();
+    try {
+      const bookkeeping = releasePaths(fixture.releasePath).bookkeeping;
+      write(join(bookkeeping, 'openclaw.plugin.json'), descriptor);
+      rmSync(join(bookkeeping, 'expense-search.mjs'));
+      writeManifest(fixture.releasePath);
+      assertFailed(
+        runPowerShell(verifyScript, ['-ReleasePath', fixture.releasePath, '-AclExecutable', fixture.aclShim], fixture.env),
+        /plugin|contract|manifest|JSON/iu,
+      );
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
   }
 });
 

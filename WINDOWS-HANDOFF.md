@@ -1,6 +1,20 @@
 # Windows 运行与交接：微信账本助理
 
-更新于 2026-09-05，时区 `Asia/Singapore`。这是 Windows 接手、恢复和验收的第一入口。仓库描述发布契约；任何“正在运行”结论都必须在当前主机重新探测，并以 `docs/ledger-cloudflare-runbook.md` 的完整矩阵闭环。
+更新于 2026-09-06，时区 `Asia/Singapore`。这是 Windows 接手、恢复和验收的第一入口。仓库描述发布契约；任何“正在运行”结论都必须在当前主机重新探测，并以 `docs/ledger-cloudflare-runbook.md` 的完整矩阵闭环。
+
+## 2026-09-06 续接点：金额查询分支开发，尚未发布
+
+分支 `feat/amount-transaction-search` 从已同步的 `e3af81b` 创建。用户询问是否有某个金额的账目时，原在线 `summarize_expenses` 只支持时间、分类与备注筛选，没有金额参数；只读核验确认生产仍为 `0e7c2d7`，MCP 未启用、独立 MCP token 不存在，在线工具 allowlist 未含 `find_expenses`。这证明当前能力缺口，不等于已经读取或确认用户这次查询对应的历史交易。
+
+新工具 `find_expenses` 仅查固定的可见 SGD 日常支出账户：金额为十进制字符串，精确到整数分；默认全部历史，可指定今天、本周、本月、上月、今年或自定义日期，默认 3 笔、上限 10 笔。HTTP `transactions/list.json` 请求 `type=3`、精确 `account_ids`、`amount_filter=eq:<minor>`、`count=limit+1`、`page=1`，不请求总数，不遍历后续页。全部历史显式 `max_time=0`；日期边界使用新加坡时间转换后的交易序列 `min_time=startTime*1000`、`max_time=endTime*1000+999`，不能把秒直接传给这两个参数。契约依据 [查询模型](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/models/transaction.go#L400-L432) 与 [时间序列转换](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/utils/datetimes.go#L392-L403)。
+
+返回条目须逐笔验证类型、账户、精确金额、日期范围和唯一 ID，并按时间序列从新到旧展示；只输出必要日期、金额、分类和备注，不输出原始对象或业务 ID。有后续游标或多取到一条时明确仍有更多；失败及不完整分页不得显示“没有记录”。所有测试使用 fake fetch 和临时合成数据，没有查询或写入生产交易，也未读取 `testAccountInfo.txt`。
+
+微信查询在有当前绑定或可信执行上下文时领取持久消息关联，并在工具执行时保存成功或固定失败回执，供独立发送实例恢复；不依赖同实例的 `after_tool_call`，也不复用旧查询缓存。发布器固定清单已包含新模块；校验器在校验全部文件哈希后，仅对声明 `find_expenses` 的插件要求该模块，保留旧发布包作为回滚目标的兼容性。
+
+分支实现完成 TDD 与独立代码审查；新增金额查询相关测试 91/91，整套 bookkeeping 回归 625/625 通过（失败、跳过、取消均 0）。发布脚本独立回归 55/55 通过，两个修改的脚本均通过 PS 5.1 解析。这些是合成验证，不代替新工具发布后的真实微信只读验收。
+
+后续发布须先核验干净提交、当前运行状态和 allowlist，再发布新 immutable release。将 `find_expenses` 加入专用 bookkeeper 的受控 `tools.allow`，保留其余工具与官方 Codex harness；只切 release 路径不会自动添加该权限。按既有运行手册完成切换及只读微信验收，不启用 MCP，不改变 Tunnel/DNS/规则。此次开发不自动部署，之前同 message ID 平台重放缺口仍保留。
 
 ## 2026-09-05 续接点：旧回执双消息验收通过，平台重放仍待验证
 

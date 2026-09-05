@@ -44,6 +44,14 @@ managed `session-memory` 保护已安装并确认运行注册，只跳过 `bookk
 
 本次清理以删除前快照为比较基准：非目标交易与分类完全未变，目标独立账户余额仅增加 3 minor（0.03 SGD），完整预期账户状态吻合。原始发消息前三哈希基线因测试标记实际大小写差异，未能由旧进程完成比较，**不能称已恢复原三哈希基线**。新核验仅对 ASCII 标记做精确不分大小写定位，随后严格核对实际原文、金额、ID 和完整目标内容哈希，未修改测试正文。详情见 [微信旧回执修复交接](docs/handoffs/2026-09-05-wechat-stale-reply-repair.md)。PR #5 已合入 `main` 的 `5c128bb`；本次文档更新无须重新部署，生产仍为上述 release。平台同一 message ID 的真实重放仍未验证，`deploymentComplete=false`，不能报告全部上线验收完成。
 
+## 金额查询开发状态（2026-09-06）
+
+`feat/amount-transaction-search` 新增只读 `find_expenses`，用于“账本里有没有 3.36 的账”。未指定日期时查询当前日常支出 SGD 账户的全部历史，精确匹配单笔金额；可指定自然时间范围或自定义起止日。默认显示最近 3 笔，最多 10 笔，包含日期、金额、分类及备注；有更多匹配时明确提示，不把返回条数当作总数。接口失败或返回不可信数据时不能回答“没有记录”。
+
+实现使用 ezBookkeeping 已有 HTTP 金额过滤，不依赖尚未激活的 MCP，也不读取全库后让模型筛选。`3.36` 转为整数分 `336`，请求 `amount_filter=eq:336`；只取一页至多 `limit+1` 条并严格验证账户、类型、金额、时间和分页结果。参数及单位依据 [v1.6.1 查询模型](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/models/transaction.go#L400-L432)。
+
+**这是分支中的开发能力，尚未发布到生产。** 本次只读状态核验仍为旧 release `0e7c2d7`、`enable_mcp=false`，在线 allowlist 没有 `find_expenses`。发布时需同时更新受控 allowlist 与 immutable release，再由所有者微信实测；当前微信不会因修改 Git 文件自动获得新工具。
+
 ## 助理行为
 
 ### 写入支出

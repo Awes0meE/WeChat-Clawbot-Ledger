@@ -98,6 +98,7 @@ test('allows exactly the conversational bookkeeping and read tools', () => {
     'prepare_expense',
     'resolve_expense_confirmation',
     'summarize_expenses',
+    'find_expenses',
     'ezbookkeeping__query_transactions',
   ]);
   assert.equal(bookkeeper.tools.profile, 'minimal');

@@ -149,6 +149,14 @@ function sanitizeExpenseTransaction(transaction) {
   };
 }
 
+function expenseSearchSequence(value) {
+  if (typeof value !== 'string' || !/^[1-9]\d{0,18}$/u.test(value)
+    || BigInt(value) > 9_223_372_036_854_775_807n) {
+    throw new Error('expense search response is invalid');
+  }
+  return BigInt(value);
+}
+
 export class SqliteReceiptStore {
   constructor(path) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
@@ -799,6 +807,89 @@ export class EzBookkeepingApi {
       throw new Error('expense transaction list response is invalid');
     }
     return transactions.map(sanitizeExpenseTransaction);
+  }
+
+  async findExpenseTransactions({ accountId, amountMinor, startTime, endTime, limit = 3 } = {}) {
+    const validBound = (value) => value === undefined || (
+      Number.isSafeInteger(value) && value >= 0
+      && Number.isSafeInteger(value * 1000 + 999)
+      && Number.isFinite(new Date(value * 1000).getTime())
+    );
+    if (typeof accountId !== 'string' || !accountId || accountId.trim() !== accountId
+      || accountId === '0' || /[,\s]/u.test(accountId)
+      || !Number.isSafeInteger(amountMinor) || amountMinor <= 0
+      || !Number.isInteger(limit) || limit < 1 || limit > 10
+      || !validBound(startTime) || !validBound(endTime)
+      || (startTime !== undefined && endTime !== undefined && startTime > endTime)) {
+      throw new Error('expense search parameters are invalid');
+    }
+
+    // v1.6.1 list.json uses transaction sequences, unlike list/all.json's Unix seconds.
+    const minSequence = startTime === undefined ? undefined : startTime * 1000;
+    const maxSequence = endTime === undefined ? 0 : endTime * 1000 + 999;
+    const requestedCount = limit + 1;
+    const result = await this.#request('transactions/list.json', {
+      query: {
+        type: 3,
+        account_ids: accountId,
+        amount_filter: `eq:${amountMinor}`,
+        max_time: maxSequence,
+        min_time: minSequence,
+        page: 1,
+        count: requestedCount,
+        trim_account: true,
+        trim_tag: true,
+      },
+    });
+    if (!result || typeof result !== 'object' || Array.isArray(result)
+      || !Array.isArray(result.items) || result.items.length > requestedCount
+      || !Object.hasOwn(result, 'nextTimeSequenceId')) {
+      throw new Error('expense search response is invalid');
+    }
+
+    const nextSequence = result.nextTimeSequenceId === null
+      ? undefined : expenseSearchSequence(result.nextTimeSequenceId);
+    if (result.items.length === 0 && nextSequence !== undefined) {
+      throw new Error('expense search response is incomplete');
+    }
+    const seenIds = new Set();
+    const rows = result.items.map((transaction) => {
+      if (!transaction || typeof transaction !== 'object' || Array.isArray(transaction)
+        || typeof transaction.id !== 'string' || !transaction.id
+        || transaction.id.trim() !== transaction.id || seenIds.has(transaction.id)
+        || transaction.sourceAccountId !== accountId
+        || transaction.sourceAmount !== amountMinor
+        || typeof transaction.categoryId !== 'string' || !transaction.categoryId.trim()
+        || typeof transaction.comment !== 'string' || Array.from(transaction.comment).length > 255) {
+        throw new Error('expense search response is invalid');
+      }
+      seenIds.add(transaction.id);
+      let sanitized;
+      try {
+        sanitized = sanitizeExpenseTransaction(transaction);
+      } catch {
+        throw new Error('expense search response is invalid');
+      }
+      const sequence = expenseSearchSequence(transaction.timeSequenceId);
+      if (sequence / 1000n !== BigInt(sanitized.time)
+        || (startTime !== undefined && sanitized.time < startTime)
+        || (endTime !== undefined && sanitized.time > endTime)) {
+        throw new Error('expense search response is outside the requested time range');
+      }
+      return { sequence, transaction: { ...sanitized, comment: transaction.comment } };
+    });
+    rows.sort((left, right) => left.sequence === right.sequence ? 0 : left.sequence > right.sequence ? -1 : 1);
+    if (nextSequence !== undefined && (
+      nextSequence >= rows.at(-1).sequence
+      || (minSequence !== undefined && nextSequence < BigInt(minSequence))
+      || (maxSequence > 0 && nextSequence > BigInt(maxSequence))
+    )) {
+      throw new Error('expense search response has an invalid continuation');
+    }
+    return {
+      transactions: rows.slice(0, limit).map((row) => row.transaction),
+      hasMore: rows.length > limit || nextSequence !== undefined,
+    };
   }
 
   async addTransaction(body) {
