@@ -475,11 +475,12 @@ function Get-ScheduledTask { [CmdletBinding()] param() @() }
 function New-ScheduledTaskAction { [CmdletBinding()] param([string]$Execute, [string]$Argument, [string]$WorkingDirectory) [pscustomobject]@{ Execute = $Execute; Arguments = $Argument; WorkingDirectory = $WorkingDirectory } }
 function New-ScheduledTaskTrigger { [CmdletBinding()] param([switch]$AtLogOn, [string]$User) [pscustomobject]@{} }
 function New-ScheduledTaskSettingsSet { [CmdletBinding()] param([int]$RestartCount, [TimeSpan]$RestartInterval, [TimeSpan]$ExecutionTimeLimit, [string]$MultipleInstances, [switch]$StartWhenAvailable, [switch]$AllowStartIfOnBatteries, [switch]$DontStopIfGoingOnBatteries) [pscustomobject]@{} }
-function New-ScheduledTaskPrincipal { [CmdletBinding()] param([string]$UserId, [string]$LogonType, [string]$RunLevel) [pscustomobject]@{} }
+function New-ScheduledTaskPrincipal { [CmdletBinding()] param([string]$UserId, [string]$LogonType, [string]$RunLevel) [pscustomobject]@{ LogonType = $LogonType; RunLevel = $RunLevel } }
 function Register-ScheduledTask {
   [CmdletBinding()]
   param([string]$TaskName, [object]$Action, [object]$Trigger, [object]$Settings, [object]$Principal, [string]$Description, [switch]$Force)
   if ($Force) { throw 'Installer used Force.' }
+  if ($Principal.LogonType -cne 'S4U' -or $Principal.RunLevel -cne 'Limited') { throw 'Installer did not request password-free background execution.' }
   if ($Action.Execute -cne $global:expectedExecutable -or $Action.Arguments -cne $global:expectedArguments -or $Action.WorkingDirectory -cne $global:expectedDirectory) { throw 'Scheduled action was not the exact explicit-config service.' }
   $global:registered = $true
 }
@@ -648,7 +649,8 @@ if (@($global:trace | Where-Object { $_ -eq 'acl' }).Count -lt 6) { throw ('Expe
   }
 });
 
-test('configure script rolls back the INI and running task state when token generation fails', () => {
+for (const scenario of ['token-failure', 'startup-exited', 'startup-foreign-listener', 'startup-foreign-task', 'startup-detached-listener']) {
+test(`configure script handles rollback after ${scenario}`, () => {
   const temporaryDirectory = mkdtempSync(join(tmpdir(), 'clawbot-runtime-rollback-shim-'));
   const secretsDirectory = `${temporaryDirectory}-secrets`;
   try {
@@ -667,17 +669,46 @@ test('configure script rolls back the INI and running task state when token gene
     writeFileSync(wrapperPath, `
 $global:trace = @()
 $global:phase = 'running'
+$global:scenario = $args[6]
+$global:clock = [DateTime]::Now
+$global:startCount = 0
 $global:expectedExecutable = $args[5]
 $global:configPath = $args[1]
 $global:expectedArguments = '--conf-path "' + $global:configPath + '" server run'
 $global:task = [pscustomobject]@{ TaskName = 'Clawbot rollback task'; TaskPath = '\\'; State = 'Running'; Actions = @([pscustomobject]@{ Execute = $global:expectedExecutable; Arguments = $global:expectedArguments; WorkingDirectory = $args[2] }) }
 function Get-ScheduledTask { [CmdletBinding()] param() $global:task }
 function Stop-ScheduledTask { [CmdletBinding()] param([object]$InputObject) if ($InputObject -ne $global:task) { throw 'Wrong rollback stop object.' }; [void]($global:trace += 'stop'); $global:phase = 'stopped'; $global:task.State = 'Ready' }
-function Start-ScheduledTask { [CmdletBinding()] param([object]$InputObject) if ($InputObject -ne $global:task) { throw 'Wrong rollback start object.' }; [void]($global:trace += 'start'); $global:phase = 'running'; $global:task.State = 'Running' }
-function Get-NetTCPConnection { [CmdletBinding()] param([string]$State, [int]$LocalPort) if ($global:phase -eq 'running' -and $LocalPort -eq 8888) { [pscustomobject]@{ LocalAddress = '127.0.0.1'; LocalPort = 8888; OwningProcess = 5353 } } else { @() } }
-function Get-CimInstance { [CmdletBinding()] param([string]$ClassName, [string]$Filter) [pscustomobject]@{ ProcessId = 5353; CreationDate = 'rollback'; ExecutablePath = $global:expectedExecutable; CommandLine = ('"' + $global:expectedExecutable + '" ' + $global:expectedArguments) } }
+function Start-ScheduledTask {
+  [CmdletBinding()] param([object]$InputObject)
+  if ($InputObject -ne $global:task) { throw 'Wrong rollback start object.' }
+  [void]($global:trace += 'start')
+  $global:startCount++
+  if ($global:startCount -eq 1 -and $global:scenario.StartsWith('startup-')) {
+    $global:phase = 'exited'
+    $global:task.State = 'Ready'
+    if ($global:scenario -eq 'startup-foreign-task') { $global:task.Actions[0].Execute = 'C:\\Other\\unknown.exe' }
+    return
+  }
+  if ($global:startCount -gt 1 -and [IO.File]::ReadAllText($global:configPath) -notmatch 'enable_mcp = false') { throw 'The original INI was not restored before restarting.' }
+  $global:phase = 'running'
+  $global:task.State = 'Running'
+}
+function Get-NetTCPConnection {
+  [CmdletBinding()] param([string]$State, [int]$LocalPort)
+  if ($LocalPort -ne 8888) { return @() }
+  if ($global:phase -eq 'running' -or ($global:phase -eq 'exited' -and $global:scenario -eq 'startup-detached-listener')) { return [pscustomobject]@{ LocalAddress = '127.0.0.1'; LocalPort = 8888; OwningProcess = 5353 } }
+  if ($global:phase -eq 'exited' -and $global:scenario -eq 'startup-foreign-listener') { return [pscustomobject]@{ LocalAddress = '127.0.0.1'; LocalPort = 8888; OwningProcess = 9001 } }
+  return @()
+}
+function Get-CimInstance {
+  [CmdletBinding()] param([string]$ClassName, [string]$Filter)
+  if ($Filter -match '9001') { return [pscustomobject]@{ ProcessId = 9001; CreationDate = 'foreign'; ExecutablePath = 'C:\\Other\\unknown.exe'; CommandLine = 'unknown.exe' } }
+  [pscustomobject]@{ ProcessId = 5353; CreationDate = 'rollback'; ExecutablePath = $global:expectedExecutable; CommandLine = ('"' + $global:expectedExecutable + '" ' + $global:expectedArguments) }
+}
+function Get-Date { [CmdletBinding()] param([string]$Format) if ($Format) { return $global:clock.ToString($Format) }; return $global:clock }
+function Start-Sleep { [CmdletBinding()] param([int]$Seconds, [int]$Milliseconds) $global:clock = $global:clock.AddSeconds($Seconds).AddMilliseconds($Milliseconds) }
 function Stop-Process { [CmdletBinding()] param() throw 'No process should be stopped in this fixture.' }
-function Invoke-RestMethod { [CmdletBinding()] param([string]$Uri, [string]$Method, [int]$MaximumRedirection, [int]$TimeoutSec, [object]$Headers, [string]$ContentType, [string]$Body) if ($Uri -like '*healthz.json') { [void]($global:trace += 'health'); return [pscustomobject]@{ success = $true } }; [void]($global:trace += 'token'); throw 'Temporary token failure.' }
+function Invoke-RestMethod { [CmdletBinding()] param([string]$Uri, [string]$Method, [int]$MaximumRedirection, [int]$TimeoutSec, [object]$Headers, [string]$ContentType, [string]$Body) if ($Uri -like '*healthz.json') { if ($global:phase -eq 'exited') { return [pscustomobject]@{ success = $false } }; [void]($global:trace += 'health'); return [pscustomobject]@{ success = $true } }; [void]($global:trace += 'token'); throw 'Temporary token failure.' }
 function Invoke-WebRequest { [CmdletBinding()] param([string]$Uri, [switch]$UseBasicParsing, [int]$MaximumRedirection, [int]$TimeoutSec) [pscustomobject]@{ Content = '<title>ezBookkeeping</title>' } }
 function Read-Host { [CmdletBinding()] param([string]$Prompt, [switch]$AsSecureString) [void]($global:trace += 'password'); $secure = New-Object System.Security.SecureString; 'temporary-password'.ToCharArray() | ForEach-Object { $secure.AppendChar($_) }; $secure.MakeReadOnly(); Write-Output -NoEnumerate $secure }
 function Set-Acl { [CmdletBinding()] param([string]$LiteralPath, [object]$AclObject) [void]($global:trace += 'acl') }
@@ -690,18 +721,27 @@ function Get-Acl {
     Access = @([pscustomobject]@{ IdentityReference = [pscustomobject]@{ Value = $identity }; AccessControlType = 'Allow'; FileSystemRights = 'FullControl' })
   }
 }
-try { & $args[0] -ConfigPath $args[1] -InstallDirectory $args[2] -ApiTokenPath $args[3] -McpTokenPath $args[4] -BackupRoot (Join-Path $args[2] 'backups') -TaskName 'Clawbot rollback task' -Confirm:$false; throw 'Expected token failure.' } catch { if ($_.Exception.Message -notmatch 'Could not complete local ezBookkeeping MCP setup') { throw } }
+try { & $args[0] -ConfigPath $args[1] -InstallDirectory $args[2] -ApiTokenPath $args[3] -McpTokenPath $args[4] -BackupRoot (Join-Path $args[2] 'backups') -TaskName 'Clawbot rollback task' -Confirm:$false; throw 'Expected setup failure.' } catch {
+  $expectedFailure = if ($global:scenario -in @('token-failure', 'startup-exited')) { 'Could not complete local ezBookkeeping MCP setup' } else { 'automatic rollback could not be completed' }
+  if ($_.Exception.Message -notmatch $expectedFailure) { throw }
+}
 $nonAclTrace = @($global:trace | Where-Object { $_ -ne 'acl' }) -join ','
-if ($nonAclTrace -ne 'health,stop,start,health,password,token,stop,start') { throw ('Unexpected rollback order: ' + ($global:trace -join ',')) }
-if (@($global:trace | Where-Object { $_ -eq 'acl' }).Count -lt 6) { throw ('Expected backup, live config, and rollback ACL hardening: ' + ($global:trace -join ',')) }
+$expectedTrace = if ($global:scenario -eq 'token-failure') { 'health,stop,start,health,password,token,stop,start' } elseif ($global:scenario -eq 'startup-exited') { 'health,stop,start,start' } else { 'health,stop,start' }
+if ($nonAclTrace -ne $expectedTrace) { throw ('Unexpected rollback order: ' + ($global:trace -join ',')) }
+if ($global:scenario -in @('token-failure', 'startup-exited') -and $global:task.State -ne 'Running') { throw 'The original task was not restarted.' }
 `, 'utf8');
-    runPowerShell(['-File', wrapperPath, configureScript, configPath, temporaryDirectory, apiTokenPath, mcpTokenPath, executablePath]);
-    assert.equal(readFileSync(configPath, 'utf8'), originalIni);
+    runPowerShell(['-File', wrapperPath, configureScript, configPath, temporaryDirectory, apiTokenPath, mcpTokenPath, executablePath, scenario]);
+    const rollbackSafe = ['token-failure', 'startup-exited'].includes(scenario);
+    assert.equal(readFileSync(configPath, 'utf8'), rollbackSafe ? originalIni : '[mcp]\nenable_mcp = true\nmcp_allowed_remote_ips = 127.0.0.1\n');
+    const backups = readdirSync(configDirectory).filter((name) => name.includes('.before-mcp-'));
+    assert.equal(backups.length, 1);
+    assert.equal(readFileSync(join(configDirectory, backups[0]), 'utf8'), originalIni);
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true });
     rmSync(secretsDirectory, { recursive: true, force: true });
   }
 });
+}
 
 test('a locked replace leaves the original INI and atomic backup intact without temporary residue', () => {
   const temporaryDirectory = mkdtempSync(join(tmpdir(), 'clawbot-runtime-replace-fault-'));

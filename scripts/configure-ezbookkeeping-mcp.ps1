@@ -228,15 +228,21 @@ function Restore-ConfigurationAndService {
 
     if ($TaskStarted) {
         $verifiedTask = Get-LedgerExpectedTask -TaskName $Task.TaskName -InstallDirectory $ExpectedInstallDirectory -ExpectedExecutable $ExpectedExecutable -ConfigPath $ExpectedConfigPath -Mode Explicit
-        if ([string]$verifiedTask.State -cne 'Running') {
-            throw 'The restarted ezBookkeeping task is not running during rollback.'
+        if ([string]$verifiedTask.State -ceq 'Running') {
+            $rollbackIdentity = $null
+            if (@(Get-LedgerListeningTcpConnections -Port 8888).Count -gt 0) {
+                $rollbackIdentity = Get-LedgerListenerOwner -Port 8888 -ExpectedExecutable $ExpectedExecutable -ExpectedConfigPath $ExpectedConfigPath
+            }
+            Stop-ScheduledTask -InputObject $verifiedTask -ErrorAction Stop
+            Wait-LedgerListenerExit -Identity $rollbackIdentity -Port 8888 -ExpectedExecutable $ExpectedExecutable -ExpectedConfigPath $ExpectedConfigPath
+        } elseif ([string]$verifiedTask.State -ceq 'Ready') {
+            # A failed startup can exit before the health check reaches rollback.
+            if (@(Get-LedgerListeningTcpConnections -Port 8888).Count -ne 0) {
+                throw 'The stopped ezBookkeeping task has a remaining listener during rollback.'
+            }
+        } else {
+            throw 'The restarted ezBookkeeping task has an unexpected state during rollback.'
         }
-        $rollbackIdentity = $null
-        if (@(Get-LedgerListeningTcpConnections -Port 8888).Count -gt 0) {
-            $rollbackIdentity = Get-LedgerListenerOwner -Port 8888 -ExpectedExecutable $ExpectedExecutable -ExpectedConfigPath $ExpectedConfigPath
-        }
-        Stop-ScheduledTask -InputObject $verifiedTask -ErrorAction Stop
-        Wait-LedgerListenerExit -Identity $rollbackIdentity -Port 8888 -ExpectedExecutable $ExpectedExecutable -ExpectedConfigPath $ExpectedConfigPath
     }
     $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
     $backupText = [IO.File]::ReadAllText($BackupPath, $strictUtf8)

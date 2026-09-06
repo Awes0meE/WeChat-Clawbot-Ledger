@@ -348,17 +348,23 @@ try {
     try {
         if ($taskStarted) {
             $currentTask = Get-LedgerExpectedTask -TaskName $TaskName -InstallDirectory $install -ExpectedExecutable $executablePath -ConfigPath $configPath -Mode Explicit
-            if ([string]$currentTask.State -cne 'Running') {
-                throw 'The migrated production task is not running during rollback.'
-            }
-            $newOwner = $null
-            try {
-                $newOwner = Get-LedgerListenerOwner -Port 8888 -ExpectedExecutable $executablePath -ExpectedConfigPath $configPath
-            } catch {
+            if ([string]$currentTask.State -ceq 'Running') {
                 $newOwner = $null
+                try {
+                    $newOwner = Get-LedgerListenerOwner -Port 8888 -ExpectedExecutable $executablePath -ExpectedConfigPath $configPath
+                } catch {
+                    $newOwner = $null
+                }
+                Stop-ScheduledTask -InputObject $currentTask -ErrorAction Stop
+                Wait-LedgerListenerExit -Identity $newOwner -Port 8888 -ExpectedExecutable $executablePath -ExpectedConfigPath $configPath
+            } elseif ([string]$currentTask.State -ceq 'Ready') {
+                # A failed startup can exit before the health check reaches rollback.
+                if (@(Get-LedgerListeningTcpConnections -Port 8888).Count -ne 0) {
+                    throw 'The stopped migrated production task has a remaining listener during rollback.'
+                }
+            } else {
+                throw 'The migrated production task has an unexpected state during rollback.'
             }
-            Stop-ScheduledTask -InputObject $currentTask -ErrorAction Stop
-            Wait-LedgerListenerExit -Identity $newOwner -Port 8888 -ExpectedExecutable $executablePath -ExpectedConfigPath $configPath
         }
         if ($configWritten) {
             Assert-LedgerOwnerOnlyFile -Path $backupConfigPath

@@ -1520,7 +1520,7 @@ function Switch-OpenClawRelease {
                 throw 'The validated legacy bootstrap baseline changed before use.'
             }
         }
-        $null = Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('gateway', 'status') -FailureMessage 'The OpenClaw Gateway was not running before the switch.'
+        $null = Invoke-OpenClawCommandForConfig -ConfigPath $ConfigPath -Arguments @('gateway', 'status') -FailureMessage 'The OpenClaw Gateway was not running before the switch.'
         if ($requiresLegacyBootstrap) {
             $switchStage = 'legacy bootstrap validation'
             $null = Invoke-OpenClawCommandForConfig -ConfigPath $legacyStagedConfigPath -Arguments @('config', 'validate') -FailureMessage 'The legacy bookkeeping origin bootstrap candidate was invalid.'
@@ -1608,26 +1608,26 @@ function Switch-OpenClawRelease {
         }
 
         $switchStage = 'Gateway restart'
-        $null = Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('gateway', 'restart') -FailureMessage 'The OpenClaw Gateway restart failed.'
+        $null = Invoke-OpenClawCommandForConfig -ConfigPath $ConfigPath -Arguments @('gateway', 'restart', '--preserve-definition') -FailureMessage 'The OpenClaw Gateway restart failed.'
         $switchStage = 'Gateway health check'
-        $null = Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('gateway', 'status') -FailureMessage 'The OpenClaw Gateway health check failed.'
+        $null = Invoke-OpenClawCommandForConfig -ConfigPath $ConfigPath -Arguments @('gateway', 'status') -FailureMessage 'The OpenClaw Gateway health check failed.'
         $switchStage = 'channel probe'
-        $channelStatus = @(Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('channels', 'status', '--probe', '--json') -FailureMessage 'The OpenClaw channel probe failed.')
+        $channelStatus = @(Invoke-OpenClawCommandForConfig -ConfigPath $ConfigPath -Arguments @('channels', 'status', '--probe', '--json') -FailureMessage 'The OpenClaw channel probe failed.')
         Assert-OpenClawWeixinChannelStatus -Output $channelStatus
         $switchStage = 'bookkeeping plugin check'
-        $null = Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('plugins', 'info', 'clawbot-bookkeeping') -FailureMessage 'The bookkeeping plugin load check failed.'
+        $null = Invoke-OpenClawCommandForConfig -ConfigPath $ConfigPath -Arguments @('plugins', 'info', 'clawbot-bookkeeping') -FailureMessage 'The bookkeeping plugin load check failed.'
         $switchStage = 'stable-ID plugin check'
-        $null = Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('plugins', 'info', 'openclaw-weixin') -FailureMessage 'The stable-ID plugin load check failed.'
+        $null = Invoke-OpenClawCommandForConfig -ConfigPath $ConfigPath -Arguments @('plugins', 'info', 'openclaw-weixin') -FailureMessage 'The stable-ID plugin load check failed.'
         $switchStage = 'Codex harness check'
-        $null = Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('plugins', 'inspect', 'codex') -FailureMessage 'The Codex harness check failed.'
+        $null = Invoke-OpenClawCommandForConfig -ConfigPath $ConfigPath -Arguments @('plugins', 'inspect', 'codex') -FailureMessage 'The Codex harness check failed.'
         $switchStage = 'bookkeeper model check'
-        $null = Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('models', 'status', '--agent', 'bookkeeper', '--json') -FailureMessage 'The bookkeeper model status check failed.'
+        $null = Invoke-OpenClawCommandForConfig -ConfigPath $ConfigPath -Arguments @('models', 'status', '--agent', 'bookkeeper', '--json') -FailureMessage 'The bookkeeper model status check failed.'
     } catch {
         if ($legacyLivePromoted) {
             Restore-VerifiedConfigBackup -BackupPath $legacyBaselinePath -ExpectedHash $legacyBaselineHash -ConfigPath $ConfigPath -ExpectedCurrentHash $promotedHash
             try {
-                $null = Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('gateway', 'restart') -FailureMessage 'The rollback Gateway restart failed.'
-                $null = Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('gateway', 'status') -FailureMessage 'The rollback Gateway verification failed.'
+                $null = Invoke-OpenClawCommandForConfig -ConfigPath $ConfigPath -Arguments @('gateway', 'restart', '--preserve-definition') -FailureMessage 'The rollback Gateway restart failed.'
+                $null = Invoke-OpenClawCommandForConfig -ConfigPath $ConfigPath -Arguments @('gateway', 'status') -FailureMessage 'The rollback Gateway verification failed.'
             } catch {
                 throw 'The OpenClaw switch failed and the valid bootstrap baseline was restored, but the Gateway rollback verification failed.'
             }
@@ -1652,8 +1652,8 @@ function Switch-OpenClawRelease {
             }
             Restore-VerifiedConfigBackup -BackupPath $backupPath -ExpectedHash $configHash -ConfigPath $ConfigPath -ExpectedCurrentHash $currentPatchedHash
             try {
-                $null = Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('gateway', 'restart') -FailureMessage 'The rollback Gateway restart failed.'
-                $null = Invoke-ExternalCommand -Executable $OpenClawExecutable -Arguments @('gateway', 'status') -FailureMessage 'The rollback Gateway verification failed.'
+                $null = Invoke-OpenClawCommandForConfig -ConfigPath $ConfigPath -Arguments @('gateway', 'restart', '--preserve-definition') -FailureMessage 'The rollback Gateway restart failed.'
+                $null = Invoke-OpenClawCommandForConfig -ConfigPath $ConfigPath -Arguments @('gateway', 'status') -FailureMessage 'The rollback Gateway verification failed.'
             } catch {
                 throw 'The OpenClaw switch failed and the verified config was restored, but the Gateway rollback verification failed.'
             }

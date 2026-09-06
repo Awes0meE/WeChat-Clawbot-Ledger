@@ -1436,7 +1436,7 @@ test('installer validates ingress then creates an exact supervisor-only least-pr
     assert.equal(action.includes(fixture.credentialPath), false);
     assert.match(action, /^ACTION\s+[^\r\n]*powershell\.exe\s+/iu);
     assert.doesNotMatch(action, /--token|service\s+install/iu);
-    assert.ok(trace.some((line) => line === 'PRINCIPAL Interactive Limited'));
+    assert.ok(trace.some((line) => line === 'PRINCIPAL S4U Limited'));
     assert.ok(trace.some((line) => line === 'REGISTER Clawbot Ledger Tunnel FORCE=False'));
     const aclWrites = trace.filter((line) => line.startsWith('ACL '));
     assert.equal(aclWrites.length, 9);

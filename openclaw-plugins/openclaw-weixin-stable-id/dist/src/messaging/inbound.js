@@ -121,7 +121,7 @@ export function isMediaItem(item) {
         item.type === MessageItemType.FILE ||
         item.type === MessageItemType.VOICE);
 }
-function bodyFromItemList(itemList) {
+export function bodyFromItemList(itemList) {
     if (!itemList?.length)
         return "";
     for (const item of itemList) {

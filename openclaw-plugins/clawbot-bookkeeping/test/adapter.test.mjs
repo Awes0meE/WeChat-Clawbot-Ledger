@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { Worker } from 'node:worker_threads';
+import { promisify } from 'node:util';
 
 import {
   EzBookkeepingApi,
@@ -44,6 +46,28 @@ function pendingExpenseProposal({
       comment: '午饭',
     },
   };
+}
+
+function createLegacyConfirmationDatabase(path, rows) {
+  const legacy = new DatabaseSync(path);
+  try {
+    legacy.exec(`
+      CREATE TABLE trusted_inbound_queue (
+        arrival_order INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_key TEXT NOT NULL UNIQUE,
+        payload_json TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        claimed_at INTEGER
+      );
+    `);
+    const insert = legacy.prepare(`
+      INSERT INTO trusted_inbound_queue (message_key, payload_json, expires_at, claimed_at)
+      VALUES (?, '{}', ?, ?)
+    `);
+    for (const row of rows) insert.run(row.messageKey, row.expiresAt, row.claimedAt);
+  } finally {
+    legacy.close();
+  }
 }
 
 test('SQLite busy classifier accepts primary and extended BUSY codes only', () => {
@@ -92,6 +116,311 @@ test('SQLite receipt store retains an uncertain write outcome for deduplication'
     });
   } finally {
     store?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ended trusted runs share only hashed tombstones across stores for ten minutes', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-ended-runs-'));
+  const path = join(dir, 'receipts.sqlite');
+  const first = new SqliteReceiptStore(path);
+  const second = new SqliteReceiptStore(path);
+  const runKey = 'a'.repeat(64);
+  const now = 2_000_000_000_000;
+  try {
+    assert.equal(typeof first.endTrustedRun, 'function');
+    assert.equal(typeof second.isTrustedRunEnded, 'function');
+    assert.equal(second.isTrustedRunEnded(runKey, now), false);
+    first.endTrustedRun(runKey, now);
+    assert.equal(second.isTrustedRunEnded(runKey, now), true);
+    assert.equal(second.isTrustedRunEnded('b'.repeat(64), now), false);
+    const columns = first.database.prepare('PRAGMA table_info(ended_trusted_runs)').all()
+      .map((column) => column.name);
+    assert.deepEqual(columns, ['run_key', 'expires_at']);
+    assert.deepEqual({ ...first.database.prepare('SELECT * FROM ended_trusted_runs').get() }, {
+      run_key: runKey, expires_at: now + 600_000,
+    });
+    assert.equal(second.isTrustedRunEnded(runKey, now + 600_000), true);
+    assert.equal(second.isTrustedRunEnded(runKey, now + 600_001), false);
+    assert.equal(first.database.prepare('SELECT COUNT(*) AS count FROM ended_trusted_runs').get().count, 0);
+    assert.throws(() => first.endTrustedRun('SYNTHETIC-RAW-RUN-ID', now), /trusted run/u);
+    assert.throws(() => first.isTrustedRunEnded(runKey, Number.NaN), /trusted run/u);
+  } finally {
+    second.close();
+    first.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('new trusted inbound atomically invalidates only its conversation and preserves redeliveries', () => {
+  const store = new SqliteReceiptStore(':memory:');
+  const now = 2_000_000_000_000;
+  const conversationKey = 'a'.repeat(64);
+  const otherConversationKey = 'b'.repeat(64);
+  const proposal = pendingExpenseProposal({ conversationKey });
+  const incoming = { ...proposal.sourceInbound, messageId: 'new-topic', content: '这个月花了多少' };
+  const messageKey = trustedInboundMessageKey(incoming.channel, incoming.messageId);
+  try {
+    store.replacePendingExpenseConfirmation(conversationKey, proposal, now + 600_000, now);
+    store.replacePendingExpenseConfirmation(otherConversationKey,
+      pendingExpenseProposal({ conversationKey: otherConversationKey }), now + 600_000, now);
+    store.enqueueTrustedInbound(['new-topic-lookup'], messageKey, incoming, now + 600_000, {
+      discardPendingConfirmation: true,
+    });
+    assert.equal(store.takePendingExpenseConfirmation(conversationKey, now).status, 'missing');
+    assert.equal(store.takePendingExpenseConfirmation(otherConversationKey, now).status, 'active');
+    store.claimTrustedInbound(['new-topic-lookup'], now);
+    store.replacePendingExpenseConfirmation(conversationKey, proposal, now + 600_000, now);
+    store.enqueueTrustedInbound(['new-topic-lookup'], messageKey, incoming, now + 600_000, {
+      discardPendingConfirmation: true,
+    });
+    assert.equal(store.takePendingExpenseConfirmation(conversationKey, now).status, 'active');
+  } finally {
+    store.close();
+  }
+});
+
+test('new trusted inbound rolls back proposal invalidation when enqueue fails', () => {
+  const store = new SqliteReceiptStore(':memory:');
+  const now = 2_000_000_000_000;
+  const proposal = pendingExpenseProposal();
+  try {
+    store.replacePendingExpenseConfirmation(proposal.sourceInbound.conversationKey, proposal, now + 600_000, now);
+    store.database.exec(`
+      CREATE TRIGGER fail_test_lookup BEFORE INSERT ON trusted_inbound_queue_lookups
+      BEGIN SELECT RAISE(ABORT, 'SYNTHETIC-ENQUEUE-FAILURE'); END;
+    `);
+    assert.throws(() => store.enqueueTrustedInbound(['new-topic-lookup'], 'new-message',
+      { ...proposal.sourceInbound, messageId: 'new-topic' }, now + 600_000,
+      { discardPendingConfirmation: true }), /SYNTHETIC-ENQUEUE-FAILURE/u);
+    assert.equal(store.takePendingExpenseConfirmation(proposal.sourceInbound.conversationKey, now).status, 'active');
+    assert.equal(store.database.prepare('SELECT COUNT(*) AS count FROM trusted_inbound_queue').get().count, 0);
+  } finally {
+    store.close();
+  }
+});
+
+test('confirmation history migration imports claimed hashes once and preserves new confirmations', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-confirmation-upgrade-'));
+  const path = join(dir, 'receipts.sqlite');
+  const conversationKey = 'a'.repeat(64);
+  const now = Date.now();
+  const oldKey = trustedInboundMessageKey('openclaw-weixin', 'synthetic-old-answer');
+  const expiredKey = trustedInboundMessageKey('openclaw-weixin', 'synthetic-expired-old-answer');
+  const unclaimedKey = trustedInboundMessageKey('openclaw-weixin', 'synthetic-unclaimed-answer');
+  const freshKey = trustedInboundMessageKey('openclaw-weixin', 'synthetic-post-upgrade-answer');
+  createLegacyConfirmationDatabase(path, [
+    { messageKey: oldKey, claimedAt: now - 1_000, expiresAt: now + 600_000 },
+    { messageKey: expiredKey, claimedAt: now - 700_000, expiresAt: now - 1_000 },
+    { messageKey: unclaimedKey, claimedAt: null, expiresAt: now + 600_000 },
+    { messageKey: 'SYNTHETIC-RAW-ID', claimedAt: now - 1_000, expiresAt: now + 600_000 },
+  ]);
+  let first;
+  let second;
+  try {
+    first = new SqliteReceiptStore(path);
+    first.replacePendingExpenseConfirmation(conversationKey, pendingExpenseProposal(), now + 600_000, now);
+    assert.deepEqual(first.consumePendingExpenseConfirmation(conversationKey, oldKey, now), { status: 'duplicate' });
+    assert.deepEqual(first.consumePendingExpenseConfirmation(conversationKey, expiredKey, now), { status: 'duplicate' });
+    assert.equal(first.consumePendingExpenseConfirmation(conversationKey, unclaimedKey, now).status, 'active');
+    const migrated = first.database.prepare('SELECT message_key FROM processed_expense_confirmations').all();
+    assert.equal(migrated.length, 3);
+    assert.ok(migrated.every((row) => /^[a-f0-9]{64}$/u.test(row.message_key)));
+    first.enqueueTrustedInbound(['synthetic-fresh-lookup'], freshKey, { messageId: 'synthetic-fresh' }, now + 600_000);
+    assert.ok(first.claimTrustedInbound(['synthetic-fresh-lookup'], now));
+    first.replacePendingExpenseConfirmation(conversationKey,
+      pendingExpenseProposal({ messageId: 'synthetic-new-proposal' }), now + 600_000, now);
+    second = new SqliteReceiptStore(path);
+    assert.equal(second.consumePendingExpenseConfirmation(conversationKey, freshKey, now).status, 'active');
+    assert.equal(second.database.prepare('SELECT COUNT(*) AS count FROM receipt_store_migrations').get().count, 1);
+    first.close();
+    first = undefined;
+    second.close();
+    second = new SqliteReceiptStore(path);
+    assert.deepEqual(second.consumePendingExpenseConfirmation(conversationKey, oldKey, now), { status: 'duplicate' });
+    assert.equal(second.database.prepare('SELECT COUNT(*) AS count FROM receipt_store_migrations').get().count, 1);
+  } finally {
+    second?.close();
+    first?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('confirmation history migration rolls back historical claims when its marker cannot be persisted', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-confirmation-upgrade-failure-'));
+  const path = join(dir, 'receipts.sqlite');
+  const now = Date.now();
+  const oldKey = trustedInboundMessageKey('openclaw-weixin', 'synthetic-old-answer');
+  createLegacyConfirmationDatabase(path, [
+    { messageKey: oldKey, claimedAt: now - 1_000, expiresAt: now + 600_000 },
+  ]);
+  const inspection = new DatabaseSync(path);
+  let store;
+  try {
+    inspection.exec(`
+      CREATE TABLE receipt_store_migrations (migration_key TEXT PRIMARY KEY, applied_at INTEGER NOT NULL);
+      CREATE TRIGGER fail_history_migration BEFORE INSERT ON receipt_store_migrations
+      BEGIN SELECT RAISE(ABORT, 'SYNTHETIC-MIGRATION-FAILURE'); END;
+    `);
+    assert.throws(() => { store = new SqliteReceiptStore(path); }, /SYNTHETIC-MIGRATION-FAILURE/u);
+    assert.equal(inspection.prepare('SELECT COUNT(*) AS count FROM processed_expense_confirmations').get().count, 0);
+    assert.equal(inspection.prepare('SELECT COUNT(*) AS count FROM receipt_store_migrations').get().count, 0);
+    inspection.exec('DROP TRIGGER fail_history_migration');
+    store = new SqliteReceiptStore(path);
+    assert.deepEqual(store.consumePendingExpenseConfirmation('a'.repeat(64), oldKey, now), { status: 'duplicate' });
+    assert.equal(inspection.prepare('SELECT COUNT(*) AS count FROM receipt_store_migrations').get().count, 1);
+  } finally {
+    store?.close();
+    inspection.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('confirmation history migration serializes concurrent process startup without importing fresh claims', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-confirmation-upgrade-race-'));
+  const path = join(dir, 'receipts.sqlite');
+  const now = Date.now();
+  const oldKey = trustedInboundMessageKey('openclaw-weixin', 'synthetic-old-answer');
+  const freshKeys = ['first', 'second'].map((suffix) => trustedInboundMessageKey('openclaw-weixin', `synthetic-new-${suffix}`));
+  createLegacyConfirmationDatabase(path, [
+    { messageKey: oldKey, claimedAt: now - 1_000, expiresAt: now + 600_000 },
+  ]);
+  const run = promisify(execFile);
+  const childSource = `
+    import { SqliteReceiptStore } from ${JSON.stringify(new URL('../adapter.mjs', import.meta.url).href)};
+    const [path, messageKey, nowText] = process.argv.slice(1);
+    const now = Number(nowText);
+    const store = new SqliteReceiptStore(path);
+    try {
+      store.enqueueTrustedInbound([messageKey], messageKey, { messageId: 'synthetic-fresh' }, now + 600000);
+      if (!store.claimTrustedInbound([messageKey], now)) throw new Error('synthetic claim missing');
+    } finally { store.close(); }
+  `;
+  let store;
+  try {
+    const results = await Promise.allSettled(freshKeys.map((key) => run(process.execPath,
+      ['--input-type=module', '-e', childSource, path, key, String(now)],
+      { timeout: 15_000, windowsHide: true })));
+    for (const result of results) {
+      if (result.status === 'rejected') throw result.reason;
+    }
+    store = new SqliteReceiptStore(path);
+    const conversationKey = 'a'.repeat(64);
+    assert.deepEqual(store.consumePendingExpenseConfirmation(conversationKey, oldKey, now), { status: 'duplicate' });
+    for (const key of freshKeys) {
+      store.replacePendingExpenseConfirmation(conversationKey, pendingExpenseProposal(), now + 600_000, now);
+      assert.equal(store.consumePendingExpenseConfirmation(conversationKey, key, now).status, 'active');
+    }
+    assert.equal(store.database.prepare('SELECT COUNT(*) AS count FROM receipt_store_migrations').get().count, 1);
+  } finally {
+    store?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+for (const firstStatus of ['active', 'expired', 'missing']) {
+  test(`confirmation message consumption persists after ${firstStatus} and preserves later proposals`, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'clawbot-confirmation-consumption-'));
+    const path = join(dir, 'receipts.sqlite');
+    const conversationKey = 'a'.repeat(64);
+    const messageKey = trustedInboundMessageKey('openclaw-weixin', 'synthetic-confirmation');
+    const now = 2_000_000_000_000;
+    let first;
+    let second;
+    try {
+      first = new SqliteReceiptStore(path);
+      second = new SqliteReceiptStore(path);
+      if (firstStatus !== 'missing') {
+        first.replacePendingExpenseConfirmation(conversationKey, pendingExpenseProposal(),
+          firstStatus === 'expired' ? now - 1 : now + 600_000, now);
+      }
+      assert.equal(first.consumePendingExpenseConfirmation(conversationKey, messageKey, now).status, firstStatus);
+      const replacement = pendingExpenseProposal({ messageId: 'synthetic-later-proposal', amount: '9.5' });
+      second.replacePendingExpenseConfirmation(conversationKey, replacement, now + 600_000, now);
+      assert.deepEqual(second.consumePendingExpenseConfirmation(conversationKey, messageKey, now), { status: 'duplicate' });
+      first.close();
+      first = undefined;
+      second.close();
+      second = new SqliteReceiptStore(path);
+      assert.deepEqual(second.consumePendingExpenseConfirmation(conversationKey, messageKey, now + 700_000), { status: 'duplicate' });
+      second.replacePendingExpenseConfirmation(conversationKey, replacement, now + 1_300_000, now + 700_000);
+      const fresh = second.consumePendingExpenseConfirmation(conversationKey,
+        trustedInboundMessageKey('openclaw-weixin', 'synthetic-new-confirmation'), now + 700_000);
+      assert.equal(fresh.status, 'active');
+      assert.equal(fresh.proposal.sourceInbound.messageId, 'synthetic-later-proposal');
+      const columns = second.database.prepare('PRAGMA table_info(processed_expense_confirmations)').all()
+        .map((column) => column.name);
+      assert.deepEqual(columns, ['message_key', 'processed_at']);
+      const stored = second.database.prepare('SELECT message_key FROM processed_expense_confirmations').all();
+      assert.equal(stored.length, 2);
+      assert.ok(stored.every((row) => /^[a-f0-9]{64}$/u.test(row.message_key)));
+    } finally {
+      second?.close();
+      first?.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test('confirmation message consumption rolls back its marker and proposal together on storage failure', () => {
+  const store = new SqliteReceiptStore(':memory:');
+  const conversationKey = 'a'.repeat(64);
+  const messageKey = trustedInboundMessageKey('openclaw-weixin', 'synthetic-confirmation');
+  const now = 2_000_000_000_000;
+  try {
+    store.replacePendingExpenseConfirmation(conversationKey, pendingExpenseProposal(), now + 600_000, now);
+    assert.throws(() => store.consumePendingExpenseConfirmation(conversationKey, 'RAW-MESSAGE-ID', now), /confirmation/u);
+    store.database.exec(`
+      CREATE TRIGGER fail_confirmation_take BEFORE DELETE ON pending_expense_confirmations
+      BEGIN SELECT RAISE(ABORT, 'SYNTHETIC-CONFIRMATION-FAILURE'); END;
+    `);
+    assert.throws(() => store.consumePendingExpenseConfirmation(conversationKey, messageKey, now), /SYNTHETIC-CONFIRMATION-FAILURE/u);
+    assert.equal(store.database.prepare('SELECT COUNT(*) AS count FROM processed_expense_confirmations').get().count, 0);
+    store.database.exec('DROP TRIGGER fail_confirmation_take');
+    assert.equal(store.consumePendingExpenseConfirmation(conversationKey, messageKey, now).status, 'active');
+    assert.deepEqual(store.consumePendingExpenseConfirmation(conversationKey, messageKey, now), { status: 'duplicate' });
+  } finally {
+    store.close();
+  }
+});
+
+test('confirmation message consumption is exclusive across processes and survives process exit', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-confirmation-processes-'));
+  const path = join(dir, 'receipts.sqlite');
+  const conversationKey = 'a'.repeat(64);
+  const messageKey = trustedInboundMessageKey('openclaw-weixin', 'synthetic-shared-confirmation');
+  const now = 2_000_000_000_000;
+  const store = new SqliteReceiptStore(path);
+  const run = promisify(execFile);
+  const childSource = `
+    import { SqliteReceiptStore } from ${JSON.stringify(new URL('../adapter.mjs', import.meta.url).href)};
+    const [path, conversationKey, messageKey, now] = process.argv.slice(1);
+    const store = new SqliteReceiptStore(path);
+    try {
+      console.log(JSON.stringify(store.consumePendingExpenseConfirmation(conversationKey, messageKey, Number(now))));
+    } finally { store.close(); }
+  `;
+  const consume = async () => {
+    const { stdout } = await run(process.execPath,
+      ['--input-type=module', '-e', childSource, path, conversationKey, messageKey, String(now)],
+      { timeout: 15_000, windowsHide: true });
+    return JSON.parse(stdout);
+  };
+  try {
+    store.replacePendingExpenseConfirmation(conversationKey, pendingExpenseProposal(), now + 600_000, now);
+    const results = await Promise.allSettled([consume(), consume()]);
+    for (const result of results) {
+      if (result.status === 'rejected') throw result.reason;
+    }
+    assert.deepEqual(results.map((result) => result.value.status).sort(), ['active', 'duplicate']);
+    store.replacePendingExpenseConfirmation(conversationKey,
+      pendingExpenseProposal({ messageId: 'synthetic-later-proposal' }), now + 600_000, now);
+    assert.deepEqual(await consume(), { status: 'duplicate' });
+    const fresh = store.consumePendingExpenseConfirmation(conversationKey,
+      trustedInboundMessageKey('openclaw-weixin', 'synthetic-new-confirmation'), now);
+    assert.equal(fresh.proposal.sourceInbound.messageId, 'synthetic-later-proposal');
+  } finally {
+    store.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });

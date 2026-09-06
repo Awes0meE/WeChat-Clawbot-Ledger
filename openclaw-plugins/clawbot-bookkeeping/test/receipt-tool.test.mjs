@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
 import plugin from '../index.ts';
@@ -445,6 +446,271 @@ test('binds a trusted owner message when Codex omits sender identity from llm_in
     assert.match(prepared.content[0].text, /支出：8\.80 SGD/u);
   } finally {
     harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+for (const lifecycle of ['llm_input', 'before_agent_run']) {
+test(`preserves current-message correlation across plugin instances after ${lifecycle}`, async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const fetchImpl = successfulExpenseFetch(requests);
+  const llmHarness = createPluginHarness(tempDirectory, fetchImpl);
+  const hookHarness = createPluginHarness(tempDirectory, fetchImpl);
+  const executionHarness = createPluginHarness(tempDirectory, fetchImpl);
+
+  try {
+    for (const [sequence, amount] of ['7.2', '9.5'].entries()) {
+      const message = {
+        content: `午饭${amount}`,
+        messageId: `separate-hook-message-${sequence}`,
+      };
+      let runId;
+      if (lifecycle === 'llm_input') {
+        runId = await receiveTrustedOwnerMessageWithoutBeforeAgentRun(llmHarness.inboundHooks, message);
+      } else {
+        runId = `separate-owner-run-${sequence}`;
+        await beginTrustedOwnerTurn(llmHarness.inboundHooks, { ...message, runId });
+      }
+      await bindToolCallForTurn(hookHarness.inboundHooks, {
+        runId,
+        toolCallId: `separate-hook-call-${sequence}`,
+        params: receivedExpenseParams({ amount }),
+      });
+      const response = await executionHarness.rawRecordExpenseFactory(trustedOwnerContext()).execute(
+        `separate-execution-call-${sequence}`,
+        receivedExpenseParams({ amount }),
+      );
+      assert.equal(response.details.status, 'created');
+    }
+    assert.deepEqual(requests.filter(({ url }) => url.endsWith('/transactions/add.json'))
+      .map(({ options }) => JSON.parse(options.body).sourceAmount), [720, 950]);
+  } finally {
+    executionHarness.restore();
+    hookHarness.restore();
+    llmHarness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+}
+
+test('durable LLM correlation verifies owner, run, session, account and sender before consuming a message', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const fetchImpl = successfulExpenseFetch(requests);
+  const llmHarness = createPluginHarness(tempDirectory, fetchImpl);
+  const hookHarness = createPluginHarness(tempDirectory, fetchImpl);
+  const executionHarness = createPluginHarness(tempDirectory, fetchImpl);
+  try {
+    const runId = await receiveTrustedOwnerMessageWithoutBeforeAgentRun(llmHarness.inboundHooks, {
+      content: '午饭7.2',
+      messageId: 'durable-correlation-owner-message',
+    });
+    const params = receivedExpenseParams();
+    const requester = {
+      channel: 'openclaw-weixin', accountId: 'bot-account',
+      senderId: 'owner-user', senderIsOwner: true,
+    };
+    for (const [index, override] of [
+      { runId: 'unrelated-run' },
+      { sessionKey: 'agent:other:main' },
+      { requester: { ...requester, senderIsOwner: false } },
+      { requester: { ...requester, senderId: 'different-owner' } },
+      { requester: { ...requester, accountId: 'different-account' } },
+      { requester: { ...requester, channel: 'different-channel' } },
+    ].entries()) {
+      const toolCallId = `invalid-correlation-${index}`;
+      await hookHarness.inboundHooks.get('before_tool_call')({ toolName: 'record_expense', params }, {
+        runId, toolCallId, sessionKey: 'agent:main:main',
+        channelId: 'openclaw-weixin', requester, ...override,
+      });
+      await assert.rejects(
+        executionHarness.rawRecordExpenseFactory(trustedOwnerContext()).execute(toolCallId, params),
+        /可信元数据/u,
+      );
+      assert.equal(requests.length, 0);
+    }
+    await bindToolCallForTurn(hookHarness.inboundHooks, {
+      runId, toolCallId: 'valid-correlation-hook', params,
+    });
+    const result = await executionHarness.rawRecordExpenseFactory(trustedOwnerContext()).execute(
+      'valid-correlation-execution', params,
+    );
+    assert.equal(result.details.status, 'created');
+    assert.equal(requests.filter(({ url }) => url.endsWith('/transactions/add.json')).length, 1);
+  } finally {
+    executionHarness.restore();
+    hookHarness.restore();
+    llmHarness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+for (const { name, elapsed, ended, succeeds } of [
+  { name: 'survives a model response longer than one minute', elapsed: 61_000, succeeds: true },
+  { name: 'rejects an expired correlation', elapsed: 600_001, succeeds: false },
+  { name: 'rejects a completed run', elapsed: 100, ended: true, succeeds: false },
+]) {
+  test(`durable LLM correlation ${name}`, async () => {
+    const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+    writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+    const requests = [];
+    const fetchImpl = successfulExpenseFetch(requests);
+    const llmHarness = createPluginHarness(tempDirectory, fetchImpl);
+    const hookHarness = createPluginHarness(tempDirectory, fetchImpl);
+    const executionHarness = createPluginHarness(tempDirectory, fetchImpl);
+    const originalNow = Date.now;
+    const startedAt = originalNow();
+    try {
+      Date.now = () => startedAt;
+      const runId = await receiveTrustedOwnerMessageWithoutBeforeAgentRun(llmHarness.inboundHooks, {
+        content: '午饭7.2', messageId: 'durable-correlation-lifetime',
+      });
+      Date.now = () => startedAt + elapsed;
+      if (ended) hookHarness.inboundHooks.get('agent_end')({}, { runId });
+      await bindToolCallForTurn(hookHarness.inboundHooks, {
+        runId, toolCallId: 'lifetime-hook', params: receivedExpenseParams(),
+      });
+      const execution = executionHarness.rawRecordExpenseFactory(trustedOwnerContext()).execute(
+        'lifetime-execution', receivedExpenseParams(),
+      );
+      if (succeeds) {
+        assert.equal((await execution).details.status, 'created');
+        assert.equal(requests.filter(({ url }) => url.endsWith('/transactions/add.json')).length, 1);
+      } else {
+        await assert.rejects(execution, /可信元数据/u);
+        assert.equal(requests.length, 0);
+      }
+    } finally {
+      Date.now = originalNow;
+      executionHarness.restore();
+      hookHarness.restore();
+      llmHarness.restore();
+      rmSync(tempDirectory, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const lifecycle of ['llm_input', 'before_agent_run']) {
+  for (const phase of ['local correlation', 'queued tool bridge']) {
+    test(`ended trusted runs revoke ${phase} across instances after ${lifecycle}`, async () => {
+      const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+      writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+      const requests = [];
+      const fetchImpl = successfulExpenseFetch(requests);
+      const origin = createPluginHarness(tempDirectory, fetchImpl);
+      const hooks = createPluginHarness(tempDirectory, fetchImpl);
+      const execution = createPluginHarness(tempDirectory, fetchImpl);
+      try {
+        const message = { content: '午饭7.2', messageId: 'ended-trusted-message' };
+        const runId = lifecycle === 'llm_input'
+          ? await receiveTrustedOwnerMessageWithoutBeforeAgentRun(origin.inboundHooks, message)
+          : await receiveTrustedOwnerMessage(origin.inboundHooks, message);
+        const binding = { runId, toolCallId: 'ended-hook-call', params: receivedExpenseParams() };
+        if (phase === 'local correlation') {
+          hooks.inboundHooks.get('agent_end')({}, { runId });
+          await bindToolCallForTurn(origin.inboundHooks, binding);
+        } else {
+          await bindToolCallForTurn(hooks.inboundHooks, binding);
+          origin.inboundHooks.get('agent_end')({}, { runId });
+        }
+        await assert.rejects(
+          execution.rawRecordExpenseFactory(trustedOwnerContext()).execute(
+            'ended-execution-call', receivedExpenseParams(),
+          ),
+          /可信元数据/u,
+        );
+        assert.equal(requests.length, 0);
+      } finally {
+        execution.restore();
+        hooks.restore();
+        origin.restore();
+        rmSync(tempDirectory, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
+test('ended trusted runs revoke an acquired cross-instance binding before POST and preserve failed deduplication after restart', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  let signalLookupStarted;
+  let releaseLookup;
+  const lookupStarted = new Promise((resolve) => { signalLookupStarted = resolve; });
+  const lookupReleased = new Promise((resolve) => { releaseLookup = resolve; });
+  const successfulFetch = successfulExpenseFetch(requests);
+  const fetchImpl = async (url, options) => {
+    if (url.endsWith('/accounts/list.json')) {
+      signalLookupStarted();
+      await lookupReleased;
+    }
+    return successfulFetch(url, options);
+  };
+  const origin = createPluginHarness(tempDirectory, fetchImpl);
+  const hooks = createPluginHarness(tempDirectory, fetchImpl);
+  let execution = createPluginHarness(tempDirectory, fetchImpl);
+  try {
+    const message = { content: '午饭7.2', messageId: 'ended-during-lookup' };
+    const runId = await receiveTrustedOwnerMessageWithoutBeforeAgentRun(origin.inboundHooks, message);
+    await bindToolCallForTurn(hooks.inboundHooks, {
+      runId, toolCallId: 'in-flight-ended-hook', params: receivedExpenseParams(),
+    });
+    const resultPromise = execution.rawRecordExpenseFactory(trustedOwnerContext()).execute(
+      'in-flight-ended-execution', receivedExpenseParams(),
+    );
+    await lookupStarted;
+    origin.inboundHooks.get('agent_end')({}, { runId });
+    releaseLookup();
+    const result = await resultPromise;
+    assert.equal(result.details.status, 'failed');
+    assert.equal(requests.some(({ url }) => url.endsWith('/transactions/add.json')), false);
+
+    execution.restore();
+    execution = createPluginHarness(tempDirectory, fetchImpl);
+    const replayRunId = await receiveTrustedOwnerMessageWithoutBeforeAgentRun(origin.inboundHooks, message);
+    await bindToolCallForTurn(hooks.inboundHooks, {
+      runId: replayRunId, toolCallId: 'failed-replay-hook', params: receivedExpenseParams(),
+    });
+    const replay = await execution.rawRecordExpenseFactory(trustedOwnerContext()).execute(
+      'failed-replay-execution', receivedExpenseParams(),
+    );
+    assert.equal(replay.details.status, 'duplicate');
+    assert.equal(replay.details.previousStatus, 'failed');
+    assert.equal(requests.some(({ url }) => url.endsWith('/transactions/add.json')), false);
+  } finally {
+    releaseLookup?.();
+    execution.restore();
+    hooks.restore();
+    origin.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('ended trusted runs cannot recover a cached result retained by another execution instance', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const fetchImpl = successfulExpenseFetch(requests);
+  const hooks = createPluginHarness(tempDirectory, fetchImpl);
+  const execution = createPluginHarness(tempDirectory, fetchImpl);
+  try {
+    const runId = await receiveTrustedOwnerMessageWithoutBeforeAgentRun(hooks.inboundHooks, {
+      content: '午饭7.2', messageId: 'ended-cached-result',
+    });
+    await bindToolCallForTurn(hooks.inboundHooks, {
+      runId, toolCallId: 'ended-cache-hook', params: receivedExpenseParams(),
+    });
+    const tool = execution.rawRecordExpenseFactory(trustedOwnerContext());
+    assert.equal((await tool.execute('ended-cache-first', receivedExpenseParams())).details.status, 'created');
+    hooks.inboundHooks.get('agent_end')({}, { runId });
+    await assert.rejects(tool.execute('ended-cache-late', receivedExpenseParams()), /可信元数据/u);
+    assert.equal(requests.filter(({ url }) => url.endsWith('/transactions/add.json')).length, 1);
+  } finally {
+    execution.restore();
+    hooks.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
   }
 });
@@ -2608,6 +2874,207 @@ test('does not consume a proposal on decision mismatch and then cancels it witho
     rmSync(tempDirectory, { recursive: true, force: true });
   }
 });
+
+test('confirmation history migration blocks an old answer and preserves a new answer claimed before another instance opens', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const fetchImpl = successfulExpenseFetch(requests);
+  let oldHarness = createPluginHarness(tempDirectory, fetchImpl);
+  let upgradedHarness;
+  let executionHarness;
+  const oldAnswer = { content: '是', messageId: 'synthetic-pre-upgrade-answer' };
+  try {
+    const oldRunId = await receiveTrustedOwnerMessage(oldHarness.inboundHooks, oldAnswer);
+    oldHarness.inboundHooks.get('agent_end')({}, { runId: oldRunId });
+    oldHarness.restore();
+    oldHarness = undefined;
+    const legacy = new DatabaseSync(join(tempDirectory, 'receipts.sqlite'));
+    try {
+      legacy.exec('DROP TABLE processed_expense_confirmations; DROP TABLE IF EXISTS receipt_store_migrations');
+    } finally {
+      legacy.close();
+    }
+
+    upgradedHarness = createPluginHarness(tempDirectory, fetchImpl);
+    const proposalRun = await receiveTrustedOwnerMessage(upgradedHarness.inboundHooks, {
+      content: '午饭7.2吗', messageId: 'synthetic-post-upgrade-proposal',
+    });
+    assert.equal((await upgradedHarness.prepareExpenseFactory(trustedOwnerContext()).execute(
+      'synthetic-post-upgrade-prepare', receivedExpenseParams(),
+    )).details.status, 'pending_confirmation');
+    upgradedHarness.inboundHooks.get('agent_end')({}, { runId: proposalRun });
+    const replayRun = await receiveTrustedOwnerMessage(upgradedHarness.inboundHooks, oldAnswer);
+    const replay = await upgradedHarness.resolveExpenseConfirmationFactory(trustedOwnerContext()).execute(
+      'synthetic-pre-upgrade-replay', { decision: 'confirm' },
+    );
+    assert.equal(replay.details.status, 'duplicate');
+    assert.match(replay.content[0].text, /重新发送“是”或“不是”/u);
+    assert.equal(requests.length, 0);
+    upgradedHarness.inboundHooks.get('agent_end')({}, { runId: replayRun });
+
+    const freshRun = await receiveTrustedOwnerMessage(upgradedHarness.inboundHooks, {
+      content: '是', messageId: 'synthetic-post-upgrade-answer',
+    });
+    await bindToolCallForTurn(upgradedHarness.inboundHooks, {
+      runId: freshRun, toolCallId: 'synthetic-fresh-hook',
+      toolName: 'resolve_expense_confirmation', params: { decision: 'confirm' },
+    });
+    executionHarness = createPluginHarness(tempDirectory, fetchImpl);
+    const fresh = await executionHarness.rawResolveExpenseConfirmationFactory(trustedOwnerContext()).execute(
+      'synthetic-fresh-execution', { decision: 'confirm' },
+    );
+    assert.equal(fresh.details.status, 'created');
+    assert.deepEqual(requests.filter(({ url }) => url.endsWith('/transactions/add.json'))
+      .map(({ options }) => JSON.parse(options.body).sourceAmount), [720]);
+  } finally {
+    executionHarness?.restore();
+    upgradedHarness?.restore();
+    oldHarness?.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+for (const firstStatus of ['created', 'cancelled', 'failed', 'unknown', 'expired', 'missing']) {
+  test(`does not reuse a ${firstStatus} confirmation message for later proposals across instances and restart`, async () => {
+    const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+    writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+    const originalNow = Date.now;
+    let now = originalNow();
+    Date.now = () => now;
+    const requests = [];
+    const successfulFetch = successfulExpenseFetch(requests);
+    let failure = firstStatus;
+    const fetchImpl = async (url, options) => {
+      if (failure === 'failed' || (failure === 'unknown' && url.endsWith('/transactions/add.json'))) {
+        requests.push({ url, options });
+        throw new Error('synthetic bookkeeping API failure');
+      }
+      return successfulFetch(url, options);
+    };
+    let first = createPluginHarness(tempDirectory, fetchImpl);
+    let next;
+    const invoke = async (harness, { content, messageId, toolName, params }) => {
+      const runId = await receiveTrustedOwnerMessage(harness.inboundHooks, { content, messageId });
+      const tool = toolName === 'prepare_expense'
+        ? harness.prepareExpenseFactory(trustedOwnerContext())
+        : harness.resolveExpenseConfirmationFactory(trustedOwnerContext());
+      const result = await tool.execute(`call-${runId}`, params);
+      harness.inboundHooks.get('agent_end')({}, { runId });
+      return result;
+    };
+    const oldAnswer = {
+      content: firstStatus === 'cancelled' ? '不是' : '是',
+      messageId: `synthetic-old-answer-${firstStatus}`,
+      toolName: 'resolve_expense_confirmation',
+      params: { decision: firstStatus === 'cancelled' ? 'cancel' : 'confirm' },
+    };
+    try {
+      if (firstStatus !== 'missing') {
+        const prepared = await invoke(first, {
+          content: '午饭7.2吗', messageId: `synthetic-first-proposal-${firstStatus}`,
+          toolName: 'prepare_expense', params: receivedExpenseParams(),
+        });
+        assert.equal(prepared.details.status, 'pending_confirmation');
+      }
+      if (firstStatus === 'expired') now += 600_001;
+      assert.equal((await invoke(first, oldAnswer)).details.status, firstStatus);
+      failure = undefined;
+
+      for (const [phase, amount] of [['other-instance', '9.5'], ['after-restart', '10.5']]) {
+        next = createPluginHarness(tempDirectory, fetchImpl);
+        assert.equal((await invoke(next, {
+          content: `晚饭${amount}吗`, messageId: `synthetic-${phase}-proposal-${firstStatus}`,
+          toolName: 'prepare_expense', params: receivedExpenseParams({ amount }),
+        })).details.status, 'pending_confirmation');
+        const beforeReplayRequests = requests.length;
+        const replay = await invoke(next, oldAnswer);
+        assert.equal(replay.details.status, 'duplicate');
+        assert.equal(replay.content[0].text, '这条确认消息不能重复使用啦～ 如需确认或取消当前待确认单，请重新发送“是”或“不是”。');
+        assert.equal(requests.length, beforeReplayRequests, 'redelivery must not perform any HTTP request');
+        const fresh = await invoke(next, {
+          content: '是', messageId: `synthetic-${phase}-fresh-answer-${firstStatus}`,
+          toolName: 'resolve_expense_confirmation', params: { decision: 'confirm' },
+        });
+        assert.equal(fresh.details.status, 'created');
+        assert.equal(JSON.parse(requests.at(-1).options.body).sourceAmount, Math.round(Number(amount) * 100));
+        next.restore();
+        next = undefined;
+        first?.restore();
+        first = undefined;
+      }
+    } finally {
+      next?.restore();
+      first?.restore();
+      Date.now = originalNow;
+      rmSync(tempDirectory, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const lifecycle of ['message_received only', 'llm_input']) {
+  test(`new trusted messages discard old proposals without tool calls via ${lifecycle}`, async () => {
+    const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+    writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+    const requests = [];
+    const fetchImpl = successfulExpenseFetch(requests);
+    const first = createPluginHarness(tempDirectory, fetchImpl);
+    const second = createPluginHarness(tempDirectory, fetchImpl);
+    try {
+      await receiveTrustedOwnerMessage(first.inboundHooks, {
+        content: '午饭7.2吗', messageId: 'old-proposal-before-new-message',
+      });
+      await first.prepareExpenseFactory(trustedOwnerContext()).execute('old-proposal-prepare', receivedExpenseParams());
+      const message = { content: '这个月花了多少', messageId: 'new-query-without-tool' };
+      if (lifecycle === 'llm_input') {
+        await receiveTrustedOwnerMessageWithoutBeforeAgentRun(second.inboundHooks, message);
+      } else {
+        await second.inboundHooks.get('message_received')(message, {
+          ...message, channelId: 'openclaw-weixin', accountId: 'bot-account',
+          senderId: 'owner-user', sessionKey: 'agent:main:main',
+        });
+      }
+      await receiveTrustedOwnerMessageWithoutBeforeAgentRun(second.inboundHooks, {
+        content: '是', messageId: 'late-confirm-after-new-message',
+      });
+      const result = await second.resolveExpenseConfirmationFactory(trustedOwnerContext()).execute(
+        'late-confirm-without-proposal', { decision: 'confirm' },
+      );
+      assert.equal(result.details.status, 'missing');
+      assert.equal(requests.length, 0);
+    } finally {
+      second.restore();
+      first.restore();
+      rmSync(tempDirectory, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const replay of ['proposal message', 'older unrelated message']) {
+  test(`new trusted messages preserve a pending proposal when the ${replay} is redelivered`, async () => {
+    const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+    writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+    const requests = [];
+    const harness = createPluginHarness(tempDirectory, successfulExpenseFetch(requests));
+    try {
+      const previous = { content: '这个月花了多少', messageId: 'previous-query' };
+      await receiveTrustedOwnerMessage(harness.inboundHooks, previous);
+      const proposal = { content: '午饭7.2吗', messageId: 'proposal-before-redelivery' };
+      await receiveTrustedOwnerMessage(harness.inboundHooks, proposal);
+      await harness.prepareExpenseFactory(trustedOwnerContext()).execute('prepare-before-redelivery', receivedExpenseParams());
+      await receiveTrustedOwnerMessage(harness.inboundHooks, replay === 'proposal message' ? proposal : previous);
+      await receiveTrustedOwnerMessage(harness.inboundHooks, { content: '是', messageId: 'confirm-after-redelivery' });
+      const result = await harness.resolveExpenseConfirmationFactory(trustedOwnerContext()).execute(
+        'confirm-preserved-proposal', { decision: 'confirm' },
+      );
+      assert.equal(result.details.status, 'created');
+      assert.equal(requests.filter(({ url }) => url.endsWith('/transactions/add.json')).length, 1);
+    } finally {
+      harness.restore();
+      rmSync(tempDirectory, { recursive: true, force: true });
+    }
+  });
+}
 
 test('discards an old proposal when the owner sends new substantive content', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));

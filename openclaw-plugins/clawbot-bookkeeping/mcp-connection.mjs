@@ -43,8 +43,13 @@ export function createOwnerMcpConnectionResolver({
     }
     if (!owners.has(`${messageChannel}:${requesterSenderId}`)) return null;
 
-    const token = readToken(mcpTokenPath).trim();
-    if (!token) throw new Error('MCP token is unavailable.');
+    let token;
+    try {
+      token = readToken(mcpTokenPath).trim();
+      if (!token) throw new Error('empty credential');
+    } catch {
+      throw new Error('MCP token is unavailable.');
+    }
     return {
       url: EZBOOKKEEPING_MCP_URL,
       headers: { Authorization: `Bearer ${token}` },

@@ -389,10 +389,11 @@ async function assertCredentialRejected(kind, tokenPath, timeoutMs) {
         url: `https://${LEDGER_HOST}/mcp`,
         headers,
         jsonBody: '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"boundary-probe","version":"1"}}}',
+        readBody: true,
       }, timeoutMs);
     }
     const allowedStatuses = kind === 'api' ? [401, 403] : [401, 403, 404];
-    if (kind === 'api' && response.statusCode === 400) {
+    if (response.statusCode === 400) {
       try {
         document = JSON.parse(response.body);
       } catch {
@@ -402,7 +403,7 @@ async function assertCredentialRejected(kind, tokenPath, timeoutMs) {
       }
       if (!document || typeof document !== 'object' || Array.isArray(document)
           || document.success !== false || document.errorCode !== 200020
-          || document.path !== '/api/v1/accounts/list.json') {
+          || document.path !== (kind === 'api' ? '/api/v1/accounts/list.json' : '/mcp')) {
         fail('LEDGER_PUBLIC_CREDENTIAL_BOUNDARY_FAILED');
       }
     } else if (!allowedStatuses.includes(response.statusCode)) {

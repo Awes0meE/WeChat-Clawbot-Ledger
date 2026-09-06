@@ -566,6 +566,99 @@ test('keeps semantic interpretation in the model while enforcing amount evidence
   assert.equal(requiresExpenseConfirmation('午饭7.2'), false);
 });
 
+for (const [label, timeEvidence, localTime] of [
+  ['colon clock', '昨天18:00', '18:00'],
+  ['hyphen date', '2026-09-06'],
+  ['slash date', '2026/09/06'],
+  ['dotted date', '2026.09.06'],
+  ['unpadded date', '2026-9-6'],
+  ['date and clock', '2026-09-06 18:00', '18:00'],
+  ['Chinese clock with numeric minutes', '昨天18点30分', '18:30'],
+  ['Chinese clock with a numeric hour', '昨天18时', '18:00'],
+  ['mixed Chinese clock', '昨天十八点30分', '18:30'],
+]) {
+  const input = receivedExpenseInput({
+    timeMode: 'explicit',
+    localDate: '2026-09-06',
+    ...(localTime === undefined ? {} : { localTime }),
+    timeEvidence,
+  });
+  const inbound = {
+    channel: 'ilink',
+    messageId: `numeric-time-${label}`,
+    content: `${timeEvidence}午饭7.2`,
+    timestamp: Date.parse('2026-09-07T12:00:00+08:00') / 1000,
+  };
+  const expectedTime = Date.parse(`2026-09-06T${localTime ?? '12:00'}:00+08:00`) / 1000;
+
+  test(`records a grounded expense beside a ${label}`, async () => {
+    const written = [];
+    const result = await recordExpense({
+      input,
+      inbound,
+      store: { claim() { return null; }, complete() {} },
+      api: {
+        async resolveAccountId() { return 'account-1'; },
+        async resolveExpenseCategoryId() { return 'category-1'; },
+        async addTransaction(body) {
+          written.push(body);
+          return { ...body, id: `transaction-${label}` };
+        },
+      },
+    });
+    assert.equal(result.status, 'created');
+    assert.equal(result.amountMinor, 720);
+    assert.equal(result.time, expectedTime);
+    assert.equal(written.length, 1);
+    assert.equal(written[0].sourceAmount, 720);
+    assert.equal(written[0].time, expectedTime);
+  });
+
+  test(`prepares a grounded confirmation beside a ${label}`, () => {
+    assert.deepEqual(prepareExpenseConfirmation({
+      input,
+      inbound: { ...inbound, content: `${inbound.content}吗` },
+    }), { amountMinor: 720, comment: '', time: expectedTime });
+  });
+}
+
+test('ignores numeric date and clock evidence without hiding real amounts or weakening validation', async () => {
+  const inbound = {
+    channel: 'ilink',
+    messageId: 'numeric-time-boundaries',
+    content: '昨天18:00午饭7.2',
+    timestamp: Date.parse('2026-09-07T12:00:00+08:00') / 1000,
+  };
+  const input = receivedExpenseInput({
+    timeMode: 'explicit', localDate: '2026-09-06', localTime: '18:00', timeEvidence: '昨天18:00',
+  });
+  assert.equal(messageSupportsExpenseAmount('昨天18:00午饭6.5+2.5', 900), true);
+  assert.equal(messageSupportsExpenseAmount('昨天18:00午饭7.2，咖啡3', 720), false);
+  assert.equal(messageSupportsExpenseAmount('昨天午饭7.2+18:00 3', 1020), false);
+  for (const [content, amount, timeEvidence] of [
+    ['昨天18:00吃饭', '18', '昨天18:00'],
+    ['2026-09-06吃饭', '2026', '2026-09-06'],
+    ['昨天18点30分吃饭', '30', '昨天18点30分'],
+    ['昨天18时吃饭', '18', '昨天18时'],
+  ]) {
+    assert.throws(() => prepareExpenseConfirmation({
+      input: { ...input, amount, timeEvidence }, inbound: { ...inbound, content },
+    }), (error) => error instanceof ExpenseRecordingError && error.outcome === 'rejected');
+  }
+  for (const overrides of [
+    { currency: 'USD' },
+    { timeMode: 'received' },
+    { timeEvidence: '昨天19:00' },
+    { localDate: '2026-09-08' },
+  ]) {
+    await assert.rejects(() => recordExpense({
+      input: { ...input, ...overrides }, inbound,
+      store: { claim() { assert.fail('invalid input must not claim the message'); } },
+      api: {},
+    }), (error) => error instanceof ExpenseRecordingError && error.outcome === 'rejected');
+  }
+});
+
 test('prepares a grounded proposal without claiming or contacting the ledger', () => {
   const candidate = prepareExpenseConfirmation({
     input: receivedExpenseInput({ comment: '食阁吃饭' }),

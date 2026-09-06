@@ -1,8 +1,10 @@
 # Ledger Cloudflare Tunnel 运维手册
 
+Windows 无窗口启动的当前设置与迁移方法见 [后台启动维护说明](windows-background-startup.md)。新建账本和 Tunnel 任务使用同一账户的 `S4U` 后台会话；已有任务须精确核验后迁移，不通过关闭控制台来停止服务。
+
 本文说明如何把现有 ezBookkeeping 通过 `https://ledger.66ccff-labs.com` 安全发布，同时保持 `66ccff-labs.com` 和 `www.66ccff-labs.com` 的作品集不变。它是实施手册，不是凭据存放处；任何真实账户、密码、token、Tunnel UUID、Cloudflare 身份、微信身份、SQLite、交易正文、响应正文和运行日志都必须留在 Git 与仓库之外。
 
-2026-09-05 未完成部署的精确续接点见 [`handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md`](handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md)。恢复工作前先只读核验，不能重复创建已存在的 Tunnel、DNS 或规则。
+当前发布与验收范围见 [系统检查记录](handoffs/2026-09-07-bookkeeping-system-audit.md)；[2026-09-05 Tunnel 交接](handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md) 保留当时的部署证据。恢复工作前先只读核验，不能重复创建已存在的 Tunnel、DNS 或规则。
 
 ## 固定合同
 
@@ -337,7 +339,7 @@ proxied CNAME 在公网 DNS 中会 flatten，因此不用公网 `resolveCname(le
   -VerifyRateLimit
 ```
 
-仅在 MCP 已按既有交互流程启用且独立 MCP token 存在时，再加入 `-McpTokenPath`。脚本把 token 只读入内存，只向经过固定 HTTPS host 校验的 Ledger URL 发送。API 继续接受 `401/403`；此外，仅当 HTTP 状态为 `400`、响应为 JSON 对象，且 `success === false`、`errorCode === 200020`、`path === '/api/v1/accounts/list.json'` 同时成立时，才接受为 API token 的 IP 限制拒绝。判定依据是 ezBookkeeping v1.6.1 的 [API token IP middleware](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/middlewares/api_token_ip_limit.go#L10-L36)、[ErrIPForbidden 定义](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/errs/global.go#L7-L29)、[错误码计算](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/errs/error.go#L66-L69) 和 [API 错误响应](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/utils/api.go#L28-L64)。MCP 仍只接受 `401/403/404`，不能复用 API 的 `400` 例外。
+仅在 MCP 已按既有交互流程启用且独立 MCP token 存在时，再加入 `-McpTokenPath`。脚本把 token 只读入内存，只向经过固定 HTTPS host 校验的 Ledger URL 发送。API 继续接受 `401/403`；此外，仅当 HTTP 状态为 `400`、响应为 JSON 对象，且 `success === false`、`errorCode === 200020`、`path === '/api/v1/accounts/list.json'` 同时成立时，才接受为 API token 的 IP 限制拒绝。判定依据是 ezBookkeeping v1.6.1 的 [API token IP middleware](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/middlewares/api_token_ip_limit.go#L10-L36)、[ErrIPForbidden 定义](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/errs/global.go#L7-L29)、[错误码计算](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/errs/error.go#L66-L69) 和 [API 错误响应](https://github.com/mayswind/ezbookkeeping/blob/v1.6.1/pkg/utils/api.go#L28-L64)。MCP 保留 `401/403/404`，另仅接受 HTTP `400` 且 JSON 对象同时满足 `success === false`、`errorCode === 200020`、`path === '/mcp'` 的明确 IP 拒绝；路径必须按 API/MCP 分别匹配，不能把任意 `400` 当作通过。
 
 其他 `400`、无效 JSON、缺失或类型不符的必需字段、不同 path/errorCode 和其他意外状态均须失败；所有接受的拒绝响应仍须通过无缓存检查。API 响应正文只短暂读入内存；`400` 正文在 JSON 解析结束时立即通过内层 `finally` 清空，再进行字段和缓存判定。外层 `finally` 清除其余状态的正文及解析对象的引用，成功、解析失败、语义不符和缓存失败都执行清理。`errorMessage` 不参与判定；脚本不得输出、保存或返回原始正文或该错误文本，也不得输出 Authorization、token 或原始异常。
 

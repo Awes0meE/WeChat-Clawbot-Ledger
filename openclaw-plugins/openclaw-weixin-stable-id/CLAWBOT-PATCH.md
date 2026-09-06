@@ -26,6 +26,16 @@ real platform redelivery. As of 2026-09-05, same-message-ID platform replay
 acceptance still lacks a real trigger and evidence; see the
 [active handoff](../../docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md).
 
+Inbound sender authorization runs before local slash commands and media
+downloads. The framework pairing store remains authoritative, with the legacy
+account owner used only when that store is empty; an empty store without an
+owner denies access. This prevents unpaired senders from using `/echo`, changing
+account-wide debug state with `/toggle-debug`, or triggering attachment downloads.
+Authorized messages keep their original body, stable identity, media mapping and
+`CommandAuthorized` flag. `test/slash-command-authorization.test.mjs` exercises
+these boundaries and both supported owner sources with synthetic Node fixtures;
+host state and network services are replaced in memory.
+
 The bundled READMEs retain upstream usage reference. Clawbot production deploys
 this variant through the [immutable release runbook](../../docs/ledger-cloudflare-runbook.md);
 installing the unmodified upstream npm package does not deploy this patch.

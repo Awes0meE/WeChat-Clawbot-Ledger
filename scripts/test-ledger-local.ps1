@@ -271,7 +271,7 @@ function Assert-LocalScheduledTaskPolicy {
     $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
     $triggers = @($Task.Triggers)
     if (-not (Test-LocalSameWindowsIdentity -Left ([string]$Task.Principal.UserId) -Right $currentUser) -or
-        [string]$Task.Principal.LogonType -cne 'Interactive' -or
+        [string]$Task.Principal.LogonType -cnotin @('Interactive', 'S4U') -or
         [string]$Task.Principal.RunLevel -cne 'Limited' -or
         $triggers.Count -ne 1 -or
         [string]$triggers[0].CimClass.CimClassName -cne 'MSFT_TaskLogonTrigger' -or
@@ -457,7 +457,7 @@ Invoke-LocalLedgerCheck -Name 'tunnel_task_principal' -Check {
     if ($tasks.Count -ne 1) { throw 'task missing' }
     $triggers = @($tasks[0].Triggers)
     if (-not (Test-LocalSameWindowsIdentity -Left ([string]$tasks[0].Principal.UserId) -Right ([Security.Principal.WindowsIdentity]::GetCurrent().Name)) -or
-        [string]$tasks[0].Principal.LogonType -cne 'Interactive' -or
+        [string]$tasks[0].Principal.LogonType -cnotin @('Interactive', 'S4U') -or
         [string]$tasks[0].Principal.RunLevel -cne 'Limited' -or
         $triggers.Count -ne 1 -or
         [string]$triggers[0].CimClass.CimClassName -cne 'MSFT_TaskLogonTrigger' -or

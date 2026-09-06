@@ -105,6 +105,7 @@ type ToolExecutionContext = {
 
 type ToolCallSlot = {
   runKey: string;
+  authorityRunKey: string;
   toolName: string;
   sessionKey?: string;
   requesterConversationKey?: string;
@@ -113,6 +114,8 @@ type ToolCallSlot = {
   ambiguous: boolean;
   touchedAt: number;
 };
+
+type DurableToolBridge = InboundMessage & { authorityRunKey: string };
 
 type RecordExpenseResult = {
   status: 'created' | 'duplicate';
@@ -211,6 +214,10 @@ function durableToolBridgeMessageKey(toolName: string, inbound: InboundMessage) 
   return createHash('sha256')
     .update(`tool-bridge-message\u0000${toolName}\u0000${inbound.channel}\u0000${inbound.messageId}`, 'utf8')
     .digest('hex');
+}
+
+function correlatedRunLookupKey(runId: string) {
+  return createHash('sha256').update(`correlated-run\u0000${runId}`, 'utf8').digest('hex');
 }
 
 function confirmationDecision(content: string): 'confirm' | 'cancel' | undefined {
@@ -369,6 +376,19 @@ export default definePluginEntry({
 
     const bookkeepingApi = new EzBookkeepingApi({ serverBaseUrl, tokenPath, requestTimeoutMs });
     const receiptStore = new SqliteReceiptStore(stateDbPath);
+    const persistCorrelatedInbound = (runId: string, inbound: InboundMessage) => {
+      // Hook dispatch and tool execution may use separate plugin registries.
+      // This handoff still needs an exact owner/conversation check at tool time.
+      receiptStore.enqueueTrustedInbound(
+        [correlatedRunLookupKey(runId)],
+        createHash('sha256').update(
+          `correlated-message\u0000${runId}\u0000${inbound.channel}\u0000${inbound.messageId}`,
+          'utf8',
+        ).digest('hex'),
+        inbound,
+        inbound.observedAt + TRUSTED_INBOUND_MAX_AGE_MS,
+      );
+    };
     const preparedRuns = new Set<string>();
     const inboundByRun = new Map<string, InboundMessage>();
     const unverifiedInboundByRun = new Map<string, InboundMessage>();
@@ -499,12 +519,14 @@ export default definePluginEntry({
         trustedInboundMessageKey(channel, messageId),
         inbound,
         observedAt + TRUSTED_INBOUND_MAX_AGE_MS,
+        { discardPendingConfirmation: confirmationDecision(inbound.content) === undefined },
       );
     });
 
     api.on('before_agent_run', (event, context) => {
       const runId = context.runId;
       const runKey = runId ? transientBindingKey('run', runId) : undefined;
+      if (runKey && receiptStore.isTrustedRunEnded(runKey)) return;
       if (runKey && preparedRuns.has(runKey)) return;
       if (runKey) preparedRuns.add(runKey);
 
@@ -546,10 +568,8 @@ export default definePluginEntry({
         ) as InboundMessage | undefined : undefined;
       }
       if (inbound && runKey && event.senderIsOwner === true) {
-        if (confirmationDecision(inbound.content) === undefined) {
-          receiptStore.discardPendingExpenseConfirmation(inbound.conversationKey);
-        }
         inboundByRun.set(runKey, inbound);
+        persistCorrelatedInbound(runId, inbound);
         deliveryKeysByRun.set(runKey, {
           deliveryKey: inbound.deliveryKey,
           recipientKey: inbound.recipientKey,
@@ -586,6 +606,7 @@ export default definePluginEntry({
         return;
       }
       const runKey = transientBindingKey('run', runId);
+      if (receiptStore.isTrustedRunEnded(runKey)) return;
       if (inboundByRun.has(runKey) || unverifiedInboundByRun.has(runKey)) return;
       const now = Date.now();
       const conversationKey = trustedConversationKey({
@@ -611,6 +632,7 @@ export default definePluginEntry({
       ) as InboundMessage | undefined;
       if (inbound) {
         unverifiedInboundByRun.set(runKey, inbound);
+        persistCorrelatedInbound(runId, inbound);
         deliveryKeysByRun.set(runKey, {
           deliveryKey: inbound.deliveryKey,
           recipientKey: inbound.recipientKey,
@@ -630,6 +652,7 @@ export default definePluginEntry({
       const toolCallId = context.toolCallId ?? event.toolCallId;
       if (!runId || !toolCallId) return;
       const runKey = transientBindingKey('run', runId);
+      if (receiptStore.isTrustedRunEnded(runKey, now)) return;
       const toolCallKey = transientBindingKey('tool-call', toolCallId);
       const requesterChannel = context.requester?.channel ?? context.channelId;
       const requesterConversationKey = trustedConversationKey({
@@ -665,7 +688,22 @@ export default definePluginEntry({
       let inbound = inboundByRun.get(runKey);
       const embeddedBinding = Boolean(inbound);
       if (!inbound && context.requester?.senderIsOwner === true) {
-        const unverifiedInbound = unverifiedInboundByRun.get(runKey);
+        const durableInbound = requesterConversationKey && requesterChannel
+          ? receiptStore.claimUniqueTrustedInboundMatching(
+            [correlatedRunLookupKey(runId)],
+            (candidate: unknown) => {
+              if (!candidate || typeof candidate !== 'object') return false;
+              const correlated = candidate as Partial<InboundMessage>;
+              return correlated.channel === requesterChannel
+                && correlated.conversationKey === requesterConversationKey
+                && typeof correlated.observedAt === 'number'
+                && now - correlated.observedAt >= 0
+                && now - correlated.observedAt <= TRUSTED_INBOUND_MAX_AGE_MS;
+            },
+            now,
+          ) as InboundMessage | undefined
+          : undefined;
+        const unverifiedInbound = durableInbound ?? unverifiedInboundByRun.get(runKey);
         if (unverifiedInbound
           && requesterChannel
           && requesterConversationKey
@@ -682,6 +720,7 @@ export default definePluginEntry({
       );
       toolCallSlots.set(toolCallKey, {
         runKey,
+        authorityRunKey: runKey,
         toolName: event.toolName,
         sessionKey: context.sessionKey,
         requesterConversationKey,
@@ -698,12 +737,13 @@ export default definePluginEntry({
         receiptStore.enqueueTrustedInbound(
           [durableToolBridgeLookupKey(event.toolName, inbound.recipientKey)],
           durableToolBridgeMessageKey(event.toolName, inbound),
-          inbound,
+          { ...inbound, authorityRunKey: runKey },
           now + TRUSTED_PROMPT_CORRELATION_MAX_AGE_MS,
         );
       }
       if (inbound) inboundByRun.delete(runKey);
       if (inbound) unverifiedInboundByRun.delete(runKey);
+      if (inbound) receiptStore.claimTrustedInbound([correlatedRunLookupKey(runId)], now);
     });
 
     api.on('after_tool_call', (event, context) => {
@@ -840,9 +880,11 @@ export default definePluginEntry({
       const runId = context.runId ?? event.runId;
       if (!runId) return;
       const runKey = transientBindingKey('run', runId);
+      receiptStore.endTrustedRun(runKey, now);
       preparedRuns.delete(runKey);
       inboundByRun.delete(runKey);
       unverifiedInboundByRun.delete(runKey);
+      receiptStore.claimTrustedInbound([correlatedRunLookupKey(runId)], now);
       authoritativeToolResultsByRun.delete(runKey);
       for (const slot of toolCallSlots.values()) {
         if (slot.runKey === runKey) {
@@ -894,6 +936,7 @@ export default definePluginEntry({
           const availableCandidates = [...toolCallSlots.entries()].filter(([, candidate]) => (
             candidate.ambiguous === false
             && (Boolean(candidate.inbound) || authoritativeToolResultsByRun.has(candidate.runKey))
+            && !receiptStore.isTrustedRunEnded(candidate.authorityRunKey, now)
           ));
           const sameToolCandidates = availableCandidates.filter(([, candidate]) => candidate.toolName === toolName);
           const sameSessionCandidates = sameToolCandidates.filter(([, candidate]) => (
@@ -936,12 +979,15 @@ export default definePluginEntry({
             [durableToolBridgeLookupKey(toolName, recipientKey)],
             (candidate: unknown) => {
               if (!candidate || typeof candidate !== 'object') return false;
-              const trusted = candidate as Partial<InboundMessage>;
+              const trusted = candidate as Partial<DurableToolBridge>;
               if (trusted.recipientKey !== recipientKey
                 || typeof trusted.observedAt !== 'number'
                 || now - trusted.observedAt < 0
-                || now - trusted.observedAt > TRUSTED_PROMPT_CORRELATION_MAX_AGE_MS) return false;
+                || now - trusted.observedAt > TRUSTED_INBOUND_MAX_AGE_MS) return false;
               hasPendingDurableInbound = true;
+              if (typeof trusted.authorityRunKey !== 'string'
+                || !/^[a-f0-9]{64}$/u.test(trusted.authorityRunKey)
+                || receiptStore.isTrustedRunEnded(trusted.authorityRunKey, now)) return false;
               if (toolName === 'resolve_expense_confirmation') {
                 const decision = params && typeof params === 'object'
                   ? (params as { decision?: unknown }).decision
@@ -953,7 +999,7 @@ export default definePluginEntry({
               return true;
             },
             now,
-          ) as InboundMessage | undefined
+          ) as DurableToolBridge | undefined
           : undefined;
         if (durableInbound) {
           const durableRunKey = transientBindingKey(
@@ -962,6 +1008,7 @@ export default definePluginEntry({
           );
           slot = {
             runKey: durableRunKey,
+            authorityRunKey: durableInbound.authorityRunKey,
             toolName,
             requesterConversationKey: durableInbound.conversationKey,
             inbound: durableInbound,
@@ -982,6 +1029,10 @@ export default definePluginEntry({
       if (!slot && deferredCachedRecovery && !hasPendingDurableInbound) {
         [resolvedToolCallKey, slot] = deferredCachedRecovery;
         recoveredByExecutionContext = true;
+      }
+      if (slot && receiptStore.isTrustedRunEnded(slot.authorityRunKey, now)) {
+        delete slot.inbound;
+        throw new Error(MISSING_TRUSTED_INBOUND_ERROR);
       }
       const inbound = slot?.ambiguous === false ? slot.inbound : undefined;
       const cachedResponse = slot?.ambiguous === false
@@ -1040,9 +1091,15 @@ export default definePluginEntry({
           }
           return response;
         },
-        isStillAuthorized: () => toolCallSlots.get(resolvedToolCallKey) === slot
-          && slot.runKey === boundRunKey
-          && slot.ambiguous === false,
+        isStillAuthorized: () => {
+          const currentNow = Date.now();
+          return toolCallSlots.get(resolvedToolCallKey) === slot
+            && slot.runKey === boundRunKey
+            && slot.ambiguous === false
+            && currentNow - inbound.observedAt >= 0
+            && currentNow - inbound.observedAt <= TRUSTED_INBOUND_MAX_AGE_MS
+            && !receiptStore.isTrustedRunEnded(slot.authorityRunKey, currentNow);
+        },
       };
     };
 
@@ -1435,7 +1492,19 @@ export default definePluginEntry({
           if (!isStillAuthorized()) {
             throw new Error('当前微信消息的可信绑定已变化，本次没有操作账本。');
           }
-          const pending = receiptStore.takePendingExpenseConfirmation(inbound.conversationKey);
+          const pending = receiptStore.consumePendingExpenseConfirmation(
+            inbound.conversationKey,
+            trustedInboundMessageKey(inbound.channel, inbound.messageId),
+          );
+          if (pending.status === 'duplicate') {
+            return authoritativeResponse({
+              content: [{
+                type: 'text' as const,
+                text: '这条确认消息不能重复使用啦～ 如需确认或取消当前待确认单，请重新发送“是”或“不是”。',
+              }],
+              details: { status: 'duplicate' },
+            });
+          }
           if (pending.status === 'missing') {
             return authoritativeResponse({
               content: [{ type: 'text' as const, text: '现在没有等你确认的支出啦～ 放心，我什么都没记 😊' }],

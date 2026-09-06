@@ -181,7 +181,7 @@ function Assert-RestartTaskPolicy {
     $expectedUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
     $triggers = @($Task.Triggers)
     if (-not (Test-RestartSameWindowsIdentity -Left ([string]$Task.Principal.UserId) -Right $expectedUser) -or
-        [string]$Task.Principal.LogonType -cne 'Interactive' -or
+        [string]$Task.Principal.LogonType -cnotin @('Interactive', 'S4U') -or
         [string]$Task.Principal.RunLevel -cne 'Limited' -or
         $triggers.Count -ne 1 -or
         [string]$triggers[0].CimClass.CimClassName -cne 'MSFT_TaskLogonTrigger' -or

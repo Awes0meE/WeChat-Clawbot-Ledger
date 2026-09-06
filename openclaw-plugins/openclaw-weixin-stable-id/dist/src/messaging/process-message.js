@@ -15,7 +15,7 @@ import { redactBody, redactToken } from "../util/redact.js";
 import { isDebugMode } from "./debug-mode.js";
 import { sendWeixinErrorNotice } from "./error-notice.js";
 import { applyWeixinMessageSendingHook, emitWeixinMessageSent } from "./outbound-hooks.js";
-import { setContextToken, weixinMessageToMsgContext, getContextTokenFromMsgContext, isMediaItem, } from "./inbound.js";
+import { bodyFromItemList, setContextToken, weixinMessageToMsgContext, getContextTokenFromMsgContext, isMediaItem, } from "./inbound.js";
 import { sendWeixinMediaFile } from "./send-media.js";
 import { StreamingMarkdownFilter } from "./markdown-filter.js";
 import { sendMessageWeixin } from "./send.js";
@@ -44,13 +44,42 @@ export async function processOneMessage(full, deps) {
         return;
     }
     const receivedAt = Date.now();
-    const debug = isDebugMode(deps.accountId);
-    const debugTrace = [];
-    const debugTs = { received: receivedAt };
     const textBody = extractTextBody(full.item_list);
+    const rawBody = bodyFromItemList(full.item_list).trim();
+    const senderId = full.from_user_id ?? "";
+    // Authorize before local commands, media downloads or any message processing.
+    const { senderAllowedForCommands, commandAuthorized } = await resolveSenderCommandAuthorizationWithRuntime({
+        cfg: deps.config,
+        rawBody,
+        isGroup: false,
+        dmPolicy: "pairing",
+        configuredAllowFrom: [],
+        configuredGroupAllowFrom: [],
+        senderId,
+        isSenderAllowed: (id, list) => list.includes(id),
+        /** Pairing: framework credentials `*-allowFrom.json`, with account `userId` fallback for legacy installs. */
+        readAllowFromStore: async () => {
+            const fromStore = readFrameworkAllowFromList(deps.accountId);
+            if (fromStore.length > 0)
+                return fromStore;
+            const uid = loadWeixinAccount(deps.accountId)?.userId?.trim();
+            return uid ? [uid] : [];
+        },
+        runtime: deps.channelRuntime.commands,
+    });
+    const directDmOutcome = resolveDirectDmAuthorizationOutcome({
+        isGroup: false,
+        dmPolicy: "pairing",
+        senderAllowedForCommands,
+    });
+    if (directDmOutcome === "disabled" || directDmOutcome === "unauthorized") {
+        logger.info(`authorization: dropping message from=${senderId} outcome=${directDmOutcome}`);
+        return;
+    }
+    logger.debug(`authorization: senderId=${senderId} commandAuthorized=${String(commandAuthorized)} senderAllowed=${String(senderAllowedForCommands)}`);
     if (textBody.startsWith("/")) {
         const slashResult = await handleSlashCommand(textBody, {
-            to: full.from_user_id ?? "",
+            to: senderId,
             contextToken: full.context_token,
             baseUrl: deps.baseUrl,
             token: deps.token,
@@ -63,6 +92,9 @@ export async function processOneMessage(full, deps) {
             return;
         }
     }
+    const debug = isDebugMode(deps.accountId);
+    const debugTrace = [];
+    const debugTs = { received: receivedAt };
     if (debug) {
         const itemTypes = full.item_list?.map((i) => i.type).join(",") ?? "none";
         debugTrace.push("── 收消息 ──", `│ seq=${full.seq ?? "?"} msgId=${full.message_id ?? "?"} from=${full.from_user_id ?? "?"}`, `│ body="${textBody.slice(0, 40)}${textBody.length > 40 ? "…" : ""}" (len=${textBody.length}) itemTypes=[${itemTypes}]`, `│ sessionId=${full.session_id ?? "?"} contextToken=${full.context_token ? "present" : "none"}`);
@@ -102,40 +134,8 @@ export async function processOneMessage(full, deps) {
             : "│ mediaDownload: none");
     }
     const ctx = weixinMessageToMsgContext(full, deps.accountId, mediaOpts);
-    // --- Framework command authorization ---
-    const rawBody = ctx.Body?.trim() ?? "";
     ctx.CommandBody = rawBody;
-    const senderId = full.from_user_id ?? "";
-    const { senderAllowedForCommands, commandAuthorized } = await resolveSenderCommandAuthorizationWithRuntime({
-        cfg: deps.config,
-        rawBody,
-        isGroup: false,
-        dmPolicy: "pairing",
-        configuredAllowFrom: [],
-        configuredGroupAllowFrom: [],
-        senderId,
-        isSenderAllowed: (id, list) => list.length === 0 || list.includes(id),
-        /** Pairing: framework credentials `*-allowFrom.json`, with account `userId` fallback for legacy installs. */
-        readAllowFromStore: async () => {
-            const fromStore = readFrameworkAllowFromList(deps.accountId);
-            if (fromStore.length > 0)
-                return fromStore;
-            const uid = loadWeixinAccount(deps.accountId)?.userId?.trim();
-            return uid ? [uid] : [];
-        },
-        runtime: deps.channelRuntime.commands,
-    });
-    const directDmOutcome = resolveDirectDmAuthorizationOutcome({
-        isGroup: false,
-        dmPolicy: "pairing",
-        senderAllowedForCommands,
-    });
-    if (directDmOutcome === "disabled" || directDmOutcome === "unauthorized") {
-        logger.info(`authorization: dropping message from=${senderId} outcome=${directDmOutcome}`);
-        return;
-    }
     ctx.CommandAuthorized = commandAuthorized;
-    logger.debug(`authorization: senderId=${senderId} commandAuthorized=${String(commandAuthorized)} senderAllowed=${String(senderAllowedForCommands)}`);
     if (debug) {
         debugTrace.push("── 鉴权 & 路由 ──", `│ auth: cmdAuthorized=${String(commandAuthorized)} senderAllowed=${String(senderAllowedForCommands)}`);
     }

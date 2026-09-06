@@ -516,10 +516,16 @@ function Wait-LedgerListenerExit {
         if ($null -eq $Identity) {
             throw 'A listener appeared after the exact scheduled task was stopped.'
         }
-        $current = if ($Legacy) {
-            Get-LedgerLegacyListenerOwner -Port $Port -ExpectedExecutable $ExpectedExecutable
-        } else {
-            Get-LedgerListenerOwner -Port $Port -ExpectedExecutable $ExpectedExecutable -ExpectedConfigPath $ExpectedConfigPath
+        try {
+            $current = if ($Legacy) {
+                Get-LedgerLegacyListenerOwner -Port $Port -ExpectedExecutable $ExpectedExecutable
+            } else {
+                Get-LedgerListenerOwner -Port $Port -ExpectedExecutable $ExpectedExecutable -ExpectedConfigPath $ExpectedConfigPath
+            }
+        } catch {
+            # The verified service may exit between the listener and owner queries.
+            if (@(Get-LedgerListeningTcpConnections -Port $Port).Count -eq 0) { return }
+            throw
         }
         if ([int]$current.ProcessId -ne [int]$Identity.ProcessId -or
             [string]$current.CreationDate -cne [string]$Identity.CreationDate) {

@@ -7,6 +7,8 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_REQUEST_TIMEOUT_MS = 60_000;
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const SQLITE_BUSY_RETRY_MS = 10;
+const TRUSTED_RUN_END_TTL_MS = 10 * 60 * 1000;
+const CONFIRMATION_HISTORY_MIGRATION_KEY = 'processed-expense-confirmations-v1';
 const SQLITE_BUSY_WAIT = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 
 export function isSqliteBusyError(error) {
@@ -186,11 +188,23 @@ export class SqliteReceiptStore {
       );
       CREATE INDEX IF NOT EXISTS trusted_inbound_queue_lookup
       ON trusted_inbound_queue_lookups (lookup_key, message_key);
+      CREATE TABLE IF NOT EXISTS ended_trusted_runs (
+        run_key TEXT PRIMARY KEY,
+        expires_at INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS pending_expense_confirmations (
         conversation_key TEXT PRIMARY KEY,
         payload_json TEXT NOT NULL,
         expires_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS processed_expense_confirmations (
+        message_key TEXT PRIMARY KEY,
+        processed_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS receipt_store_migrations (
+        migration_key TEXT PRIMARY KEY,
+        applied_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS pending_authoritative_replies (
         reply_key TEXT PRIMARY KEY,
@@ -206,7 +220,13 @@ export class SqliteReceiptStore {
       CREATE INDEX IF NOT EXISTS pending_authoritative_replies_recipient
       ON pending_authoritative_replies (recipient_key, expires_at, reserved_by);
     `);
-    this.#migrateLegacyTrustedInboundMessages();
+    try {
+      this.#migrateLegacyTrustedInboundMessages();
+      this.#migrateProcessedExpenseConfirmations();
+    } catch (error) {
+      this.database.close();
+      throw error;
+    }
     this.insertPending = this.database.prepare(`
       INSERT OR IGNORE INTO message_receipts (receipt_key, status, payload_json, updated_at)
       VALUES (?, 'pending', '{"status":"pending"}', ?)
@@ -252,6 +272,17 @@ export class SqliteReceiptStore {
       DELETE FROM trusted_inbound_queue
       WHERE claimed_at IS NULL AND expires_at < ?
     `);
+    this.upsertEndedTrustedRun = this.database.prepare(`
+      INSERT INTO ended_trusted_runs (run_key, expires_at) VALUES (?, ?)
+      ON CONFLICT(run_key) DO UPDATE SET
+        expires_at = MAX(ended_trusted_runs.expires_at, excluded.expires_at)
+    `);
+    this.selectEndedTrustedRun = this.database.prepare(`
+      SELECT 1 FROM ended_trusted_runs WHERE run_key = ? AND expires_at >= ?
+    `);
+    this.deleteExpiredEndedTrustedRuns = this.database.prepare(`
+      DELETE FROM ended_trusted_runs WHERE expires_at < ?
+    `);
     this.upsertPendingExpenseConfirmation = this.database.prepare(`
       INSERT INTO pending_expense_confirmations
         (conversation_key, payload_json, expires_at, updated_at)
@@ -269,6 +300,10 @@ export class SqliteReceiptStore {
     this.deletePendingExpenseConfirmation = this.database.prepare(`
       DELETE FROM pending_expense_confirmations
       WHERE conversation_key = ?
+    `);
+    this.insertProcessedExpenseConfirmation = this.database.prepare(`
+      INSERT OR IGNORE INTO processed_expense_confirmations (message_key, processed_at)
+      VALUES (?, ?)
     `);
     this.insertAuthoritativeReply = this.database.prepare(`
       INSERT OR IGNORE INTO pending_authoritative_replies
@@ -359,21 +394,38 @@ export class SqliteReceiptStore {
       || !Number.isSafeInteger(now) || now <= 0) {
       throw new Error('pending expense confirmation lookup is invalid');
     }
+    return this.#withImmediateTransaction(() => this.#takePendingExpenseConfirmation(conversationKey, now));
+  }
+
+  consumePendingExpenseConfirmation(conversationKey, confirmationMessageKey, now = Date.now()) {
+    if (!HASH_KEY_PATTERN.test(String(conversationKey ?? ''))
+      || !HASH_KEY_PATTERN.test(String(confirmationMessageKey ?? ''))
+      || !Number.isSafeInteger(now) || now <= 0) {
+      throw new Error('expense confirmation consumption is invalid');
+    }
     return this.#withImmediateTransaction(() => {
-      const row = this.selectPendingExpenseConfirmation.get(conversationKey);
-      if (!row) return { status: 'missing' };
-      this.deletePendingExpenseConfirmation.run(conversationKey);
-      if (!Number.isSafeInteger(row.expires_at) || row.expires_at < now) {
-        return { status: 'expired' };
-      }
-      let proposal;
-      try {
-        proposal = normalizePendingExpenseProposal(JSON.parse(row.payload_json));
-      } catch {
-        proposal = undefined;
-      }
-      return proposal ? { status: 'active', proposal } : { status: 'missing' };
+      // Keep this hashed tombstone even when no proposal exists or the later API write fails.
+      // Redelivery of an old confirmation must never consume a subsequent proposal.
+      const claimed = this.insertProcessedExpenseConfirmation.run(confirmationMessageKey, now);
+      if (Number(claimed.changes) !== 1) return { status: 'duplicate' };
+      return this.#takePendingExpenseConfirmation(conversationKey, now);
     });
+  }
+
+  #takePendingExpenseConfirmation(conversationKey, now) {
+    const row = this.selectPendingExpenseConfirmation.get(conversationKey);
+    if (!row) return { status: 'missing' };
+    this.deletePendingExpenseConfirmation.run(conversationKey);
+    if (!Number.isSafeInteger(row.expires_at) || row.expires_at < now) {
+      return { status: 'expired' };
+    }
+    let proposal;
+    try {
+      proposal = normalizePendingExpenseProposal(JSON.parse(row.payload_json));
+    } catch {
+      proposal = undefined;
+    }
+    return proposal ? { status: 'active', proposal } : { status: 'missing' };
   }
 
   discardPendingExpenseConfirmation(conversationKey) {
@@ -447,13 +499,40 @@ export class SqliteReceiptStore {
     });
   }
 
-  enqueueTrustedInbound(lookupKeys, messageKey, payload, expiresAt) {
+  endTrustedRun(runKey, now = Date.now()) {
+    if (!HASH_KEY_PATTERN.test(String(runKey ?? ''))
+      || !Number.isSafeInteger(now) || now <= 0
+      || !Number.isSafeInteger(now + TRUSTED_RUN_END_TTL_MS)) {
+      throw new Error('ended trusted run is invalid');
+    }
+    this.#withImmediateTransaction(() => {
+      this.deleteExpiredEndedTrustedRuns.run(now);
+      this.upsertEndedTrustedRun.run(runKey, now + TRUSTED_RUN_END_TTL_MS);
+    });
+  }
+
+  isTrustedRunEnded(runKey, now = Date.now()) {
+    if (!HASH_KEY_PATTERN.test(String(runKey ?? '')) || !Number.isSafeInteger(now) || now <= 0) {
+      throw new Error('ended trusted run lookup is invalid');
+    }
+    this.deleteExpiredEndedTrustedRuns.run(now);
+    return this.selectEndedTrustedRun.get(runKey, now) !== undefined;
+  }
+
+  enqueueTrustedInbound(lookupKeys, messageKey, payload, expiresAt, { discardPendingConfirmation = false } = {}) {
     const keys = [...new Set(lookupKeys.filter((key) => typeof key === 'string' && key.length > 0))];
     if (keys.length === 0 || typeof messageKey !== 'string' || messageKey.length === 0) return;
+    if (typeof discardPendingConfirmation !== 'boolean'
+      || (discardPendingConfirmation && !HASH_KEY_PATTERN.test(String(payload?.conversationKey ?? '')))) {
+      throw new Error('trusted inbound confirmation invalidation is invalid');
+    }
     const payloadJson = JSON.stringify(payload);
     this.#withImmediateTransaction(() => {
       this.#deleteExpiredTrustedInbound(Date.now());
       const inserted = this.insertTrustedInbound.run(messageKey, payloadJson, expiresAt);
+      if (Number(inserted.changes) === 1 && discardPendingConfirmation) {
+        this.deletePendingExpenseConfirmation.run(payload.conversationKey);
+      }
       const reactivated = Number(inserted.changes) === 1
         ? inserted
         : this.reactivateTrustedInbound.run(payloadJson, expiresAt, messageKey);
@@ -597,6 +676,29 @@ export class SqliteReceiptStore {
         for (const lookupKey of group.lookupKeys) insertLookup.run(lookupKey, group.messageKey);
       }
       this.database.exec('DROP TABLE trusted_inbound_messages');
+    });
+  }
+
+  #migrateProcessedExpenseConfirmations() {
+    this.#withImmediateTransaction(() => {
+      const applied = this.database.prepare(`
+        SELECT 1 FROM receipt_store_migrations WHERE migration_key = ?
+      `).get(CONFIRMATION_HISTORY_MIGRATION_KEY);
+      if (applied) return;
+
+      // Old claimed payloads have already been scrubbed, so conservatively block
+      // those message hashes from ever confirming a later proposal after upgrade.
+      const now = Date.now();
+      this.database.prepare(`
+        INSERT OR IGNORE INTO processed_expense_confirmations (message_key, processed_at)
+        SELECT message_key, ? FROM trusted_inbound_queue
+        WHERE claimed_at IS NOT NULL
+          AND length(message_key) = 64
+          AND message_key NOT GLOB '*[^a-f0-9]*'
+      `).run(now);
+      this.database.prepare(`
+        INSERT INTO receipt_store_migrations (migration_key, applied_at) VALUES (?, ?)
+      `).run(CONFIRMATION_HISTORY_MIGRATION_KEY, now);
     });
   }
 

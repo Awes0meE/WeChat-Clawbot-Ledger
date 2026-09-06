@@ -277,6 +277,14 @@ function Set-ConcurrentLiveChange {
 
 $joined = $args -join ' '
 Add-Content -LiteralPath $env:CLAWBOT_TEST_OPENCLAW_TRACE -Value $joined -Encoding UTF8
+if ($args.Count -gt 0 -and $args[0] -in @('gateway', 'channels', 'plugins', 'models') -and
+    -not [string]::Equals($env:OPENCLAW_CONFIG_PATH, $env:CLAWBOT_TEST_OPENCLAW_CONFIG, [StringComparison]::OrdinalIgnoreCase)) {
+  exit 110
+}
+if ($args.Count -ge 2 -and $args[0] -eq 'gateway' -and $args[1] -eq 'restart' -and
+    ($args.Count -ne 3 -or $args[2] -cne '--preserve-definition')) {
+  exit 111
+}
 if ($env:CLAWBOT_TEST_OPENCLAW_FAIL_ON -and $joined.Contains($env:CLAWBOT_TEST_OPENCLAW_FAIL_ON)) {
   if ($env:CLAWBOT_TEST_CHANGE_LIVE_BEFORE_OPENCLAW_FAILURE -eq '1') {
     Set-ConcurrentLiveChange -Marker 'concurrent-post-promotion-change'
@@ -992,7 +1000,7 @@ test('switches atomically from one verified release to a newer release in the sa
       'gateway status',
       'config patch --dry-run --file <patch>',
       'config patch --file <patch>',
-      'gateway restart',
+      'gateway restart --preserve-definition',
       'gateway status',
       'channels status --probe --json',
       'plugins info clawbot-bookkeeping',
@@ -1004,6 +1012,48 @@ test('switches atomically from one verified release to a newer release in the sa
     rmSync(fixture.root, { recursive: true, force: true });
   }
 });
+
+for (const mode of ['switch', 'rollback', 'legacy-rollback']) {
+  test(`preserves the native Gateway definition and explicit configuration during ${mode}`, () => {
+    const fixture = createFixture();
+    try {
+      const originalConfig = structuredClone(fixture.config);
+      if (mode === 'legacy-rollback') {
+        originalConfig.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8180';
+        write(fixture.configPath, `${JSON.stringify(originalConfig, null, 2)}\n`);
+      }
+      const unrelatedConfigPath = join(fixture.root, 'unrelated-openclaw.json');
+      write(unrelatedConfigPath, '{"unrelated":"must-remain-unchanged"}\n');
+      const unrelatedConfigHash = hash(unrelatedConfigPath);
+      const result = runPowerShell(
+        publishScript,
+        publishArguments(fixture, ['-SwitchOpenClaw']),
+        {
+          ...fixture.env,
+          OPENCLAW_CONFIG_PATH: unrelatedConfigPath,
+          ...(mode === 'switch' ? {} : { CLAWBOT_TEST_OPENCLAW_FAIL_ON: 'channels status --probe' }),
+        },
+      );
+      const updated = JSON.parse(readFileSync(fixture.configPath, 'utf8'));
+      const trace = normalizedOpenClawTrace(fixture);
+      if (mode === 'switch') {
+        assertSucceeded(result);
+        assert.equal(updated.agents.entries.bookkeeper.workspace, releasePaths(fixture.releasePath).workspace);
+        assert.equal(trace.at(-1), 'models status --agent bookkeeper --json');
+        assert.equal(trace.filter((line) => line === 'gateway restart --preserve-definition').length, 1);
+      } else {
+        assertFailed(result, mode === 'legacy-rollback' ? /valid bootstrap baseline was restored/iu : /verified configuration backup was restored/iu);
+        originalConfig.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8888';
+        assert.deepEqual(updated, originalConfig);
+        assert.equal(trace.filter((line) => line === 'gateway restart --preserve-definition').length, 2);
+        assert.deepEqual(trace.slice(-2), ['gateway restart --preserve-definition', 'gateway status']);
+      }
+      assert.equal(hash(unrelatedConfigPath), unrelatedConfigHash);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
 
 test('rejects mixed repository/release and A/B release sources without touching OpenClaw', () => {
   const fixture = createFixture();
@@ -1278,7 +1328,7 @@ test('dry-runs the exact OpenClaw config replacement before patch and restart', 
     const trace = readFileSync(fixture.tracePath, 'utf8').trim().split(/\r?\n/u);
     const dryRunIndex = trace.findIndex((line) => line.startsWith('config patch --dry-run --file '));
     const patchIndex = trace.findIndex((line) => line.startsWith('config patch --file '));
-    const restartIndex = trace.findIndex((line) => line === 'gateway restart');
+    const restartIndex = trace.findIndex((line) => line === 'gateway restart --preserve-definition');
     assert.ok(dryRunIndex >= 0);
     assert.ok(patchIndex > dryRunIndex);
     assert.ok(restartIndex > patchIndex);
@@ -1286,7 +1336,7 @@ test('dry-runs the exact OpenClaw config replacement before patch and restart', 
       'gateway status',
       'config patch --dry-run --file <patch>',
       'config patch --file <patch>',
-      'gateway restart',
+      'gateway restart --preserve-definition',
       'gateway status',
       'channels status --probe --json',
       'plugins info clawbot-bookkeeping',
@@ -1361,7 +1411,7 @@ test('bootstraps the exact legacy loopback port before the official config patch
       'config validate',
       'config patch --dry-run --file <patch>',
       'config patch --file <patch>',
-      'gateway restart',
+      'gateway restart --preserve-definition',
       'gateway status',
       'channels status --probe --json',
       'plugins info clawbot-bookkeeping',
@@ -1519,7 +1569,7 @@ test('leaves the exact legacy config untouched when the staged patch dry-run fai
       'config validate',
       'config patch --dry-run --file <patch>',
     ]);
-    assert.equal(normalizedOpenClawTrace(fixture).includes('gateway restart'), false);
+    assert.equal(normalizedOpenClawTrace(fixture).some((line) => line.startsWith('gateway restart')), false);
     assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-bootstrap-stage-')), []);
     assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-patch-')), []);
     assert.equal(`${result.stdout}\n${result.stderr}`.includes('SENSITIVE-FIXTURE-VALUE'), false);
@@ -1552,7 +1602,7 @@ test('does not overwrite a concurrent live config change during legacy bootstrap
     expectedConcurrent.unrelatedTopLevel.keep = ['concurrent-validation-change'];
     assert.deepEqual(current, expectedConcurrent);
     assert.equal(normalizedOpenClawTrace(fixture).some((line) => line.startsWith('config patch')), false);
-    assert.equal(normalizedOpenClawTrace(fixture).includes('gateway restart'), false);
+    assert.equal(normalizedOpenClawTrace(fixture).some((line) => line.startsWith('gateway restart')), false);
     assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-bootstrap-stage-')), []);
     assert.equal(`${result.stdout}\n${result.stderr}`.includes('SENSITIVE-FIXTURE-VALUE'), false);
   } finally {
@@ -1621,7 +1671,7 @@ test('redacts staged validation diagnostics and cleans private artifacts before 
     }
     assert.equal(hash(fixture.configPath), originalHash);
     assert.deepEqual(normalizedOpenClawTrace(fixture), ['gateway status', 'config validate']);
-    assert.equal(normalizedOpenClawTrace(fixture).includes('gateway restart'), false);
+    assert.equal(normalizedOpenClawTrace(fixture).some((line) => line.startsWith('gateway restart')), false);
     assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-bootstrap-stage-')), []);
     assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-patch-')), []);
   } finally {
@@ -1658,7 +1708,7 @@ test('does not promote over a concurrent live config change after the staged pat
       'config patch --dry-run --file <patch>',
       'config patch --file <patch>',
     ]);
-    assert.equal(normalizedOpenClawTrace(fixture).includes('gateway restart'), false);
+    assert.equal(normalizedOpenClawTrace(fixture).some((line) => line.startsWith('gateway restart')), false);
     assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-bootstrap-stage-')), []);
     assert.equal(walkFiles(fixture.backups).some((path) => /\.bak(?:\.\d+)?$|\.pre-update$|openclaw\.json\.\d+\.[0-9a-f-]{36}\.tmp$/u.test(path)), false);
     assert.equal(`${result.stdout}\n${result.stderr}`.includes('SENSITIVE-FIXTURE-VALUE'), false);
@@ -1692,8 +1742,8 @@ test('restores the valid legacy bootstrap baseline after a post-promotion failur
     expectedBaseline.plugins.entries['clawbot-bookkeeping'].config.serverBaseUrl = 'http://127.0.0.1:8888';
     assert.deepEqual(restored, expectedBaseline);
     const trace = normalizedOpenClawTrace(fixture);
-    assert.equal(trace.filter((line) => line === 'gateway restart').length, 2);
-    assert.deepEqual(trace.slice(-2), ['gateway restart', 'gateway status']);
+    assert.equal(trace.filter((line) => line === 'gateway restart --preserve-definition').length, 2);
+    assert.deepEqual(trace.slice(-2), ['gateway restart --preserve-definition', 'gateway status']);
 
     const backupNames = readdirSync(fixture.backups).filter((name) => name.endsWith('.json'));
     assert.equal(backupNames.length, 2);
@@ -1744,7 +1794,7 @@ test('refuses to roll back over a concurrent live config change after legacy pro
     ];
     expectedConcurrent.agents.entries.bookkeeper.workspace = expectedReleasePaths.workspace;
     assert.deepEqual(current, expectedConcurrent);
-    assert.equal(normalizedOpenClawTrace(fixture).filter((line) => line === 'gateway restart').length, 1);
+    assert.equal(normalizedOpenClawTrace(fixture).filter((line) => line === 'gateway restart --preserve-definition').length, 1);
     assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-bootstrap-stage-')), []);
     assert.equal(`${result.stdout}\n${result.stderr}`.includes('SENSITIVE-FIXTURE-VALUE'), false);
   } finally {
@@ -1781,7 +1831,7 @@ test('refuses a concurrent live config change while legacy rollback is being pre
     expectedConcurrent.agents.entries.bookkeeper.workspace = expectedReleasePaths.workspace;
     expectedConcurrent.unrelatedTopLevel.keep = ['concurrent-rollback-preparation-change'];
     assert.deepEqual(JSON.parse(readFileSync(fixture.configPath, 'utf8')), expectedConcurrent);
-    assert.equal(normalizedOpenClawTrace(fixture).filter((line) => line === 'gateway restart').length, 1);
+    assert.equal(normalizedOpenClawTrace(fixture).filter((line) => line === 'gateway restart --preserve-definition').length, 1);
     assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-bootstrap-stage-')), []);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
@@ -1807,7 +1857,7 @@ test('refuses rollback when the live config is deleted during legacy rollback pr
 
     assertFailed(result, /changed while rollback|atomic replacement|rollback was refused|destination changed/iu);
     assert.equal(existsSync(fixture.configPath), false);
-    assert.equal(normalizedOpenClawTrace(fixture).filter((line) => line === 'gateway restart').length, 1);
+    assert.equal(normalizedOpenClawTrace(fixture).filter((line) => line === 'gateway restart --preserve-definition').length, 1);
     assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-bootstrap-stage-')), []);
     assert.deepEqual(readdirSync(dirname(fixture.configPath)).filter((name) => name.startsWith('.openclaw-rollback-')), []);
     assert.equal(`${result.stdout}\n${result.stderr}`.includes('SENSITIVE-FIXTURE-VALUE'), false);
@@ -1840,7 +1890,7 @@ test('refuses to roll back a normal release switch over a concurrent live config
     expectedConcurrent.agents.entries.bookkeeper.workspace = expectedReleasePaths.workspace;
     expectedConcurrent.unrelatedTopLevel.keep = ['concurrent-post-promotion-change'];
     assert.deepEqual(JSON.parse(readFileSync(fixture.configPath, 'utf8')), expectedConcurrent);
-    assert.equal(normalizedOpenClawTrace(fixture).filter((line) => line === 'gateway restart').length, 1);
+    assert.equal(normalizedOpenClawTrace(fixture).filter((line) => line === 'gateway restart --preserve-definition').length, 1);
     assert.deepEqual(readdirSync(fixture.backups).filter((name) => name.startsWith('.openclaw-patch-')), []);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
@@ -2001,7 +2051,7 @@ test('rolls back a verified config backup after a post-patch failure', () => {
     assert.equal(backups.length, 1);
     assert.equal(hash(join(fixture.backups, backups[0])), originalHash);
     const trace = readFileSync(fixture.tracePath, 'utf8').trim().split(/\r?\n/u);
-    assert.equal(trace.filter((line) => line === 'gateway restart').length, 2);
+    assert.equal(trace.filter((line) => line === 'gateway restart --preserve-definition').length, 2);
     const aclTrace = readFileSync(fixture.aclTracePath, 'utf8').trim().split(/\r?\n/u);
     assert.deepEqual(aclTrace.slice(-2), ['protect', 'verify']);
   } finally {
@@ -2023,7 +2073,7 @@ test('exit-zero unhealthy or malformed WeChat channel JSON rolls back without di
       assert.equal(hash(fixture.configPath), originalHash, mode);
       assert.equal(`${result.stdout}\n${result.stderr}`.includes('SENSITIVE-CHANNEL-ERROR-MUST-NOT-APPEAR'), false, mode);
       const trace = readFileSync(fixture.tracePath, 'utf8').trim().split(/\r?\n/u);
-      assert.equal(trace.filter((line) => line === 'gateway restart').length, 2, mode);
+      assert.equal(trace.filter((line) => line === 'gateway restart --preserve-definition').length, 2, mode);
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }
@@ -2043,7 +2093,7 @@ test('rolls back and reloads the verified config when live patch reports failure
     assert.equal(hash(fixture.configPath), originalHash);
 
     const trace = readFileSync(fixture.tracePath, 'utf8').trim().split(/\r?\n/u);
-    assert.equal(trace.filter((line) => line === 'gateway restart').length, 1);
+    assert.equal(trace.filter((line) => line === 'gateway restart --preserve-definition').length, 1);
     assert.equal(trace.at(-1), 'gateway status');
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
@@ -2061,7 +2111,7 @@ test('atomically restores a deleted live config from the verified protected back
     );
     assertFailed(result, /failed|rollback|restored/iu);
     assert.equal(hash(fixture.configPath), originalHash);
-    assert.deepEqual(normalizedOpenClawTrace(fixture).slice(-2), ['gateway restart', 'gateway status']);
+    assert.deepEqual(normalizedOpenClawTrace(fixture).slice(-2), ['gateway restart --preserve-definition', 'gateway status']);
     assert.deepEqual(
       readdirSync(dirname(fixture.configPath)).filter((name) => name.startsWith('.openclaw-')),
       [],

@@ -383,7 +383,7 @@ function Test-TunnelInstallExactTask {
             [string]$actions[0].Arguments -cne $ExpectedArguments -or
             -not (Test-TunnelInstallSamePath -Left ([string]$actions[0].WorkingDirectory) -Right $ExpectedWorkingDirectory) -or
             -not (Test-TunnelInstallSameWindowsIdentity -Left ([string]$Task.Principal.UserId) -Right $ExpectedUser) -or
-            [string]$Task.Principal.LogonType -cne 'Interactive' -or
+            [string]$Task.Principal.LogonType -cnotin @('Interactive', 'S4U') -or
             [string]$Task.Principal.RunLevel -cne 'Limited' -or
             $triggers.Count -ne 1 -or
             [string]$triggers[0].CimClass.CimClassName -cne 'MSFT_TaskLogonTrigger' -or
@@ -689,7 +689,7 @@ try {
         -StartWhenAvailable `
         -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries
-    $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
+    $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType S4U -RunLevel Limited
     Assert-NoCloudflaredEnvironmentOverrides
     Assert-NoTunnelServiceOrProcess
     $script:InstallFailureStage = 'TASK_REGISTRATION'

@@ -82,6 +82,10 @@ function apiIpRejection(overrides = {}) {
   };
 }
 
+function mcpIpRejection(overrides = {}) {
+  return apiIpRejection({ path: '/mcp', ...overrides });
+}
+
 async function checkCredentialBoundary({ kind = 'api', statusCode = 400, body, headers = {}, errorCode }) {
   const response = { statusCode, headers, body };
   const { boundary, requests, output } = credentialBoundaryProbe(response);
@@ -101,7 +105,7 @@ async function checkCredentialBoundary({ kind = 'api', statusCode = 400, body, h
   assert.equal(requests[0].url, `https://${ledgerHost}${kind === 'api' ? '/api/v1/accounts/list.json' : '/mcp'}`);
   assert.equal(requests[0].headers.Authorization, 'Bearer SYNTHETIC-TEST-TOKEN');
   assert.equal(requests[0].timeoutMs, 1234);
-  assert.equal(Boolean(requests[0].readBody), kind === 'api');
+  assert.equal(requests[0].readBody, true);
   assert.equal(response.body, '');
   assert.deepEqual(output, []);
 }
@@ -275,22 +279,35 @@ test('API credential boundary accepts only the exact HTTP 400 IP-forbidden envel
   }
 });
 
-test('API credential boundary clears the parsed response body before inspecting cache headers', async () => {
-  let headerReads = 0;
-  const response = {
-    statusCode: 400,
-    body: JSON.stringify(apiIpRejection()),
-    get headers() {
-      headerReads += 1;
-      assert.equal(response.body === '', true, 'body must already be cleared before cache inspection');
-      return {};
-    },
-  };
-  const { boundary, output } = credentialBoundaryProbe(response);
-  assert.equal(await boundary('api', 'synthetic-token-path', 1234), undefined);
-  assert.ok(headerReads > 0);
-  assert.equal(response.body, '');
-  assert.deepEqual(output, []);
+test('MCP credential boundary accepts only the exact HTTP 400 IP-forbidden envelope', async (t) => {
+  for (const [name, document] of [
+    ['upstream envelope', mcpIpRejection()],
+    ['required fields without error message', { success: false, errorCode: 200020, path: '/mcp' }],
+  ]) {
+    await t.test(name, () => checkCredentialBoundary({ kind: 'mcp', body: JSON.stringify(document) }));
+  }
+});
+
+test('credential boundary clears the parsed response body before inspecting cache headers', async (t) => {
+  for (const [kind, document] of [['api', apiIpRejection()], ['mcp', mcpIpRejection()]]) {
+    await t.test(kind, async () => {
+      let headerReads = 0;
+      const response = {
+        statusCode: 400,
+        body: JSON.stringify(document),
+        get headers() {
+          headerReads += 1;
+          assert.equal(response.body === '', true, 'body must already be cleared before cache inspection');
+          return {};
+        },
+      };
+      const { boundary, output } = credentialBoundaryProbe(response);
+      assert.equal(await boundary(kind, 'synthetic-token-path', 1234), undefined);
+      assert.ok(headerReads > 0);
+      assert.equal(response.body, '');
+      assert.deepEqual(output, []);
+    });
+  }
 });
 
 test('API credential boundary rejects invalid HTTP 400 bodies without leaking parser or upstream text', async (t) => {
@@ -329,6 +346,44 @@ test('API credential boundary rejects invalid HTTP 400 bodies without leaking pa
   }
 });
 
+test('MCP credential boundary rejects invalid HTTP 400 bodies without leaking parser or upstream text', async (t) => {
+  const valid = mcpIpRejection();
+  const cases = [
+    ['malformed JSON', '{"errorMessage":"SYNTHETIC-PRIVATE-ERROR-MUST-NOT-LEAK"'],
+    ['empty body', ''],
+    ['HTML error', '<html>SYNTHETIC-PRIVATE-ERROR-MUST-NOT-LEAK</html>'],
+    ['null', 'null'],
+    ['array', JSON.stringify([valid])],
+    ['string', JSON.stringify('SYNTHETIC-PRIVATE-ERROR-MUST-NOT-LEAK')],
+    ['number', '200020'],
+    ['boolean', 'false'],
+    ['empty object', '{}'],
+    ['missing success', JSON.stringify(mcpIpRejection({ success: undefined }))],
+    ['true success', JSON.stringify(mcpIpRejection({ success: true }))],
+    ['string success', JSON.stringify(mcpIpRejection({ success: 'false' }))],
+    ['numeric success', JSON.stringify(mcpIpRejection({ success: 0 }))],
+    ['null success', JSON.stringify(mcpIpRejection({ success: null }))],
+    ['missing error code', JSON.stringify(mcpIpRejection({ errorCode: undefined }))],
+    ['different error code', JSON.stringify(mcpIpRejection({ errorCode: 200021 }))],
+    ['string error code', JSON.stringify(mcpIpRejection({ errorCode: '200020' }))],
+    ['array error code', JSON.stringify(mcpIpRejection({ errorCode: [200020] }))],
+    ['null error code', JSON.stringify(mcpIpRejection({ errorCode: null }))],
+    ['missing path', JSON.stringify(mcpIpRejection({ path: undefined }))],
+    ['API path', JSON.stringify(apiIpRejection())],
+    ['different path', JSON.stringify(mcpIpRejection({ path: '/MCP' }))],
+    ['path with trailing slash', JSON.stringify(mcpIpRejection({ path: '/mcp/' }))],
+    ['path with query', JSON.stringify(mcpIpRejection({ path: '/mcp?probe=1' }))],
+    ['array path', JSON.stringify(mcpIpRejection({ path: ['/mcp'] }))],
+    ['null path', JSON.stringify(mcpIpRejection({ path: null }))],
+  ];
+  for (const [name, body] of cases) {
+    await t.test(name, () => checkCredentialBoundary({
+      kind: 'mcp', body,
+      errorCode: 'LEDGER_PUBLIC_CREDENTIAL_BOUNDARY_FAILED',
+    }));
+  }
+});
+
 test('credential boundary preserves API and MCP status rejection rules and clears transient bodies', async (t) => {
   for (const [kind, acceptedStatuses] of [['api', [401, 403]], ['mcp', [401, 403, 404]]]) {
     for (const statusCode of acceptedStatuses) {
@@ -336,16 +391,20 @@ test('credential boundary preserves API and MCP status rejection rules and clear
         kind, statusCode, body: 'SYNTHETIC-PRIVATE-ERROR-MUST-NOT-LEAK',
       }));
     }
-    for (const statusCode of [200, 204, 301, 302, 404, 429, 500, 503, '400']) {
+    for (const statusCode of [200, 204, 301, 302, 307, 308, 404, 429, 500, 503, '400']) {
       if (acceptedStatuses.includes(statusCode)) continue;
       await t.test(`${kind} rejects ${typeof statusCode} ${statusCode}`, () => checkCredentialBoundary({
-        kind, statusCode, body: JSON.stringify(apiIpRejection()),
+        kind, statusCode, body: JSON.stringify(kind === 'api' ? apiIpRejection() : mcpIpRejection()),
         errorCode: 'LEDGER_PUBLIC_CREDENTIAL_BOUNDARY_FAILED',
       }));
     }
   }
   await t.test('MCP rejects the API HTTP 400 envelope', () => checkCredentialBoundary({
     kind: 'mcp', body: JSON.stringify(apiIpRejection()),
+    errorCode: 'LEDGER_PUBLIC_CREDENTIAL_BOUNDARY_FAILED',
+  }));
+  await t.test('API rejects the MCP HTTP 400 envelope', () => checkCredentialBoundary({
+    body: JSON.stringify(mcpIpRejection()),
     errorCode: 'LEDGER_PUBLIC_CREDENTIAL_BOUNDARY_FAILED',
   }));
 });
@@ -356,10 +415,10 @@ test('credential boundary rejects cached rejection responses and clears the body
     { 'cache-control': 'public, max-age=0' },
     { 'cache-control': 'private, max-age=60' },
   ];
-  for (const [kind, statusCode] of [['api', 400], ['api', 401], ['mcp', 403]]) {
+  for (const [kind, statusCode] of [['api', 400], ['api', 401], ['mcp', 400], ['mcp', 403]]) {
     for (const headers of cachedHeaders) {
       await t.test(`${kind} ${statusCode} ${JSON.stringify(headers)}`, () => checkCredentialBoundary({
-        kind, statusCode, headers, body: JSON.stringify(apiIpRejection()),
+        kind, statusCode, headers, body: JSON.stringify(kind === 'api' ? apiIpRejection() : mcpIpRejection()),
         errorCode: 'LEDGER_PUBLIC_CACHE_FAILED',
       }));
     }
@@ -532,12 +591,32 @@ test('Windows handoff revalidates the complete production task before starting i
   assert.doesNotMatch(source, /\$tasks\s*=\s*@\(Get-ScheduledTask[\s\S]*?Start-ScheduledTask\s+-InputObject\s+\$tasks\[0\]/iu);
 });
 
-test('README quick commands pass the required release, Tunnel, and local-acceptance identities', () => {
+test('README links to the runbook with the required release, Tunnel, and local-acceptance identities', () => {
   const source = readRequired(readmePath);
+  const runbook = readRequired(runbookPath);
 
-  assert.match(source, /publish-openclaw-release\.ps1[\s\S]*-SourceRoot[\s\S]*-ReleaseRoot[\s\S]*-BackupRoot[\s\S]*-OpenClawConfigPath[\s\S]*-ReleaseOnly/iu);
-  assert.match(source, /publish-openclaw-release\.ps1[\s\S]*-SwitchOpenClaw[\s\S]*-ExistingReleasePath/iu);
-  assert.match(source, /install-ledger-tunnel-task\.ps1[\s\S]*-CredentialPath[\s\S]*-TunnelConfigPath[\s\S]*-ExpectedCloudflaredSha256/iu);
-  assert.match(source, /test-ledger-local\.ps1[\s\S]*-ReleasePath[\s\S]*-CredentialPath[\s\S]*-ExpectedCloudflaredSha256/iu);
-  assert.doesNotMatch(source, /\$approvedCloudflaredSha256\s*=\s*\(Get-FileHash/iu);
+  assert.match(source, /\[[^\]]+\]\(WINDOWS-HANDOFF\.md\)/u);
+  assert.match(source, /\[[^\]]+\]\(docs\/ledger-cloudflare-runbook\.md\)/u);
+
+  const releaseArguments = runbook.match(/\$releaseArguments\s*=\s*@\{[^]*?\n\}/u)?.[0] ?? '';
+  for (const name of ['SourceRoot', 'ReleaseRoot', 'BackupRoot', 'OpenClawConfigPath']) {
+    assert.match(releaseArguments, new RegExp(`^\\s+${name}\\s*=`, 'mu'));
+  }
+  const releaseCommands = runbook.split(/\r?\n/u).filter((line) => (
+    line.startsWith('.\\scripts\\publish-openclaw-release.ps1 ') && !line.includes('-WhatIf')
+  ));
+  assert.match(releaseCommands.find((line) => line.includes('-ReleaseOnly')) ?? '', /@releaseArguments\b/u);
+  const switchCommand = releaseCommands.find((line) => line.includes('-SwitchOpenClaw')) ?? '';
+  assert.match(switchCommand, /@releaseArguments\b/u);
+  assert.match(switchCommand, /-ExistingReleasePath\s+\$releasePath\b/u);
+
+  const tunnelCommand = runbook.match(/\.\\scripts\\install-ledger-tunnel-task\.ps1[^]*?(?=\r?\n```)/u)?.[0] ?? '';
+  for (const name of ['CredentialPath', 'TunnelConfigPath', 'ExpectedCloudflaredSha256']) {
+    assert.match(tunnelCommand, new RegExp(`-${name}\\b`, 'u'));
+  }
+  const localAcceptance = runbook.split(/\r?\n/u).find((line) => line.includes('scripts/test-ledger-local.ps1')) ?? '';
+  for (const name of ['ReleasePath', 'CredentialPath', 'TunnelConfigPath', 'ExpectedCloudflaredSha256']) {
+    assert.match(localAcceptance, new RegExp(`-${name}\\b`, 'u'));
+  }
+  assert.doesNotMatch(runbook, /\$approvedCloudflaredSha256\s*=\s*\(Get-FileHash/iu);
 });

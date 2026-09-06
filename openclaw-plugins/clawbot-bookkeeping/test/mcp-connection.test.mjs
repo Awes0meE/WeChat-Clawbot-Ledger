@@ -61,6 +61,19 @@ test('fails safely when the configured owner MCP token is empty', async () => {
   );
 });
 
+test('does not expose token-file errors when the owner MCP credential cannot be read', async () => {
+  const resolve = createOwnerMcpConnectionResolver({
+    config: ownerConfig,
+    serverBaseUrl: 'http://127.0.0.1:8888',
+    mcpTokenPath: 'unused-token-path',
+    readToken() { throw new Error('private fixture path and diagnostic'); },
+  });
+  await assert.rejects(
+    () => resolve({ messageChannel: 'openclaw-weixin', requesterSenderId: 'alice' }),
+    { message: 'MCP token is unavailable.' },
+  );
+});
+
 test('rejects every server base URL except the exact local ezBookkeeping origin', () => {
   for (const serverBaseUrl of [
     'https://127.0.0.1:8888',

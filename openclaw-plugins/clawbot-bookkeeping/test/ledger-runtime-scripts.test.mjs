@@ -347,7 +347,19 @@ function Stop-ScheduledTask {
     $global:trace += 'stop-task'
     if ($global:scenario -ne 'external-listener-after-stop') { $global:phase = 'stopped' }
 }
-function Start-ScheduledTask { [CmdletBinding()] param([object]$InputObject) if ($InputObject -ne $global:task) { throw 'Wrong task object.' }; $global:trace += 'start-task'; $global:phase = if ($global:task.Actions[0].Arguments -eq 'server run') { 'old' } else { 'new' } }
+function Start-ScheduledTask {
+    [CmdletBinding()] param([object]$InputObject)
+    if ($InputObject -ne $global:task) { throw 'Wrong task object.' }
+    $global:trace += 'start-task'
+    $global:phase = if ($global:task.Actions[0].Arguments -eq 'server run') { 'old' } else { 'new' }
+    if ($global:phase -eq 'new' -and $global:scenario.StartsWith('startup-')) {
+        $global:phase = 'exited'
+        $global:task.State = 'Ready'
+        if ($global:scenario -eq 'startup-foreign-task') { $global:task.Actions[0].Execute = 'C:\\Other\\unknown.exe' }
+    } else {
+        $global:task.State = 'Running'
+    }
+}
 function Get-NetTCPConnection {
     [CmdletBinding()] param([string]$State, [int]$LocalPort)
     if ($LocalPort -eq 8888) {
@@ -357,6 +369,10 @@ function Get-NetTCPConnection {
         }
     }
     if ($global:scenario -eq 'target-port-occupied' -and $LocalPort -eq 8888) { return [pscustomobject]@{ LocalAddress = '127.0.0.1'; LocalPort = 8888; OwningProcess = 9001 } }
+    if ($global:phase -eq 'exited' -and $LocalPort -eq 8888) {
+        if ($global:scenario -eq 'startup-foreign-listener') { return [pscustomobject]@{ LocalAddress = '127.0.0.1'; LocalPort = 8888; OwningProcess = 9001 } }
+        if ($global:scenario -eq 'startup-detached-listener') { return [pscustomobject]@{ LocalAddress = '127.0.0.1'; LocalPort = 8888; OwningProcess = 4200 } }
+    }
     if ($global:scenario -eq 'wrong-owner' -and $LocalPort -eq 8180) { return [pscustomobject]@{ LocalAddress = '127.0.0.1'; LocalPort = 8180; OwningProcess = 9001 } }
     if ($global:scenario -eq 'owner-changed-before-stop' -and $global:preflightExported -and $LocalPort -eq 8180) { return [pscustomobject]@{ LocalAddress = '127.0.0.1'; LocalPort = 8180; OwningProcess = 9001 } }
     if ($global:phase -eq 'old' -and $LocalPort -eq 8180) { return [pscustomobject]@{ LocalAddress = '127.0.0.1'; LocalPort = 8180; OwningProcess = 4100 } }
@@ -374,7 +390,7 @@ function Stop-Process { [CmdletBinding()] param([int]$Id, [switch]$Force) if ($I
 function Invoke-RestMethod {
     [CmdletBinding()] param([string]$Uri, [int]$MaximumRedirection, [int]$TimeoutSec)
     if ($global:scenario -eq 'old-unhealthy' -and $Uri -like '*:8180/*') { return [pscustomobject]@{ success = $false } }
-    if ($global:scenario -in @('post-edit-unhealthy', 'rollback-task-replaced') -and $Uri -like '*:8888/*') { return [pscustomobject]@{ success = $false } }
+    if (($global:scenario -in @('post-edit-unhealthy', 'rollback-task-replaced') -or $global:phase -eq 'exited') -and $Uri -like '*:8888/*') { return [pscustomobject]@{ success = $false } }
     return [pscustomobject]@{ success = $true }
 }
 function Invoke-WebRequest {
@@ -430,7 +446,7 @@ function Get-ScheduledTask { [CmdletBinding()] param([string]$TaskName, [string]
 function New-ScheduledTaskAction { [CmdletBinding()] param([string]$Execute, [string]$Argument, [string]$WorkingDirectory) return [pscustomobject]@{ Execute = $Execute; Arguments = $Argument; WorkingDirectory = $WorkingDirectory } }
 function New-ScheduledTaskTrigger { [CmdletBinding()] param([switch]$AtLogOn, [string]$User) return [pscustomobject]@{} }
 function New-ScheduledTaskSettingsSet { [CmdletBinding()] param([int]$RestartCount, [TimeSpan]$RestartInterval, [TimeSpan]$ExecutionTimeLimit, [string]$MultipleInstances, [switch]$StartWhenAvailable, [switch]$AllowStartIfOnBatteries, [switch]$DontStopIfGoingOnBatteries) return [pscustomobject]@{} }
-function New-ScheduledTaskPrincipal { [CmdletBinding()] param([string]$UserId, [string]$LogonType, [string]$RunLevel) return [pscustomobject]@{} }
+function New-ScheduledTaskPrincipal { [CmdletBinding()] param([string]$UserId, [string]$LogonType, [string]$RunLevel) if ($LogonType -cne 'S4U' -or $RunLevel -cne 'Limited') { throw 'Test instance must run in a password-free background session.' }; return [pscustomobject]@{} }
 function Register-ScheduledTask {
     [CmdletBinding()] param([string]$TaskName, [object]$Action, [object]$Trigger, [object]$Settings, [object]$Principal, [string]$Description, [switch]$Force)
     if ($Force) { throw 'Installer used Force.' }
@@ -1421,6 +1437,46 @@ test('migration rollback never force-overwrites a task replaced after exact reva
     rmSync(fixture.directory, { recursive: true, force: true });
   }
 });
+
+test('migration rollback restores the INI and legacy task after the new service exits during startup', () => {
+  const fixture = makeMigrationFixture();
+  try {
+    const wrapperPath = join(fixture.directory, 'migration-wrapper.ps1');
+    writeMigrationWrapper(wrapperPath);
+    const originalConfig = readFileSync(fixture.configPath);
+    const result = runPowerShell([
+      '-File', wrapperPath, migrationScript, 'startup-exited',
+      fixture.installDirectory, fixture.backupRoot, fixture.openClawConfigPath, process.execPath,
+    ]);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.match(result.stdout, /stop-task,task-explicit,start-task,task-legacy,start-task/u);
+    assert.equal(result.stdout.includes('stop-process-'), false);
+    assert.deepEqual(readFileSync(fixture.configPath), originalConfig);
+  } finally {
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+for (const scenario of ['startup-foreign-listener', 'startup-foreign-task', 'startup-detached-listener']) {
+  test(`migration rollback rejects ${scenario} without controlling another task or listener`, () => {
+    const fixture = makeMigrationFixture();
+    try {
+      const wrapperPath = join(fixture.directory, 'migration-wrapper.ps1');
+      writeMigrationWrapper(wrapperPath);
+      const result = runPowerShell([
+        '-File', wrapperPath, migrationScript, scenario,
+        fixture.installDirectory, fixture.backupRoot, fixture.openClawConfigPath, process.execPath,
+      ]);
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.match(result.stdout, /stop-task,task-explicit,start-task\s*$/u);
+      assert.equal(result.stdout.includes('stop-process-'), false);
+      assert.equal(result.stdout.includes('task-legacy'), false);
+      assert.match(readFileSync(fixture.configPath, 'utf8'), /http_port = 8888/u);
+    } finally {
+      rmSync(fixture.directory, { recursive: true, force: true });
+    }
+  });
+}
 
 test('migration restores its persisted task definition when task update throws after mutation', () => {
   const fixture = makeMigrationFixture();

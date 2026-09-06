@@ -16,12 +16,14 @@ Browser -> ledger.66ccff-labs.com -> Cloudflare Tunnel
 
 - Windows is the active always-on host; the former Mac receiver is stopped.
 - `openclaw-plugins/clawbot-bookkeeping` owns trusted-message correlation, category validation, deduplication, and local API writes.
-- Its local SQLite state also carries pending confirmations, trusted tool bindings, and authoritative replies across Codex/OpenClaw instance boundaries.
+- Its local SQLite state also carries pending confirmations, trusted tool bindings, and authoritative replies across Codex/OpenClaw instance boundaries. `ended_trusted_runs` revokes ended runs; `processed_expense_confirmations` permanently deduplicates confirmation message hashes; `receipt_store_migrations` records the one-time import of previously claimed message hashes. Preserve these records during upgrades.
 - `openclaw-plugins/openclaw-weixin-stable-id` preserves Tencent message IDs and sender metadata.
 - `openclaw-workspace/AGENTS.md` is the runtime prompt for the dedicated bookkeeper, not this repository guide.
 - Production OpenClaw loads an immutable, hash-verified release outside this Git checkout. Development and integration work uses `127.0.0.1:18888` with separate config, secrets, storage, and SQLite.
 - The Ledger Tunnel supervisor publishes only after it verifies the exact production port owner, explicit config, health JSON, and login-page fingerprint; origin degradation fails closed.
-- Deterministic HTTP summaries are live. Native MCP history queries are implemented but remain unavailable until the local MCP service and its separate token are enabled through the documented interactive setup.
+- Deterministic HTTP summaries and owner-scoped MCP history queries are live. The local MCP service and its separate token were enabled on 2026-09-07; local connection, tool discovery, an authorized public connection rejection check, and a real WeChat history query passed. See `docs/handoffs/2026-09-07-history-query-activation.md` for the verification scope.
+- The dedicated bookkeeper uses `tools.profile=full` with an exact six-tool `tools.allow` list. The minimal base profile filters out the native MCP history tool before that allowlist is applied; preserve the exact allowlist when maintaining this configuration.
+- Production release `c05813e16d5c87096dc379fc51c00fad648b0b94` repairs the cross-instance write regression. Strict local checks passed 14/14; real WeChat write-history-write and filtered-summary checks passed. The system audit and remaining acceptance limits are recorded in `docs/handoffs/2026-09-07-bookkeeping-system-audit.md`.
 
 ## Safety boundaries
 
@@ -45,7 +47,7 @@ npm.cmd test
 
 Set-Location ..\openclaw-weixin-stable-id
 npm.cmd run build
-node --test test\inbound-message-id.test.mjs
+node --test test/*.test.mjs
 
 openclaw gateway status
 openclaw channels status --probe

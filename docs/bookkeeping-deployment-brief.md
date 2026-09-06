@@ -1,6 +1,6 @@
 # 微信账本助理部署方案
 
-更新时间：2026-09-05。当前发布由 Windows 托管；Mac 接收端已停止。家庭网页复用现有 ezBookkeeping UI，通过专用 Cloudflare Tunnel 发布，不迁移 SQLite，不部署账本 Vercel。
+更新时间：2026-09-07。当前发布由 Windows 托管；Mac 接收端已停止。家庭网页复用现有 ezBookkeeping UI，通过专用 Cloudflare Tunnel 发布，不迁移 SQLite，不部署账本 Vercel。当前 release 与实际验收范围见 [系统检查记录](handoffs/2026-09-07-bookkeeping-system-audit.md)。
 
 ## 已定方案
 
@@ -10,13 +10,13 @@ WeChat -> OpenClaw immutable release -> owner-bound OpenAI GPT-5.6 Sol (official
      -> trusted write/confirmation adapter -> 127.0.0.1:8888 ezBookkeeping HTTP API
   -> summarize_expenses -> deterministic read adapter -> ezBookkeeping HTTP API
   -> ezbookkeeping__query_transactions -> requester-scoped read-only MCP
-     (code-ready; local MCP activation still pending)
+     (local MCP enabled; live WeChat history query verified)
 
 Browser -> https://ledger.66ccff-labs.com -> Cloudflare Tunnel
   -> health-gated 127.0.0.1:8888 -> the same ezBookkeeping and SQLite
 ```
 
-手机微信是输入与回复入口，腾讯 iLink 将消息交给 Windows OpenClaw。专用 `bookkeeper` 使用 OpenAI `gpt-5.6-sol`，并通过官方 `@openclaw/codex` harness 和 ChatGPT OAuth 理解账本意图；ezBookkeeping 1.6.1 在 `127.0.0.1:8888` 保存和查询本地 SQLite 数据，测试实例单独使用 `127.0.0.1:18888` 和独立 SQLite。Gateway 也只绑定 loopback。该云端模型处理已获用户明确授权；本机 token、Cloudflare 身份、微信身份、消息 ID、SQLite、交易内容、日志和 OpenClaw 状态不得上传。
+手机微信是输入与回复入口，腾讯 iLink 将消息交给 Windows OpenClaw。专用 `bookkeeper` 使用 OpenAI `gpt-5.6-sol`，并通过官方 `@openclaw/codex` harness 和 ChatGPT OAuth 理解账本意图；ezBookkeeping 1.6.1 在 `127.0.0.1:8888` 保存和查询本地 SQLite 数据，测试实例单独使用 `127.0.0.1:18888` 和独立 SQLite。Gateway 也只绑定 loopback。该云端模型处理已获用户明确授权，账本请求和必要查询结果可进入当前 ChatGPT OAuth 下的 Codex 会话。本机 token、Cloudflare 身份、微信身份、消息 ID、SQLite、交易数据、日志和 OpenClaw 状态不得提交到 Git、公开发布或导出至未授权服务。
 
 HTTP 写入、对话确认和确定性汇总已经建立。ezBookkeeping 原生 MCP 是否启用、独立 MCP token 是否存在以及 Ledger 公网入口是否完成，必须以本机/公网实时验收为准；代码或文档存在不能替代端到端证据。
 
@@ -24,12 +24,13 @@ HTTP 写入、对话确认和确定性汇总已经建立。ezBookkeeping 原生 
 
 ## 为什么采用混合接入
 
-写入继续使用定制工具。`record_expense` 处理明确支出；`prepare_expense` 将需要澄清的完整候选存为十分钟待确认提案且不访问账本；`resolve_expense_confirmation` 只接受可信当前消息中的简短确认或取消，并在确认后复用原消息时间和同一套写入事务。它们关联可信微信元数据，以 `channel + messageId` 持久去重。短期工具绑定、待确认提案和权威回执交接均存在本地 SQLite，确认或回执发送跨插件实例时仍可恢复；回执候选不唯一则失败关闭。原生 MCP 的 `add_transaction` 没有这层消息关联和去重，因此绝不向代理开放。
+写入继续使用定制工具。`record_expense` 处理明确支出；`prepare_expense` 将需要澄清的完整候选存为十分钟待确认提案且不访问账本；`resolve_expense_confirmation` 只接受可信当前消息中的简短确认或取消，并在确认后复用原消息时间和同一套写入事务。它们关联可信微信元数据，以 `channel + messageId` 持久去重。SQLite 的 ended_trusted_runs 保存结束运行撤销，processed_expense_confirmations 持久去重确认消息哈希，receipt_store_migrations 记录一次性历史哈希导入；升级保留这些记录。短期工具绑定、待确认提案和权威回执交接均存在本地 SQLite，确认或回执发送跨插件实例时仍可恢复；回执候选不唯一则失败关闭。原生 MCP 的 `add_transaction` 没有这层消息关联和去重，因此绝不向代理开放。
 
-读取分两条路径：
+读取分三条路径：
 
 - `summarize_expenses` 通过 HTTP API 读取固定账户的支出，由代码按整数分计算今天、本周、本月、上月、今年或自定义范围内的总额、笔数、一级分类汇总和最大三笔。它可按正式分类或备注关键词过滤，不依赖模型心算。
-- `ezbookkeeping__query_transactions` 在完成交互式 MCP 激活后，使用 ezBookkeeping 原生 MCP 回答最近记录、商家或备注等灵活历史问题。第一版服务级与代理级都只允许 `query_transactions`，不开放余额、分类、标签、汇率和任何写工具。默认 3 条、最多 10 条只是专用代理的回复策略，不是原生 MCP 的项目侧硬限制或安全边界。
+- `find_expenses` 通过 HTTP API 按整数分精确匹配固定可见 SGD 支出账户中的金额，默认查询全部历史，也可指定日期范围；默认返回最近 3 笔、最多 10 笔，有更多记录时明确提示。它不遍历后续页，失败或分页不完整时不得声称没有记录。
+- `ezbookkeeping__query_transactions` 已完成交互式 MCP 激活，使用 ezBookkeeping 原生 MCP 回答最近记录、商家或备注等灵活历史问题。服务级与代理级都只允许 `query_transactions`，不开放余额、分类、标签、汇率和任何写工具。代理使用 `tools.profile=full` 与六项精确 `allow`，避免 minimal profile 提前过滤历史工具。默认 3 条、最多 10 条只是专用代理的回复策略，不是原生 MCP 的项目侧硬限制或安全边界。
 
 Codex 按语义区分写入、待确认、取消和查询；插件不使用商户白名单代替语言理解。消息里出现日期、数量或“支出”不等于要写入；只有明确表达已发生消费且金额明确时才调用一次 `record_expense`。`午饭7.2吗` 先返回完整确认单，单独回复“是”才入账；新的实质消息会废弃旧提案并按新请求处理。专用模型以 `agentRuntime.id: codex` fail closed，不自动退回 Qwen 或其他模型。
 
@@ -88,7 +89,7 @@ Codex 按语义区分写入、待确认、取消和查询；插件不使用商�
 - MCP 历史查询失败：同样回复 `账本暂时连不上，这次没有读取任何数据～ 稍后再试试吧。`，不重试，不展示底层错误。
 - 信息不足：只追问缺失金额、日期或意图，不再统一回复“记账失败，请重新发送一条新消息”。
 
-## 所有者限定的 MCP（待本机激活）
+## 所有者限定的 MCP（本机已激活）
 
 `clawbot-bookkeeping` 注册 requester-scoped connection resolver。只有当前运行同时满足以下条件，才读取 MCP token 并在内存中构造连接：
 
@@ -115,7 +116,7 @@ ezBookkeeping 正式目录为 `D:\Clawbot\ezbookkeeping`，配置文件为 `D:\C
 
 测试目录 `D:\Clawbot\ezbookkeeping-test` 只白名单复制程序资产，使用 `18888`、独立 config/storage/log/secret/token/SQLite 和受控 marker；不得复制正式数据。初始化密码只在 visible terminal 以 `Read-Host -AsSecureString` 输入。
 
-已部署主机的续接先按 [活动交接点](handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md) 只读核对，不重跑安装或初始化。以下为不同安装状态的独立入口，先用 `-WhatIf` 预演；预演不得修改配置、计划任务、服务或 token，也不会询问密码。
+已部署主机的续接先按 [系统检查记录](handoffs/2026-09-07-bookkeeping-system-audit.md) 只读核对，不重跑安装或初始化。以下为不同安装状态的独立入口，先用 `-WhatIf` 预演；预演不得修改配置、计划任务、服务或 token，也不会询问密码。
 
 首次安装且没有同名任务时，在程序与显式配置已经就绪后创建正式任务；预演核对无误后才去掉 `-WhatIf`：
 
@@ -139,7 +140,7 @@ ezBookkeeping 正式目录为 `D:\Clawbot\ezbookkeeping`，配置文件为 `D:\C
 
 生产 OpenClaw 不再加载 Git checkout。发布器从干净且 HEAD 不变的提交创建 immutable release，使用 lockfile 安装运行依赖，对全部 payload 记录长度和 SHA-256，并拒绝 missing/extra/changed/reparse/out-of-root。切换前只生成不含 token/owner/channel 的最小 patch，先 dry-run；任何 post-patch 失败恢复 owner-only 配置备份并重启 Gateway。
 
-MCP 激活是独立可选操作，不属于 Ledger 网页上线的默认步骤。截至 2026-09-05 它仍未启用；只有用户再次明确选择激活后，才在可见终端预演并执行：
+MCP 激活是独立可选操作，不属于 Ledger 网页上线的默认步骤。本机已于 2026-09-07 经用户授权完成激活与真实微信查询验收，不应重复生成令牌。以下命令仅供尚未激活且所有者明确选择开通的部署，在可见终端预演并执行：
 
 ```powershell
 .\scripts\configure-ezbookkeeping-mcp.ps1 -WhatIf
@@ -182,7 +183,7 @@ openclaw channels status --probe
 openclaw plugins info clawbot-bookkeeping
 ```
 
-本机、公网与重启验收使用 [运维手册](ledger-cloudflare-runbook.md) 的完整参数和顺序；恢复当前部署时从 [活动交接点](handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md) 的剩余步骤继续。
+本机、公网与重启验收使用 [运维手册](ledger-cloudflare-runbook.md) 的完整参数和顺序；恢复当前部署时先看 [系统检查记录](handoffs/2026-09-07-bookkeeping-system-audit.md)，再按手册验证，不重复早期已完成的部署步骤。
 
 动态 MCP 只由插件 manifest 和 requester-scoped resolver 声明，不得为诊断方便新增顶层 `mcp.servers` 静态连接。任何运行时配置或部署变更前，必须先执行 `WINDOWS-HANDOFF.md` 的只读属性名断言；若顶层 `mcp.servers` 下存在 `ezbookkeeping`，停止部署并另行审核移除，不能自动删除或显示其内容。该断言与账本插件自动化测试共同证明没有静态后备项，且 manifest、resolver 和代理 allowlist 只允许 `query_transactions`、源码和测试明确排除 `add_transaction`；stable-ID 插件另有独立测试。由所有者在微信核对写入、确认及支持的 HTTP 汇总不会越权；仅在 MCP 已激活后，再以真实历史查询闭合该动态连接的端到端证据。未激活时记录为未启用，不为完成网页验收而生成 MCP token。
 

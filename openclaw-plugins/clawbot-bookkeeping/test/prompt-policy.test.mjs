@@ -101,7 +101,8 @@ test('allows exactly the conversational bookkeeping and read tools', () => {
     'find_expenses',
     'ezbookkeeping__query_transactions',
   ]);
-  assert.equal(bookkeeper.tools.profile, 'minimal');
+  // The minimal profile removes native MCP tools before the exact allowlist runs.
+  assert.equal(bookkeeper.tools.profile, 'full');
   assert.equal(bookkeeper.model.primary, 'openai/gpt-5.6-sol');
   assert.equal(bookkeeper.models['openai/gpt-5.6-sol'].agentRuntime.id, 'codex');
   assert.equal(bookkeeper.thinkingDefault, 'low');
