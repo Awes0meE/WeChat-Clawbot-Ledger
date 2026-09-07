@@ -30,7 +30,9 @@
 - 隔离 `18888` 实例真实增查改删返回 `LEDGER_CRUD_ACCEPTANCE_OK`，自身测试记录已清理，基线恢复。
 - 正式 owner 只读检查通过；原生 MCP 的实际三笔只读结果通过新格式化校验。未将交易、身份、令牌或聊天正文写入仓库。
 
-发布包 `3ed3f1bff5a7119d066f75df03d3f59f5fc0b76b` 已构建并通过全部 38,397 份文件的哈希、结构与 ACL 校验，包含新的历史格式化模块。正式切换状态在本机检查后更新；正式服务始终从独立的 immutable release 加载。
+正式 release `3ed3f1bff5a7119d066f75df03d3f59f5fc0b76b` 已构建、切换并通过全部 38,397 份文件的哈希、结构与 ACL 校验，包含新的历史格式化模块。发布与切换分别返回 `OPENCLAW_RELEASE_PUBLISHED`、`OPENCLAW_RELEASE_SWITCHED`，退出码均为 0。正式服务从该独立 immutable release 加载。
+
+切换后的严格本机检查 14/14 通过，生产监听、配置、任务、测试隔离、release 和 Tunnel 检查均为 pass。实际插件/workspace 指向新 release，Gateway、微信通道、插件及官方 Codex 模型检查通过；原 Gateway 任务定义哈希一致，full 与精确六工具保持不变。只读 SQLite 核验确认新增来源表、回复来源列及迁移标记存在，原确认去重迁移也仍在。
 
 用户随后明确取消本轮真实微信验收。本轮没有向微信发送测试消息，也没有新增正式测试交易；真实三笔 MCP 查询只用于本机只读格式验证。匿名公网登录页返回 200、ezBookkeeping 指纹和 HSTS 正常，Cloudflare 状态为 DYNAMIC；匿名 MCP 被严格 IP 限制拒绝。上述检查不等于本轮微信端到端验收。
 
