@@ -23,7 +23,7 @@ Browser -> ledger.66ccff-labs.com -> Cloudflare Tunnel
 - The Ledger Tunnel supervisor publishes only after it verifies the exact production port owner, explicit config, health JSON, and login-page fingerprint; origin degradation fails closed.
 - Deterministic HTTP summaries and owner-scoped MCP history queries are live. The local MCP service and its separate token were enabled on 2026-09-07; local connection, tool discovery, an authorized public connection rejection check, and a real WeChat history query passed. See `docs/handoffs/2026-09-07-history-query-activation.md` for the verification scope.
 - The dedicated bookkeeper uses `tools.profile=full` with an exact six-tool `tools.allow` list. The minimal base profile filters out the native MCP history tool before that allowlist is applied; preserve the exact allowlist when maintaining this configuration.
-- Production release `c05813e16d5c87096dc379fc51c00fad648b0b94` repairs the cross-instance write regression. Strict local checks passed 14/14; real WeChat write-history-write and filtered-summary checks passed. The system audit and remaining acceptance limits are recorded in `docs/handoffs/2026-09-07-bookkeeping-system-audit.md`.
+- Production release `1d561835030e880399252baad510cc58381e1eea` also treats meal descriptions such as “中午吃饭” and “晚上吃饭” as message-time expenses when no date or exact clock is supplied. The full suite passed 768/768 and strict local checks passed 14/14. The preceding cross-instance repair, real WeChat acceptance, and current verification scope are recorded in `docs/handoffs/2026-09-07-bookkeeping-system-audit.md`.
 
 ## Safety boundaries
 

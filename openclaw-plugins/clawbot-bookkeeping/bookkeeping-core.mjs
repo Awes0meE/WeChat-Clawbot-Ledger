@@ -18,9 +18,10 @@ const LOCAL_DATE = /^(\d{4})-(\d{2})-(\d{2})$/u;
 const LOCAL_TIME = /^(\d{2}):(\d{2})$/u;
 const EXPLICIT_TIME_CUE = /(?:今天|今日|昨天|昨日|前天|大前天|明天|后天|今晚|昨晚|今早|昨早|凌晨|早上|上午|中午|下午|晚上|周[一二三四五六日天]|星期[一二三四五六日天]|\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*[日号]|\d{1,2}\s*月\s*\d{1,2}\s*[日号]|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|(?:[01]?\d|2[0-3]):[0-5]\d|[零〇一二两三四五六七八九十百\d]{1,3}\s*(?:点|时)(?:\s*[零〇一二两三四五六七八九十百\d]{1,3}\s*分)?)/u;
 const EXPENSE_TIME_EXPRESSIONS = new RegExp(EXPLICIT_TIME_CUE.source, 'gu');
+const VAGUE_DAY_PART = /^(?:凌晨|早上|上午|中午|下午|晚上)$/u;
 
 export class ExpenseRecordingError extends Error {
-  constructor(outcome, { dedupeStatus } = {}) {
+  constructor(outcome, { dedupeStatus, rejectionReason } = {}) {
     const message = outcome === 'not_written'
       ? 'expense was not written'
       : outcome === 'rejected'
@@ -30,6 +31,7 @@ export class ExpenseRecordingError extends Error {
     this.name = 'ExpenseRecordingError';
     this.outcome = outcome;
     if (dedupeStatus) this.dedupeStatus = dedupeStatus;
+    if (rejectionReason === 'time') this.rejectionReason = rejectionReason;
   }
 }
 
@@ -277,7 +279,10 @@ export function resolveExpenseTimestamp({ input, inbound }) {
   if (input.currency !== 'SGD') throw new Error('expense currency must be SGD');
   const receivedTime = normalizeMessageTimestamp(inbound.timestamp);
   if (input.timeMode === 'received') {
-    if (hasExplicitExpenseTimeCue(inbound.content)) {
+    // A bare day part supplies no date or exact clock. Keep the trusted send time
+    // instead of inventing noon/midnight; actual dates and clocks still need evidence.
+    const timeCues = contentBeforeExplicitComment(inbound.content).matchAll(EXPENSE_TIME_EXPRESSIONS);
+    if (Array.from(timeCues).some((match) => !VAGUE_DAY_PART.test(match[0]))) {
       throw new Error('expense occurrence time requires semantic resolution');
     }
     return receivedTime;
@@ -350,6 +355,7 @@ function validateExpenseInput(input, inbound, resolvedTime) {
   const receiptKey = messageReceiptKey(inbound);
   const sourceAmount = parseAmountToMinorUnits(input.amount);
   const comment = resolveExpenseComment(inbound.content, input.comment);
+  if (input.currency !== 'SGD') throw new ExpenseRecordingError('rejected');
   let time;
   try {
     time = resolveExpenseTimestamp({ input, inbound });
@@ -358,7 +364,7 @@ function validateExpenseInput(input, inbound, resolvedTime) {
       throw new Error('stored expense occurrence time does not match its source');
     }
   } catch {
-    throw new ExpenseRecordingError('rejected');
+    throw new ExpenseRecordingError('rejected', { rejectionReason: 'time' });
   }
   return { receiptKey, sourceAmount, comment, time };
 }

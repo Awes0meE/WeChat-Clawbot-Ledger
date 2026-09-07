@@ -566,6 +566,44 @@ test('keeps semantic interpretation in the model while enforcing amount evidence
   assert.equal(requiresExpenseConfirmation('午饭7.2'), false);
 });
 
+for (const dayPart of ['凌晨', '早上', '上午', '中午', '下午', '晚上']) {
+  test(`records an additive expense with only a vague ${dayPart} time cue`, async () => {
+    const timestamp = Date.parse('2026-09-07T12:55:40+08:00') / 1000;
+    const posted = [];
+    const result = await recordExpense({
+      input: receivedExpenseInput({ amount: '9.60' }),
+      inbound: { channel: 'ilink', messageId: `vague-${dayPart}`, content: `${dayPart}吃饭7.1+2.5`, timestamp },
+      store: { claim() { return null; }, complete() {} },
+      api: {
+        async resolveAccountId() { return 'account-1'; },
+        async resolveExpenseCategoryId() { return 'category-1'; },
+        async addTransaction(body) { posted.push(body); return { id: 'vague-time-transaction' }; },
+      },
+    });
+    assert.equal(result.status, 'created');
+    assert.equal(posted.length, 1);
+    assert.equal(posted[0].sourceAmount, 960);
+    assert.equal(posted[0].time, timestamp);
+  });
+}
+
+for (const evidence of ['昨天中午', '明天中午', '今天中午', '9月6号中午', '中午12:00', '下午3点', '昨晚', '今早']) {
+  test(`still requires explicit time parameters for ${evidence}`, async () => {
+    let sideEffects = 0;
+    await assert.rejects(() => recordExpense({
+      input: receivedExpenseInput({ amount: '9.60' }),
+      inbound: {
+        channel: 'ilink', messageId: `explicit-required-${evidence}`, content: `${evidence}吃饭7.1+2.5`,
+        timestamp: Date.parse('2026-09-07T12:55:40+08:00') / 1000,
+      },
+      store: { claim() { sideEffects += 1; return null; } },
+      api: { async resolveAccountId() { sideEffects += 1; } },
+    }), (error) => error instanceof ExpenseRecordingError
+      && error.outcome === 'rejected' && error.rejectionReason === 'time');
+    assert.equal(sideEffects, 0);
+  });
+}
+
 for (const [label, timeEvidence, localTime] of [
   ['colon clock', '昨天18:00', '18:00'],
   ['hyphen date', '2026-09-06'],

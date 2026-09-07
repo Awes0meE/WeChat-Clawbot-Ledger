@@ -2591,6 +2591,62 @@ test('returns the authoritative rich receipt after a trusted expense write', asy
   }
 });
 
+test('records a vague-noon additive expense and keeps questions in confirmation', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const harness = createPluginHarness(tempDirectory, successfulExpenseFetch(requests));
+  const timestamp = Date.parse('2026-09-07T12:55:40+08:00') / 1000;
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '中午吃饭7.1+2.5', messageId: 'vague-noon-sum', timestamp,
+    });
+    const tool = harness.recordExpenseFactory(trustedOwnerContext());
+    const recorded = await tool.execute('vague-noon-sum-call', receivedExpenseParams({ amount: '9.6' }));
+    assert.equal(recorded.details.status, 'created');
+    assert.match(recorded.content[0].text, /- 支出：9\.60 SGD/u);
+    assert.match(recorded.content[0].text, /- 时间：2026\/09\/07 12:55/u);
+    const posted = requests.filter(({ url }) => url.endsWith('/transactions/add.json'));
+    assert.equal(posted.length, 1);
+    assert.equal(JSON.parse(posted[0].options.body).sourceAmount, 960);
+    assert.equal(JSON.parse(posted[0].options.body).time, timestamp);
+
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '中午吃饭7.1+2.5吗', messageId: 'vague-noon-sum-question', timestamp,
+    });
+    const prepared = await tool.execute('vague-noon-question-call', receivedExpenseParams({ amount: '9.6' }));
+    assert.equal(prepared.details.status, 'pending_confirmation');
+    assert.match(prepared.content[0].text, /- 支出：9\.60 SGD/u);
+    assert.equal(requests.filter(({ url }) => url.endsWith('/transactions/add.json')).length, 1);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('describes a time rejection without blaming amount or tone', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const harness = createPluginHarness(tempDirectory, successfulExpenseFetch(requests));
+  try {
+    await receiveTrustedOwnerMessage(harness.inboundHooks, {
+      content: '昨天中午吃饭7.1+2.5', messageId: 'time-rejection-copy',
+      timestamp: Date.parse('2026-09-07T12:55:40+08:00') / 1000,
+    });
+    const result = await harness.recordExpenseFactory(trustedOwnerContext()).execute(
+      'time-rejection-copy-call', receivedExpenseParams({ amount: '9.6' }),
+    );
+    assert.equal(result.details.status, 'rejected');
+    assert.match(result.content[0].text, /时间/u);
+    assert.doesNotMatch(result.content[0].text, /金额|语气/u);
+    assert.equal(requests.length, 0);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
 test('writes the model-resolved occurrence time into both the API and receipt', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');

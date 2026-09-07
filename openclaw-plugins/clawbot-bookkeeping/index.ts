@@ -1118,7 +1118,9 @@ export default definePluginEntry({
         content: [{
           type: 'text' as const,
           text: rejected
-            ? '这笔金额或语气还不够确定，所以我没有入账哦～'
+            ? error.rejectionReason === 'time'
+              ? '这笔消费的时间没能正确识别，所以还没有入账。请补充日期或具体时间后再发一次哦～'
+              : '这笔金额或语气还不够确定，所以我没有入账哦～'
             : unknown
               ? '这次记账结果暂时拿不准，请先看一眼账本，先别重复发送这条消费哦。'
               : '账本暂时连不上，这次没有写入任何数据～ 稍后再试试吧。',
@@ -1320,6 +1322,7 @@ export default definePluginEntry({
             '同一消息中的加法金额表示一笔消费总额，例如“6.5+2.5”必须只调用一次并传入“9”。',
             '如果消息像“午饭7.2吗”一样含有不确定或疑问语气，不要调用本工具，改用 prepare_expense。',
             '必须判断当前消息是否给出消费时间：没有则使用 currency=SGD、timeMode=received；有则使用 timeMode=explicit，并提供 localDate、原文 timeEvidence，以及仅在具体钟点明确时提供 localTime。',
+            '“中午吃饭”“晚上吃饭”和“午饭”“晚饭”一样是消费描述，不是指定时间；没有另外写日期或具体钟点时统一用 timeMode=received，按可信消息发送时间记账。“中午吃饭7.1+2.5”是一笔9.60，不是疑问。',
             '否定、举例、转述、代付、退款、收款、未来计划或查询不是已发生的本人支出；正常对话或查询即可，不要调用写入工具。',
             '工具成功后，最终回复只能原样采用工具返回的“已记账”结果；不得展示思考、参数校验、候选分类或重试过程。',
             CATEGORY_GUIDE,
@@ -1405,6 +1408,7 @@ export default definePluginEntry({
           '例如“午饭7.2吗”应使用本工具，让用户确认你的金额、分类、备注和原消息时间理解。',
           '金额、分类和备注由你根据当前消息理解；不得猜测消息中没有的信息。',
           '必须判断当前消息是否给出消费时间：没有则使用 currency=SGD、timeMode=received；有则使用 timeMode=explicit，并提供 localDate、原文 timeEvidence，以及仅在具体钟点明确时提供 localTime。',
+          '“中午吃饭”“晚上吃饭”和“午饭”“晚饭”一样是消费描述，不是指定时间；没有另外写日期或具体钟点时统一用 timeMode=received，按可信消息发送时间记账。',
           '工具返回后只逐字回复确认单，不展示思考、参数或工具名。',
           CATEGORY_GUIDE,
         ].join('\n'),
