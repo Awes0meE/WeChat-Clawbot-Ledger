@@ -1,6 +1,6 @@
 # 微信账本助理部署方案
 
-更新时间：2026-09-07。当前发布由 Windows 托管；Mac 接收端已停止。家庭网页复用现有 ezBookkeeping UI，通过专用 Cloudflare Tunnel 发布，不迁移 SQLite，不部署账本 Vercel。当前 release 与实际验收范围见 [系统检查记录](handoffs/2026-09-07-bookkeeping-system-audit.md)。
+更新时间：2026-09-07。当前发布由 Windows 托管；Mac 接收端已停止。家庭网页复用现有 ezBookkeeping UI，通过专用 Cloudflare Tunnel 发布，不迁移 SQLite，不部署账本 Vercel。当前 release 与实际验收范围见 [最新审计](handoffs/2026-09-07-history-reply-audit.md)。
 
 ## 已定方案
 

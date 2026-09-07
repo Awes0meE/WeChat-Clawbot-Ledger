@@ -283,6 +283,7 @@ function Copy-BookkeepingSource {
         'adapter.mjs',
         'bookkeeping-core.mjs',
         'categories.mjs',
+        'expense-history.mjs',
         'expense-search.mjs',
         'expense-summary.mjs',
         'index.ts',
@@ -861,6 +862,33 @@ function Assert-OfficialCodexPin {
     }
 }
 
+function Assert-BookkeeperToolPolicy {
+    param([Parameter(Mandatory = $true)]$Config)
+
+    try {
+        $policy = $Config.agents.entries.bookkeeper.tools
+        $expectedTools = @('record_expense', 'prepare_expense', 'resolve_expense_confirmation', 'summarize_expenses', 'find_expenses', 'ezbookkeeping__query_transactions')
+        if ($null -eq $policy -or $policy -isnot [PSCustomObject] -or
+            $policy.profile -cne 'full' -or $policy.allow -isnot [Array] -or
+            $policy.allow.Count -ne $expectedTools.Count) {
+            throw 'invalid'
+        }
+        foreach ($toolName in $expectedTools) {
+            if (@($policy.allow | Where-Object { $_ -is [string] -and $_ -ceq $toolName }).Count -ne 1) {
+                throw 'invalid'
+            }
+        }
+        foreach ($propertyName in @('alsoAllow', 'deny')) {
+            $property = $policy.PSObject.Properties[$propertyName]
+            if ($null -ne $property -and ($property.Value -isnot [Array] -or $property.Value.Count -ne 0)) {
+                throw 'invalid'
+            }
+        }
+    } catch {
+        throw 'The bookkeeper tool policy must use full with exactly the six approved tools and no additional allow or deny rules.'
+    }
+}
+
 function Assert-OpenClawModelPolicyMigrationComplete {
     param([Parameter(Mandatory = $true)]$Config)
 
@@ -1304,6 +1332,9 @@ function Switch-OpenClawRelease {
         throw 'The OpenClaw configuration is not valid JSON.'
     }
     Assert-OfficialCodexPin -Config $config
+    # Keep the verified current policy during upgrades and old-release rollbacks.
+    # Never infer a broader tool policy from a target release's older manifest.
+    Assert-BookkeeperToolPolicy -Config $config
     Assert-OpenClawModelPolicyMigrationComplete -Config $config
     $ownerAllowlistBefore = Get-OwnerAllowlistFingerprint -Config $config
 

@@ -400,6 +400,7 @@ function createFixture() {
     'adapter.mjs',
     'bookkeeping-core.mjs',
     'categories.mjs',
+    'expense-history.mjs',
     'expense-search.mjs',
     'expense-summary.mjs',
     'index.ts',
@@ -457,6 +458,10 @@ function createFixture() {
       entries: {
         bookkeeper: {
           workspace,
+          tools: {
+            profile: 'full',
+            allow: ['record_expense', 'prepare_expense', 'resolve_expense_confirmation', 'summarize_expenses', 'find_expenses', 'ezbookkeeping__query_transactions'],
+          },
           model: { primary: 'openai/gpt-5.6-sol' },
           models: {
             'openai/gpt-5.6-sol': { agentRuntime: { id: 'codex' } },
@@ -591,6 +596,7 @@ test('publishes an immutable hash manifest from the explicit release allowlist',
       'openclaw-plugins/clawbot-bookkeeping/adapter.mjs',
       'openclaw-plugins/clawbot-bookkeeping/bookkeeping-core.mjs',
       'openclaw-plugins/clawbot-bookkeeping/categories.mjs',
+      'openclaw-plugins/clawbot-bookkeeping/expense-history.mjs',
       'openclaw-plugins/clawbot-bookkeeping/expense-search.mjs',
       'openclaw-plugins/clawbot-bookkeeping/expense-summary.mjs',
       'openclaw-plugins/clawbot-bookkeeping/index.ts',
@@ -661,6 +667,25 @@ test('publishes an immutable hash manifest from the explicit release allowlist',
 
     const second = runPowerShell(publishScript, publishArguments(fixture, ['-ReleaseOnly']), fixture.env);
     assertFailed(second, /already exists|immutable/iu);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('release verification requires the imported history formatter even with a rebuilt hash manifest', () => {
+  const fixture = createVerifierFixture();
+  try {
+    const bookkeeping = releasePaths(fixture.releasePath).bookkeeping;
+    write(join(bookkeeping, 'index.ts'), "import './expense-history.mjs';\n");
+    writeManifest(fixture.releasePath);
+    assertSucceeded(runPowerShell(verifyScript, ['-ReleasePath', fixture.releasePath, '-AclExecutable', fixture.aclShim], fixture.env));
+    rmSync(join(bookkeeping, 'expense-history.mjs'));
+    writeManifest(fixture.releasePath);
+    assertFailed(
+      runPowerShell(verifyScript, ['-ReleasePath', fixture.releasePath, '-AclExecutable', fixture.aclShim], fixture.env),
+      /expense-history|history.*module|history.*formatter/iu,
+    );
+    assert.deepEqual(normalizedOpenClawTrace(fixture), []);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -972,6 +997,53 @@ test('accepts an explicit empty bookkeeper fallback list', () => {
       publishArguments(fixture, ['-SwitchOpenClaw']),
       fixture.env,
     ));
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+for (const scenario of ['minimal', 'missing', 'null', 'empty', 'missing-tool', 'extra-tool', 'duplicate-tool', 'also-allow', 'deny']) {
+  test(`refuses the ${scenario} bookkeeper tool policy before any OpenClaw command`, () => {
+    const fixture = createVerifierFixture();
+    try {
+      const tools = fixture.config.agents.entries.bookkeeper.tools;
+      if (scenario === 'minimal') tools.profile = 'minimal';
+      else if (scenario === 'missing') delete fixture.config.agents.entries.bookkeeper.tools;
+      else if (scenario === 'null') fixture.config.agents.entries.bookkeeper.tools = null;
+      else if (scenario === 'empty') tools.allow = [];
+      else if (scenario === 'missing-tool') tools.allow = tools.allow.filter((name) => name !== 'ezbookkeeping__query_transactions');
+      else if (scenario === 'extra-tool') tools.allow.push('exec');
+      else if (scenario === 'duplicate-tool') tools.allow[5] = tools.allow[0];
+      else if (scenario === 'also-allow') tools.alsoAllow = ['exec'];
+      else if (scenario === 'deny') tools.deny = ['record_expense'];
+      write(fixture.configPath, JSON.stringify(fixture.config));
+      const beforeHash = hash(fixture.configPath);
+      const result = runPowerShell(publishScript, publishArguments(fixture, ['-SwitchOpenClaw', '-ExistingReleasePath', fixture.releasePath]), fixture.env);
+      assertFailed(result, /bookkeeper.*tool|six.*tool|tool.*policy/iu);
+      assert.equal(hash(fixture.configPath), beforeHash);
+      assert.deepEqual(normalizedOpenClawTrace(fixture), []);
+      assert.deepEqual(readdirSync(fixture.backups), []);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('switching to a compatible old release preserves the exact approved tools without expanding permissions', () => {
+  const fixture = createVerifierFixture();
+  try {
+    const bookkeeping = releasePaths(fixture.releasePath).bookkeeping;
+    const descriptorPath = join(bookkeeping, 'openclaw.plugin.json');
+    const descriptor = JSON.parse(readFileSync(descriptorPath, 'utf8'));
+    descriptor.contracts.tools = descriptor.contracts.tools.filter((name) => name !== 'find_expenses');
+    write(descriptorPath, JSON.stringify(descriptor));
+    rmSync(join(bookkeeping, 'expense-search.mjs'));
+    rmSync(join(bookkeeping, 'expense-history.mjs'));
+    writeManifest(fixture.releasePath);
+    fixture.config.agents.entries.bookkeeper.tools.allow.reverse();
+    write(fixture.configPath, JSON.stringify(fixture.config));
+    assertSucceeded(runPowerShell(publishScript, publishArguments(fixture, ['-SwitchOpenClaw', '-ExistingReleasePath', fixture.releasePath]), fixture.env));
+    assert.deepEqual(JSON.parse(readFileSync(fixture.configPath, 'utf8')).agents.entries.bookkeeper.tools, fixture.config.agents.entries.bookkeeper.tools);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

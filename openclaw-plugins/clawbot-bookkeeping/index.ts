@@ -33,6 +33,7 @@ import {
 } from './expense-summary.mjs';
 import { createOwnerMcpConnectionResolver } from './mcp-connection.mjs';
 import { formatExpenseSearch, resolveExpenseSearch } from './expense-search.mjs';
+import { HISTORY_TOOL_NAME, HISTORY_FAILURE_TEXT, normalizeExpenseHistoryQuery, formatExpenseHistory } from './expense-history.mjs';
 
 type InboundMessage = {
   channel: string;
@@ -109,6 +110,7 @@ type ToolCallSlot = {
   toolName: string;
   sessionKey?: string;
   requesterConversationKey?: string;
+  deliveryKey?: string;
   conflictingRunKeys?: Set<string>;
   inbound?: InboundMessage;
   ambiguous: boolean;
@@ -147,6 +149,7 @@ const AUTHORITATIVE_REPLY_TOOL_NAMES = new Set([
   ...EXPENSE_TOOL_NAMES,
   'summarize_expenses',
   'find_expenses',
+  HISTORY_TOOL_NAME,
 ]);
 const AFFIRMATIVE_REPLIES = new Set(['是', '对', '对的', '确认', '嗯', '嗯嗯', '好', '好的', '可以', '记吧', '记下吧']);
 const NEGATIVE_REPLIES = new Set(['不是', '否', '不对', '取消', '不用', '别记', '不要']);
@@ -395,6 +398,7 @@ export default definePluginEntry({
     const deliveryKeysByRun = new Map<string, {
       deliveryKey: string;
       recipientKey: string;
+      sourceMessageKey: string;
       touchedAt: number;
     }>();
     const authoritativeRepliesByRun = new Map<string, {
@@ -403,6 +407,7 @@ export default definePluginEntry({
       persisted: boolean;
       deliveryKey?: string;
       recipientKey?: string;
+      sourceMessageKey?: string;
     }>();
     const authoritativeReplyDeliveriesByRun = new Map<string, {
       sourceRunKey: string;
@@ -455,15 +460,16 @@ export default definePluginEntry({
       };
       authoritativeRepliesByRun.set(runKey, authoritativeReply);
       if (!delivery) return;
+      if (!receiptStore.isCurrentReplySource(delivery)) return;
       try {
-        receiptStore.storeAuthoritativeReply({
+        authoritativeReply.persisted = receiptStore.storeAuthoritativeReply({
           replyKey: runKey,
           deliveryKey: delivery.deliveryKey,
           recipientKey: delivery.recipientKey,
+          sourceMessageKey: delivery.sourceMessageKey,
           text,
           expiresAt: touchedAt + AUTHORITATIVE_REPLY_MAX_AGE_MS,
         });
-        authoritativeReply.persisted = true;
       } catch {
         api.logger?.error?.(
           'clawbot-bookkeeping: failed to persist authoritative reply handoff',
@@ -519,7 +525,7 @@ export default definePluginEntry({
         trustedInboundMessageKey(channel, messageId),
         inbound,
         observedAt + TRUSTED_INBOUND_MAX_AGE_MS,
-        { discardPendingConfirmation: confirmationDecision(inbound.content) === undefined },
+        { isRealInbound: true, discardPendingConfirmation: confirmationDecision(inbound.content) === undefined },
       );
     });
 
@@ -573,6 +579,7 @@ export default definePluginEntry({
         deliveryKeysByRun.set(runKey, {
           deliveryKey: inbound.deliveryKey,
           recipientKey: inbound.recipientKey,
+          sourceMessageKey: trustedInboundMessageKey(inbound.channel, inbound.messageId),
           touchedAt: Date.now(),
         });
       }
@@ -636,6 +643,7 @@ export default definePluginEntry({
         deliveryKeysByRun.set(runKey, {
           deliveryKey: inbound.deliveryKey,
           recipientKey: inbound.recipientKey,
+          sourceMessageKey: trustedInboundMessageKey(inbound.channel, inbound.messageId),
           touchedAt: Date.now(),
         });
       }
@@ -646,13 +654,22 @@ export default definePluginEntry({
 
     api.on('before_tool_call', (event, context) => {
       if (!AUTHORITATIVE_REPLY_TOOL_NAMES.has(event.toolName)) return;
+      let historyQuery: Record<string, unknown> | undefined;
+      if (event.toolName === HISTORY_TOOL_NAME) {
+        try {
+          if (context.requester?.senderIsOwner !== true) throw new Error('Untrusted history caller');
+          historyQuery = normalizeExpenseHistoryQuery(event.params, accountName);
+        } catch {
+          return { block: true, blockReason: HISTORY_FAILURE_TEXT };
+        }
+      }
       const now = Date.now();
       pruneExpiredToolCallSlots(now);
       const runId = context.runId ?? event.runId;
       const toolCallId = context.toolCallId ?? event.toolCallId;
-      if (!runId || !toolCallId) return;
+      if (!runId || !toolCallId) return historyQuery ? { block: true, blockReason: HISTORY_FAILURE_TEXT } : undefined;
       const runKey = transientBindingKey('run', runId);
-      if (receiptStore.isTrustedRunEnded(runKey, now)) return;
+      if (receiptStore.isTrustedRunEnded(runKey, now)) return historyQuery ? { block: true, blockReason: HISTORY_FAILURE_TEXT } : undefined;
       const toolCallKey = transientBindingKey('tool-call', toolCallId);
       const requesterChannel = context.requester?.channel ?? context.channelId;
       const requesterConversationKey = trustedConversationKey({
@@ -683,7 +700,8 @@ export default definePluginEntry({
             }
           }
         }
-        return;
+        return historyQuery ? (existingSlot.runKey === runKey && !existingSlot.ambiguous
+          ? { params: historyQuery } : { block: true, blockReason: HISTORY_FAILURE_TEXT }) : undefined;
       }
       let inbound = inboundByRun.get(runKey);
       const embeddedBinding = Boolean(inbound);
@@ -718,12 +736,16 @@ export default definePluginEntry({
       api.logger?.info?.(
         `clawbot-bookkeeping: tool binding tool=${event.toolName} owner=${context.requester?.senderIsOwner === true} session=${Boolean(context.sessionKey)} conversation=${Boolean(requesterConversationKey)} embedded=${embeddedBinding} matched=${Boolean(inbound)}`,
       );
+      const requesterDeliveryKey = trustedDeliveryKey({ channel: requesterChannel, accountId: context.requester?.accountId, recipientId: context.requester?.senderId });
+      if (inbound && requesterDeliveryKey && inbound.deliveryKey !== requesterDeliveryKey) inbound = undefined;
+      if (historyQuery && (!inbound || !requesterDeliveryKey)) return { block: true, blockReason: HISTORY_FAILURE_TEXT };
       toolCallSlots.set(toolCallKey, {
         runKey,
         authorityRunKey: runKey,
         toolName: event.toolName,
         sessionKey: context.sessionKey,
         requesterConversationKey,
+        deliveryKey: inbound?.deliveryKey ?? deliveryKeysByRun.get(runKey)?.deliveryKey,
         ...(inbound ? { inbound } : {}),
         ambiguous: false,
         touchedAt: now,
@@ -732,6 +754,7 @@ export default definePluginEntry({
         deliveryKeysByRun.set(runKey, {
           deliveryKey: inbound.deliveryKey,
           recipientKey: inbound.recipientKey,
+          sourceMessageKey: trustedInboundMessageKey(inbound.channel, inbound.messageId),
           touchedAt: now,
         });
         receiptStore.enqueueTrustedInbound(
@@ -744,6 +767,11 @@ export default definePluginEntry({
       if (inbound) inboundByRun.delete(runKey);
       if (inbound) unverifiedInboundByRun.delete(runKey);
       if (inbound) receiptStore.claimTrustedInbound([correlatedRunLookupKey(runId)], now);
+      if (historyQuery && inbound) {
+        const handoffKey = transientBindingKey('tool-call', `history-result\u0000${runId}\u0000${toolCallId}`);
+        receiptStore.enqueueTrustedInbound([handoffKey], handoffKey, { inbound, query: historyQuery }, now + TRUSTED_INBOUND_MAX_AGE_MS);
+        return { params: historyQuery };
+      }
     });
 
     api.on('after_tool_call', (event, context) => {
@@ -752,6 +780,25 @@ export default definePluginEntry({
       if (!runId) return;
       const runKey = transientBindingKey('run', runId);
       if (authoritativeRepliesByRun.has(runKey)) return;
+      if (event.toolName === HISTORY_TOOL_NAME) {
+        const toolCallId = context.toolCallId ?? event.toolCallId;
+        const handoff = toolCallId ? receiptStore.claimTrustedInbound([
+          transientBindingKey('tool-call', `history-result\u0000${runId}\u0000${toolCallId}`),
+        ]) as { inbound: InboundMessage; query: Record<string, unknown> } | undefined : undefined;
+        if (handoff?.inbound) {
+          const inbound = handoff.inbound;
+          deliveryKeysByRun.set(runKey, {
+            deliveryKey: inbound.deliveryKey, recipientKey: inbound.recipientKey,
+            sourceMessageKey: trustedInboundMessageKey(inbound.channel, inbound.messageId), touchedAt: Date.now(),
+          });
+        }
+        let text = HISTORY_FAILURE_TEXT;
+        if (handoff && !event.error) {
+          try { text = formatExpenseHistory(event.result, handoff.query, { accountName, ledgerDisplayName }); } catch { /* Never forward raw MCP data or errors. */ }
+        }
+        storeAuthoritativeReply(runKey, text);
+        return;
+      }
       let authoritativeText: string | undefined;
       if (event.error) {
         if (EXPENSE_TOOL_NAMES.has(event.toolName)) {
@@ -785,10 +832,13 @@ export default definePluginEntry({
         `clawbot-bookkeeping: final reply authority run=${Boolean(runId)} matched=${Boolean(authoritative)}`,
       );
       if (!runKey || !authoritative) return;
+      const text = authoritative.recipientKey && !receiptStore.isCurrentReplySource(authoritative)
+        ? '已有新请求，这条旧消息的回复已失效，请以当前查询结果为准。'
+        : authoritative.text;
       return {
         payload: {
           ...event.payload,
-          text: authoritative.text,
+          text,
         },
       };
     });
@@ -829,7 +879,10 @@ export default definePluginEntry({
       }
       if (!authoritativeText && runKey) {
         const exactRunReply = authoritativeRepliesByRun.get(runKey);
-        if (exactRunReply?.persisted === false) {
+        if (exactRunReply?.persisted === false
+          && (!exactRunReply.recipientKey || (exactRunReply.recipientKey === recipientKey
+            && (!deliveryKey || exactRunReply.deliveryKey === deliveryKey)
+            && receiptStore.isCurrentReplySource(exactRunReply)))) {
           sourceRunKey = runKey;
           authoritativeText = exactRunReply.text;
         }
@@ -919,6 +972,16 @@ export default definePluginEntry({
         : undefined;
       let resolvedToolCallKey = toolCallKey;
       let slot = toolCallKey ? toolCallSlots.get(toolCallKey) : undefined;
+      const executionDeliveryKey = trustedDeliveryKey({ channel: toolContext.messageChannel,
+        accountId: toolContext.agentAccountId, recipientId: toolContext.requesterSenderId });
+      // An exact host-bound call can survive compaction with no identity fields.
+      // Any supplied identity must be complete and agree with that binding.
+      const hasExecutionIdentity = toolContext.messageChannel !== undefined
+        || toolContext.agentAccountId !== undefined || toolContext.requesterSenderId !== undefined;
+      if (slot?.deliveryKey && hasExecutionIdentity
+        && (!executionDeliveryKey || slot.deliveryKey !== executionDeliveryKey)) {
+        throw new Error(MISSING_TRUSTED_INBOUND_ERROR);
+      }
       if (slot && slot.toolName !== toolName) {
         slot.ambiguous = true;
         delete slot.inbound;
@@ -935,6 +998,7 @@ export default definePluginEntry({
         if (executionConversationKey && toolContext.sessionKey) {
           const availableCandidates = [...toolCallSlots.entries()].filter(([, candidate]) => (
             candidate.ambiguous === false
+            && candidate.deliveryKey === executionDeliveryKey
             && (Boolean(candidate.inbound) || authoritativeToolResultsByRun.has(candidate.runKey))
             && !receiptStore.isTrustedRunEnded(candidate.authorityRunKey, now)
           ));
@@ -981,6 +1045,7 @@ export default definePluginEntry({
               if (!candidate || typeof candidate !== 'object') return false;
               const trusted = candidate as Partial<DurableToolBridge>;
               if (trusted.recipientKey !== recipientKey
+                || !executionDeliveryKey || trusted.deliveryKey !== executionDeliveryKey
                 || typeof trusted.observedAt !== 'number'
                 || now - trusted.observedAt < 0
                 || now - trusted.observedAt > TRUSTED_INBOUND_MAX_AGE_MS) return false;
@@ -1011,6 +1076,7 @@ export default definePluginEntry({
             authorityRunKey: durableInbound.authorityRunKey,
             toolName,
             requesterConversationKey: durableInbound.conversationKey,
+            deliveryKey: durableInbound.deliveryKey,
             inbound: durableInbound,
             ambiguous: false,
             touchedAt: now,
@@ -1020,6 +1086,7 @@ export default definePluginEntry({
           deliveryKeysByRun.set(durableRunKey, {
             deliveryKey: durableInbound.deliveryKey,
             recipientKey: durableInbound.recipientKey,
+            sourceMessageKey: trustedInboundMessageKey(durableInbound.channel, durableInbound.messageId),
             touchedAt: now,
           });
           recoveredByDurableBridge = true;
@@ -1347,7 +1414,7 @@ export default definePluginEntry({
               if (!isStillAuthorized()) {
                 throw new Error('当前微信消息的可信绑定已变化，本次没有准备入账。');
               }
-              receiptStore.replacePendingExpenseConfirmation(
+              const proposalStored = receiptStore.replacePendingExpenseConfirmation(
                 inbound.conversationKey,
                 {
                   sourceMessageKey: trustedInboundMessageKey(inbound.channel, inbound.messageId),
@@ -1357,6 +1424,10 @@ export default definePluginEntry({
                 },
                 Date.now() + PENDING_CONFIRMATION_TTL_MS,
               );
+              if (!proposalStored) return authoritativeResponse({
+                content: [{ type: 'text', text: '这条消息之后已有新请求，原确认单已作废，没有入账。' }],
+                details: { status: 'superseded' },
+              });
               return authoritativeResponse({
                 content: [{
                   type: 'text' as const,
@@ -1431,7 +1502,7 @@ export default definePluginEntry({
           if (!isStillAuthorized()) {
             throw new Error('当前微信消息的可信绑定已变化，本次没有准备入账。');
           }
-          receiptStore.replacePendingExpenseConfirmation(
+          const proposalStored = receiptStore.replacePendingExpenseConfirmation(
             inbound.conversationKey,
             {
               sourceMessageKey: trustedInboundMessageKey(inbound.channel, inbound.messageId),
@@ -1441,6 +1512,10 @@ export default definePluginEntry({
             },
             Date.now() + PENDING_CONFIRMATION_TTL_MS,
           );
+          if (!proposalStored) return authoritativeResponse({
+            content: [{ type: 'text', text: '这条消息之后已有新请求，原确认单已作废，没有入账。' }],
+            details: { status: 'superseded' },
+          });
           return authoritativeResponse({
             content: [{
               type: 'text' as const,

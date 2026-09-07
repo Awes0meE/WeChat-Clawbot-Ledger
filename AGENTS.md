@@ -23,6 +23,7 @@ Browser -> ledger.66ccff-labs.com -> Cloudflare Tunnel
 - The Ledger Tunnel supervisor publishes only after it verifies the exact production port owner, explicit config, health JSON, and login-page fingerprint; origin degradation fails closed.
 - Deterministic HTTP summaries and owner-scoped MCP history queries are live. The local MCP service and its separate token were enabled on 2026-09-07; local connection, tool discovery, an authorized public connection rejection check, and a real WeChat history query passed. See `docs/handoffs/2026-09-07-history-query-activation.md` for the verification scope.
 - The dedicated bookkeeper uses `tools.profile=full` with an exact six-tool `tools.allow` list. The minimal base profile filters out the native MCP history tool before that allowlist is applied; preserve the exact allowlist when maintaining this configuration.
+- Native MCP history results pass through `expense-history.mjs` and the persistent authoritative-reply path. Keep the fixed expense account, ten-row limit, validated pagination, and readable output. Preserve `trusted-inbound-freshness-v1`, its real-message history/latest-source tables, and reply source keys during upgrades; they prevent old replies and delayed proposals from taking over newer requests.
 - Production release `1d561835030e880399252baad510cc58381e1eea` also treats meal descriptions such as “中午吃饭” and “晚上吃饭” as message-time expenses when no date or exact clock is supplied. The full suite passed 768/768 and strict local checks passed 14/14. The preceding cross-instance repair, real WeChat acceptance, and current verification scope are recorded in `docs/handoffs/2026-09-07-bookkeeping-system-audit.md`.
 
 ## Safety boundaries
@@ -53,6 +54,6 @@ openclaw gateway status
 openclaw channels status --probe
 ```
 
-For production/test migration, immutable release publication, Tunnel installation, public checks, restart/fail-closed checks, WeChat regression, and portfolio regression, follow `docs/ledger-cloudflare-runbook.md`. The active 2026-09-05 continuation checkpoint is `docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md`. Real Cloudflare authorization occurs only in a visible local terminal/browser and never through copied credentials.
+For production/test migration, immutable release publication, Tunnel installation, public checks, restart/fail-closed checks, WeChat regression, and portfolio regression, follow `docs/ledger-cloudflare-runbook.md`. The current audit is `docs/handoffs/2026-09-07-history-reply-audit.md`; the 2026-09-05 Tunnel handoff remains historical deployment evidence. The user waived real WeChat acceptance for this history-format release; record local verification separately from prior chat acceptance. Real Cloudflare authorization occurs only in a visible local terminal/browser and never through copied credentials.
 
 Update `README.md` and `WINDOWS-HANDOFF.md` when the live architecture, service state, tools, or user workflow changes.

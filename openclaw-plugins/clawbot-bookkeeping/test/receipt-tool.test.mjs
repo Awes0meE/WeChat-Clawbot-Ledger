@@ -305,6 +305,188 @@ async function receiveTrustedOwnerMessageWithoutBeforeAgentRun(inboundHooks, {
   return runId;
 }
 
+test('fresh history messages cannot inherit a failed old reply across the complete sending hooks', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const fetchImpl = successfulExpenseFetch(requests);
+  const hooks = createPluginHarness(tempDirectory, fetchImpl);
+  const sender = createPluginHarness(tempDirectory, fetchImpl);
+  try {
+    const oldRunId = await receiveTrustedOwnerMessage(hooks.inboundHooks, {
+      content: '午饭7.2吗', messageId: 'synthetic-failed-before-history',
+    });
+    const old = await hooks.prepareExpenseFactory(trustedOwnerContext()).execute(
+      'synthetic-failed-old-call', receivedExpenseParams(),
+    );
+    const oldOutboundRunId = 'synthetic-failed-old-outbound';
+    const outgoingContext = { channelId: 'openclaw-weixin', accountId: 'bot-account' };
+    const oldOutgoing = sender.inboundHooks.get('message_sending')({
+      to: 'owner-user', content: 'ordinary old model reply',
+      metadata: { runId: oldOutboundRunId },
+    }, { ...outgoingContext, runId: oldOutboundRunId });
+    assert.equal(oldOutgoing.content, old.content[0].text);
+    sender.inboundHooks.get('message_sent')({ success: false, runId: oldOutboundRunId }, {
+      ...outgoingContext, runId: oldOutboundRunId,
+    });
+    hooks.inboundHooks.get('agent_end')({}, { runId: oldRunId });
+
+    const newRunId = await receiveTrustedOwnerMessage(hooks.inboundHooks, {
+      content: '查询最近三笔支出', messageId: 'synthetic-new-history-after-failure',
+    });
+    const currentText = '该查询范围内没有符合条件的支出记录。';
+    const nativeQuery = { start_time: '1970-01-01T00:00:00Z', end_time: '2026-09-08T00:00:00+08:00', count: 3 };
+    await bindToolCallForTurn(hooks.inboundHooks, {
+      runId: newRunId, toolCallId: 'synthetic-new-native-history',
+      toolName: 'ezbookkeeping__query_transactions', params: nativeQuery,
+    });
+    hooks.inboundHooks.get('after_tool_call')({
+      toolName: 'ezbookkeeping__query_transactions', runId: newRunId, toolCallId: 'synthetic-new-native-history',
+      params: nativeQuery,
+      result: { content: [{ type: 'text', text: JSON.stringify({
+        total_count: 0, current_page: 1, total_page: 0, transactions: [],
+      }) }] },
+    }, { runId: newRunId, toolCallId: 'synthetic-new-native-history' });
+    const generic = hooks.inboundHooks.get('reply_payload_sending')({
+      kind: 'final', payload: { text: currentText }, runId: newRunId,
+    }, { runId: newRunId });
+    const newOutboundRunId = 'synthetic-new-history-outbound';
+    const currentOutgoing = sender.inboundHooks.get('message_sending')({
+      to: 'owner-user', content: generic?.payload.text ?? currentText,
+      metadata: { runId: newOutboundRunId },
+    }, { ...outgoingContext, runId: newOutboundRunId });
+    const deliveredText = currentOutgoing?.content ?? generic?.payload.text ?? currentText;
+    assert.notEqual(deliveredText, old.content[0].text);
+    assert.match(deliveredText, /没有符合条件的支出记录/u);
+    assert.doesNotMatch(deliveredText, /帮你核对|total_count|transactions/u);
+    const staleGeneric = hooks.inboundHooks.get('reply_payload_sending')({
+      kind: 'final', payload: { text: 'ordinary stale model reply' }, runId: oldRunId,
+    }, { runId: oldRunId });
+    assert.notEqual(staleGeneric?.payload.text, old.content[0].text);
+    assert.equal(requests.length, 0);
+  } finally {
+    sender.restore();
+    hooks.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+for (const toolName of ['prepare_expense', 'record_expense']) {
+  test(`a late ${toolName} question cannot recreate a proposal after a fresh topic arrives`, async () => {
+    const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+    writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+    const requests = [];
+    const fetchImpl = successfulExpenseFetch(requests);
+    const hooks = createPluginHarness(tempDirectory, fetchImpl);
+    const execution = createPluginHarness(tempDirectory, fetchImpl);
+    try {
+      const oldRunId = await receiveTrustedOwnerMessage(hooks.inboundHooks, {
+        content: '午饭7.2吗', messageId: `synthetic-late-${toolName}-original`,
+      });
+      await bindToolCallForTurn(hooks.inboundHooks, {
+        runId: oldRunId, toolCallId: 'synthetic-late-question-hook', toolName, params: receivedExpenseParams(),
+      });
+      // Arrival precedes old tool execution, even when the new turn has not called any tool yet.
+      await hooks.inboundHooks.get('message_received')({
+        content: '查询最近三笔支出', messageId: `synthetic-late-${toolName}-new-topic`,
+      }, {
+        channelId: 'openclaw-weixin', accountId: 'bot-account', senderId: 'owner-user',
+        sessionKey: 'agent:main:main', messageId: `synthetic-late-${toolName}-new-topic`,
+      });
+      const factory = toolName === 'prepare_expense'
+        ? execution.rawPrepareExpenseFactory : execution.rawRecordExpenseFactory;
+      const [late] = await Promise.allSettled([
+        factory(trustedOwnerContext()).execute('synthetic-late-question-execute', receivedExpenseParams()),
+      ]);
+      if (late.status === 'fulfilled') {
+        assert.notEqual(late.value.details.status, 'pending_confirmation');
+        assert.notEqual(late.value.details.status, 'created');
+      } else {
+        assert.match(String(late.reason), /可信|消息|绑定/u);
+      }
+      await receiveTrustedOwnerMessage(hooks.inboundHooks, {
+        content: '是', messageId: `synthetic-late-${toolName}-confirmation`,
+      });
+      const answer = await hooks.resolveExpenseConfirmationFactory(trustedOwnerContext()).execute(
+        'synthetic-late-question-confirm', { decision: 'confirm' },
+      );
+      assert.equal(answer.details.status, 'missing');
+      assert.equal(requests.filter(({ url }) => url.endsWith('/transactions/add.json')).length, 0);
+      assert.equal(requests.length, 0);
+    } finally {
+      execution.restore();
+      hooks.restore();
+      rmSync(tempDirectory, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const mode of ['fallback', 'known slot', 'durable bridge']) {
+  for (const [identity, override] of [
+    ['sender', { requesterSenderId: 'synthetic-other-owner' }],
+    ['account', { agentAccountId: 'synthetic-other-bot' }],
+    ['sender and account', {
+      requesterSenderId: 'synthetic-other-owner', agentAccountId: 'synthetic-other-bot',
+      sessionKey: 'synthetic-other-session',
+    }],
+  ]) {
+    test(`execution ${mode} rejects a contradictory ${identity} before any ledger write`, async () => {
+      const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+      writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+      const requests = [];
+      const fetchImpl = successfulExpenseFetch(requests);
+      const hooks = createPluginHarness(tempDirectory, fetchImpl);
+      const execution = mode === 'durable bridge' ? createPluginHarness(tempDirectory, fetchImpl) : hooks;
+      try {
+        const runId = await receiveTrustedOwnerMessage(hooks.inboundHooks, {
+          content: '午饭7.2', messageId: 'synthetic-authorized-owner-expense',
+        });
+        await bindToolCallForTurn(hooks.inboundHooks, {
+          runId, toolCallId: 'synthetic-authorized-owner-hook', params: receivedExpenseParams(),
+        });
+        const executeId = mode === 'known slot' ? 'synthetic-authorized-owner-hook' : 'synthetic-contradictory-execute';
+        await assert.rejects(execution.rawRecordExpenseFactory({ ...trustedOwnerContext(), ...override }).execute(
+          executeId, receivedExpenseParams(),
+        ), /可信|绑定|owner|发送者/u);
+        assert.equal(requests.filter(({ url }) => url.endsWith('/transactions/add.json')).length, 0);
+        assert.equal(requests.length, 0);
+      } finally {
+        if (execution !== hooks) execution.restore();
+        hooks.restore();
+        rmSync(tempDirectory, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
+for (const mode of ['fallback', 'durable bridge']) {
+  test(`execution ${mode} preserves a stale session for the same owner and bot`, async () => {
+    const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
+    writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+    const requests = [];
+    const fetchImpl = successfulExpenseFetch(requests);
+    const hooks = createPluginHarness(tempDirectory, fetchImpl);
+    const execution = mode === 'durable bridge' ? createPluginHarness(tempDirectory, fetchImpl) : hooks;
+    try {
+      const runId = await receiveTrustedOwnerMessage(hooks.inboundHooks, {
+        content: '午饭7.2', messageId: 'synthetic-stale-session-same-owner',
+      });
+      await bindToolCallForTurn(hooks.inboundHooks, {
+        runId, toolCallId: 'synthetic-stale-session-hook', params: receivedExpenseParams(),
+      });
+      const result = await execution.rawRecordExpenseFactory({
+        ...trustedOwnerContext(), sessionKey: 'synthetic-stale-session',
+      }).execute('synthetic-stale-session-execute', receivedExpenseParams());
+      assert.equal(result.details.status, 'created');
+      assert.equal(requests.filter(({ url }) => url.endsWith('/transactions/add.json')).length, 1);
+    } finally {
+      if (execution !== hooks) execution.restore();
+      hooks.restore();
+      rmSync(tempDirectory, { recursive: true, force: true });
+    }
+  });
+}
+
 test('declares the fixed ledger display name in the plugin manifest', () => {
   const manifest = JSON.parse(readFileSync(new URL('../openclaw.plugin.json', import.meta.url), 'utf8'));
   assert.deepEqual(manifest.configSchema.properties.ledgerDisplayName, {
@@ -1756,7 +1938,7 @@ test('recovers an authoritative WeChat reply across isolated plugin instances', 
   }
 });
 
-test('fails cross-run WeChat recovery closed when two replies target the same recipient', async () => {
+test('cross-run WeChat recovery selects only the latest message reply for one recipient', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
   const harness = createPluginHarness(tempDirectory, async () => {
@@ -1768,7 +1950,7 @@ test('fails cross-run WeChat recovery closed when two replies target the same re
       content: '午饭8.8么？',
       messageId: 'authoritative-wechat-ambiguous-one',
     });
-    await harness.prepareExpenseFactory(trustedOwnerContext()).execute(
+    const oldReply = await harness.prepareExpenseFactory(trustedOwnerContext()).execute(
       'authoritative-wechat-ambiguous-one-call',
       {
         amount: '8.8',
@@ -1781,7 +1963,7 @@ test('fails cross-run WeChat recovery closed when two replies target the same re
       content: '晚饭9.9么？',
       messageId: 'authoritative-wechat-ambiguous-two',
     });
-    await harness.prepareExpenseFactory(trustedOwnerContext()).execute(
+    const latestReply = await harness.prepareExpenseFactory(trustedOwnerContext()).execute(
       'authoritative-wechat-ambiguous-two-call',
       {
         amount: '9.9',
@@ -1804,7 +1986,10 @@ test('fails cross-run WeChat recovery closed when two replies target the same re
       runId: 'outer-wechat-ambiguous-run',
     });
 
-    assert.equal(outgoing, undefined);
+    assert.equal(outgoing.content, latestReply.content[0].text);
+    assert.notEqual(outgoing.content, oldReply.content[0].text);
+    assert.match(outgoing.content, /9\.90 SGD/u);
+    assert.doesNotMatch(outgoing.content, /8\.80 SGD|已记账/u);
   } finally {
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
@@ -2278,7 +2463,7 @@ test('does not let a non-message run consume a pending trusted inbound', async (
   }
 });
 
-test('fails both concurrent calls closed when different runs share one tool call id', async () => {
+test('rejects colliding calls and distinguishes superseded and current no-write replies', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
   const requests = [];
@@ -2328,7 +2513,10 @@ test('fails both concurrent calls closed when different runs share one tool call
         sessionKey: 'agent:main:main',
         runId,
       });
-      assert.equal(outgoing.payload.text, '这次没记成功，账本里没有新增记录～ 请重新发一条新消息吧。');
+      assert.equal(outgoing.payload.text, runId === firstRunId
+        ? '已有新请求，这条旧消息的回复已失效，请以当前查询结果为准。'
+        : '这次没记成功，账本里没有新增记录～ 请重新发一条新消息吧。');
+      assert.doesNotMatch(outgoing.payload.text, /已记账/u);
     }
     assert.equal(requests.length, 0);
   } finally {

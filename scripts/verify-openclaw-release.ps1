@@ -353,6 +353,11 @@ if ($bookkeepingToolNames -ccontains 'find_expenses' -and
     -not $actualByPath.ContainsKey('openclaw-plugins/clawbot-bookkeeping/expense-search.mjs')) {
     throw 'Release find_expenses contract requires the amount-search module.'
 }
+$bookkeepingEntryText = [IO.File]::ReadAllText($actualByPath['openclaw-plugins/clawbot-bookkeeping/index.ts'], $script:StrictUtf8Encoding)
+if ($bookkeepingEntryText.Contains('./expense-history.mjs') -and
+    -not $actualByPath.ContainsKey('openclaw-plugins/clawbot-bookkeeping/expense-history.mjs')) {
+    throw 'Release history reply integration requires the history-formatting module.'
+}
 
 $commitMarkerPath = Join-Path $releaseRoot 'release-commit.txt'
 if (-not [IO.File]::Exists($commitMarkerPath)) {

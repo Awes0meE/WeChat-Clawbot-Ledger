@@ -4,7 +4,7 @@ Windows 无窗口启动的当前设置与迁移方法见 [后台启动维护说�
 
 本文说明如何把现有 ezBookkeeping 通过 `https://ledger.66ccff-labs.com` 安全发布，同时保持 `66ccff-labs.com` 和 `www.66ccff-labs.com` 的作品集不变。它是实施手册，不是凭据存放处；任何真实账户、密码、token、Tunnel UUID、Cloudflare 身份、微信身份、SQLite、交易正文、响应正文和运行日志都必须留在 Git 与仓库之外。
 
-当前发布与验收范围见 [系统检查记录](handoffs/2026-09-07-bookkeeping-system-audit.md)；[2026-09-05 Tunnel 交接](handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md) 保留当时的部署证据。恢复工作前先只读核验，不能重复创建已存在的 Tunnel、DNS 或规则。
+当前发布与验收范围见 [最新审计](handoffs/2026-09-07-history-reply-audit.md)；[2026-09-07 较早系统检查](handoffs/2026-09-07-bookkeeping-system-audit.md) 和 [2026-09-05 Tunnel 交接](handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md) 保留当时的部署证据。恢复工作前先只读核验，不能重复创建已存在的 Tunnel、DNS 或规则。
 
 ## 固定合同
 

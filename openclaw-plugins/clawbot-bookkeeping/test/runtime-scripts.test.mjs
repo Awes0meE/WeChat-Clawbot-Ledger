@@ -562,7 +562,7 @@ test('configure source uses atomic backups, strict task actions, and normalized 
   assert.match(configureSource, /\[string\]\$InstallDirectory = 'D:\\Clawbot\\ezbookkeeping'/);
   assert.match(configureSource, /tokens\/generate\/mcp\.json'.*-TimeoutSec 15/);
   assert.doesNotMatch(configureSource, /\[IO\.File\]::WriteAllText\(\$ConfigPath/);
-  assert.match(configureSource, /Write-LedgerTextAtomically -Path \$ConfigPath -Text \$Text/);
+  assert.match(configureSource, /Move-LedgerFileAtomicallyReplacingDestination -SourcePath \$temporaryPath -DestinationPath \$ConfigPath/);
   assert.match(configureSource, /Restore the configuration backup at '\{0\}'/);
   assert.match(configureSource, /Get-LedgerExpectedTask[^\r\n]+-Mode Explicit/);
   assert.match(installSource, /Get-LedgerExplicitServiceArguments/);
@@ -649,7 +649,7 @@ if (@($global:trace | Where-Object { $_ -eq 'acl' }).Count -lt 6) { throw ('Expe
   }
 });
 
-for (const scenario of ['token-failure', 'startup-exited', 'startup-foreign-listener', 'startup-foreign-task', 'startup-detached-listener']) {
+for (const scenario of ['token-failure', 'token-failure-bom', 'startup-exited', 'startup-foreign-listener', 'startup-foreign-task', 'startup-detached-listener', 'concurrent-before-token', 'concurrent-after-token', 'concurrent-during-rollback', 'backup-before-rollback', 'backup-after-token']) {
 test(`configure script handles rollback after ${scenario}`, () => {
   const temporaryDirectory = mkdtempSync(join(tmpdir(), 'clawbot-runtime-rollback-shim-'));
   const secretsDirectory = `${temporaryDirectory}-secrets`;
@@ -660,7 +660,7 @@ test(`configure script handles rollback after ${scenario}`, () => {
     const apiTokenPath = join(secretsDirectory, 'api.txt');
     const mcpTokenPath = join(secretsDirectory, 'mcp.txt');
     const wrapperPath = join(temporaryDirectory, 'run-rollback-shim.ps1');
-    const originalIni = '[mcp]\nenable_mcp = false\nmcp_allowed_remote_ips = 10.0.0.1\n';
+    const originalIni = (scenario === 'token-failure-bom' ? '\uFEFF' : '') + '[mcp]\nenable_mcp = false\nmcp_allowed_remote_ips = 10.0.0.1\n';
     mkdirSync(configDirectory);
     mkdirSync(secretsDirectory);
     writeFileSync(configPath, originalIni, 'utf8');
@@ -676,8 +676,14 @@ $global:expectedExecutable = $args[5]
 $global:configPath = $args[1]
 $global:expectedArguments = '--conf-path "' + $global:configPath + '" server run'
 $global:task = [pscustomobject]@{ TaskName = 'Clawbot rollback task'; TaskPath = '\\'; State = 'Running'; Actions = @([pscustomobject]@{ Execute = $global:expectedExecutable; Arguments = $global:expectedArguments; WorkingDirectory = $args[2] }) }
+function Add-ConcurrentFixtureEdit { [IO.File]::AppendAllText($global:configPath, '[log]' + [Environment]::NewLine + 'level = info' + [Environment]::NewLine) }
+function Change-FixtureBackup {
+  $backup = @(Get-ChildItem -LiteralPath (Split-Path -Parent $global:configPath) -Filter '*.before-mcp-*' -File)
+  if ($backup.Count -ne 1) { throw 'Expected one fixture backup.' }
+  [IO.File]::AppendAllText($backup[0].FullName, '; independent backup edit')
+}
 function Get-ScheduledTask { [CmdletBinding()] param() $global:task }
-function Stop-ScheduledTask { [CmdletBinding()] param([object]$InputObject) if ($InputObject -ne $global:task) { throw 'Wrong rollback stop object.' }; [void]($global:trace += 'stop'); $global:phase = 'stopped'; $global:task.State = 'Ready' }
+function Stop-ScheduledTask { [CmdletBinding()] param([object]$InputObject) if ($InputObject -ne $global:task) { throw 'Wrong rollback stop object.' }; [void]($global:trace += 'stop'); $global:phase = 'stopped'; $global:task.State = 'Ready'; if ($global:scenario -eq 'concurrent-during-rollback' -and $global:startCount -eq 1) { Add-ConcurrentFixtureEdit } }
 function Start-ScheduledTask {
   [CmdletBinding()] param([object]$InputObject)
   if ($InputObject -ne $global:task) { throw 'Wrong rollback start object.' }
@@ -708,9 +714,17 @@ function Get-CimInstance {
 function Get-Date { [CmdletBinding()] param([string]$Format) if ($Format) { return $global:clock.ToString($Format) }; return $global:clock }
 function Start-Sleep { [CmdletBinding()] param([int]$Seconds, [int]$Milliseconds) $global:clock = $global:clock.AddSeconds($Seconds).AddMilliseconds($Milliseconds) }
 function Stop-Process { [CmdletBinding()] param() throw 'No process should be stopped in this fixture.' }
-function Invoke-RestMethod { [CmdletBinding()] param([string]$Uri, [string]$Method, [int]$MaximumRedirection, [int]$TimeoutSec, [object]$Headers, [string]$ContentType, [string]$Body) if ($Uri -like '*healthz.json') { if ($global:phase -eq 'exited') { return [pscustomobject]@{ success = $false } }; [void]($global:trace += 'health'); return [pscustomobject]@{ success = $true } }; [void]($global:trace += 'token'); throw 'Temporary token failure.' }
+function Invoke-RestMethod {
+  [CmdletBinding()] param([string]$Uri, [string]$Method, [int]$MaximumRedirection, [int]$TimeoutSec, [object]$Headers, [string]$ContentType, [string]$Body)
+  if ($Uri -like '*healthz.json') { if ($global:phase -eq 'exited') { return [pscustomobject]@{ success = $false } }; [void]($global:trace += 'health'); return [pscustomobject]@{ success = $true } }
+  [void]($global:trace += 'token')
+  if ($global:scenario -eq 'concurrent-after-token') { Add-ConcurrentFixtureEdit; return [pscustomobject]@{ success = $true; result = [pscustomobject]@{ token = 'unused-fixture-token' } } }
+  if ($global:scenario -like 'backup-*') { Change-FixtureBackup }
+  if ($global:scenario -eq 'backup-after-token') { return [pscustomobject]@{ success = $true; result = [pscustomobject]@{ token = 'unused-fixture-token' } } }
+  throw 'Temporary token failure.'
+}
 function Invoke-WebRequest { [CmdletBinding()] param([string]$Uri, [switch]$UseBasicParsing, [int]$MaximumRedirection, [int]$TimeoutSec) [pscustomobject]@{ Content = '<title>ezBookkeeping</title>' } }
-function Read-Host { [CmdletBinding()] param([string]$Prompt, [switch]$AsSecureString) [void]($global:trace += 'password'); $secure = New-Object System.Security.SecureString; 'temporary-password'.ToCharArray() | ForEach-Object { $secure.AppendChar($_) }; $secure.MakeReadOnly(); Write-Output -NoEnumerate $secure }
+function Read-Host { [CmdletBinding()] param([string]$Prompt, [switch]$AsSecureString) [void]($global:trace += 'password'); if ($global:scenario -eq 'concurrent-before-token') { Add-ConcurrentFixtureEdit }; $secure = New-Object System.Security.SecureString; 'temporary-password'.ToCharArray() | ForEach-Object { $secure.AppendChar($_) }; $secure.MakeReadOnly(); Write-Output -NoEnumerate $secure }
 function Set-Acl { [CmdletBinding()] param([string]$LiteralPath, [object]$AclObject) [void]($global:trace += 'acl') }
 function Get-Acl {
   [CmdletBinding()] param([string]$LiteralPath)
@@ -721,21 +735,23 @@ function Get-Acl {
     Access = @([pscustomobject]@{ IdentityReference = [pscustomobject]@{ Value = $identity }; AccessControlType = 'Allow'; FileSystemRights = 'FullControl' })
   }
 }
-try { & $args[0] -ConfigPath $args[1] -InstallDirectory $args[2] -ApiTokenPath $args[3] -McpTokenPath $args[4] -BackupRoot (Join-Path $args[2] 'backups') -TaskName 'Clawbot rollback task' -Confirm:$false; throw 'Expected setup failure.' } catch {
-  $expectedFailure = if ($global:scenario -in @('token-failure', 'startup-exited')) { 'Could not complete local ezBookkeeping MCP setup' } else { 'automatic rollback could not be completed' }
+try { & $args[0] -ConfigPath $args[1] -InstallDirectory $args[2] -ApiTokenPath $args[3] -McpTokenPath $args[4] -OpenClawConfigPath (Join-Path $args[2] 'synthetic-openclaw.json') -BackupRoot (Join-Path $args[2] 'backups') -TaskName 'Clawbot rollback task' -Confirm:$false; throw 'Expected setup failure.' } catch {
+  $expectedFailure = if ($global:scenario -in @('token-failure', 'token-failure-bom', 'startup-exited')) { 'Could not complete local ezBookkeeping MCP setup' } else { 'automatic rollback could not be completed' }
   if ($_.Exception.Message -notmatch $expectedFailure) { throw }
 }
 $nonAclTrace = @($global:trace | Where-Object { $_ -ne 'acl' }) -join ','
-$expectedTrace = if ($global:scenario -eq 'token-failure') { 'health,stop,start,health,password,token,stop,start' } elseif ($global:scenario -eq 'startup-exited') { 'health,stop,start,start' } else { 'health,stop,start' }
+$expectedTrace = if ($global:scenario -like 'token-failure*') { 'health,stop,start,health,password,token,stop,start' } elseif ($global:scenario -eq 'startup-exited') { 'health,stop,start,start' } elseif ($global:scenario -eq 'concurrent-before-token') { 'health,stop,start,health,password' } elseif ($global:scenario -eq 'concurrent-during-rollback') { 'health,stop,start,health,password,token,stop' } elseif ($global:scenario -eq 'concurrent-after-token' -or $global:scenario -like 'backup-*') { 'health,stop,start,health,password,token' } else { 'health,stop,start' }
 if ($nonAclTrace -ne $expectedTrace) { throw ('Unexpected rollback order: ' + ($global:trace -join ',')) }
-if ($global:scenario -in @('token-failure', 'startup-exited') -and $global:task.State -ne 'Running') { throw 'The original task was not restarted.' }
+if ($global:scenario -in @('token-failure', 'token-failure-bom', 'startup-exited') -and $global:task.State -ne 'Running') { throw 'The original task was not restarted.' }
 `, 'utf8');
     runPowerShell(['-File', wrapperPath, configureScript, configPath, temporaryDirectory, apiTokenPath, mcpTokenPath, executablePath, scenario]);
-    const rollbackSafe = ['token-failure', 'startup-exited'].includes(scenario);
-    assert.equal(readFileSync(configPath, 'utf8'), rollbackSafe ? originalIni : '[mcp]\nenable_mcp = true\nmcp_allowed_remote_ips = 127.0.0.1\n');
+    const rollbackSafe = ['token-failure', 'token-failure-bom', 'startup-exited'].includes(scenario);
+    const concurrentEdit = scenario.startsWith('concurrent-') ? `[log]${process.platform === 'win32' ? '\r\n' : '\n'}level = info${process.platform === 'win32' ? '\r\n' : '\n'}` : '';
+    assert.equal(readFileSync(configPath, 'utf8'), rollbackSafe ? originalIni : `[mcp]\nenable_mcp = true\nmcp_allowed_remote_ips = 127.0.0.1\n${concurrentEdit}`);
+    assert.throws(() => readFileSync(mcpTokenPath), { code: 'ENOENT' });
     const backups = readdirSync(configDirectory).filter((name) => name.includes('.before-mcp-'));
     assert.equal(backups.length, 1);
-    assert.equal(readFileSync(join(configDirectory, backups[0]), 'utf8'), originalIni);
+    assert.equal(readFileSync(join(configDirectory, backups[0]), 'utf8'), originalIni + (scenario.startsWith('backup-') ? '; independent backup edit' : ''));
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true });
     rmSync(secretsDirectory, { recursive: true, force: true });

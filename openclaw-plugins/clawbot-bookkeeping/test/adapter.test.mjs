@@ -70,6 +70,186 @@ function createLegacyConfirmationDatabase(path, rows) {
   }
 }
 
+function freshnessInbound(messageId, overrides = {}) {
+  return {
+    ...pendingExpenseProposal({ messageId, observedAt: Date.now() }).sourceInbound,
+    recipientKey: 'b'.repeat(64),
+    deliveryKey: 'c'.repeat(64),
+    ...overrides,
+  };
+}
+
+function enqueueRealInbound(store, inbound, substantive = true) {
+  const messageKey = trustedInboundMessageKey(inbound.channel, inbound.messageId);
+  store.enqueueTrustedInbound([messageKey], messageKey, inbound, Date.now() + 600_000, {
+    isRealInbound: true,
+    discardPendingConfirmation: substantive,
+  });
+  return messageKey;
+}
+
+test('a new topic prevents an older pending proposal from arriving late across stores and restart', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-freshness-'));
+  const path = join(dir, 'receipts.sqlite');
+  const first = new SqliteReceiptStore(path);
+  let second = new SqliteReceiptStore(path);
+  const original = freshnessInbound('synthetic-original');
+  const proposal = pendingExpenseProposal({ messageId: original.messageId });
+  try {
+    enqueueRealInbound(first, original);
+    enqueueRealInbound(second, freshnessInbound('synthetic-new-query', { content: '查询最近三笔支出' }));
+    // The original tool completes after the newer message's arrival.
+    assert.equal(first.replacePendingExpenseConfirmation(original.conversationKey, proposal, Date.now() + 600_000), false);
+    assert.equal(second.takePendingExpenseConfirmation(original.conversationKey).status, 'missing');
+    second.close();
+    second = new SqliteReceiptStore(path);
+    assert.equal(second.isCurrentExpenseProposalSource({
+      conversationKey: original.conversationKey, sourceMessageKey: proposal.sourceMessageKey,
+    }), false);
+    assert.equal(second.replacePendingExpenseConfirmation(original.conversationKey, proposal, Date.now() + 600_000), false);
+  } finally {
+    second.close();
+    first.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('confirmation advances reply freshness but keeps its current substantive proposal valid', () => {
+  const store = new SqliteReceiptStore(':memory:');
+  const original = freshnessInbound('synthetic-proposal');
+  const proposal = pendingExpenseProposal({ messageId: original.messageId });
+  try {
+    const sourceMessageKey = enqueueRealInbound(store, original);
+    assert.equal(store.replacePendingExpenseConfirmation(original.conversationKey, proposal, Date.now() + 600_000), true);
+    const confirmationKey = enqueueRealInbound(store, freshnessInbound('synthetic-confirmation', { content: '是' }), false);
+    assert.equal(store.isCurrentExpenseProposalSource({ conversationKey: original.conversationKey, sourceMessageKey }), true);
+    assert.equal(store.isCurrentReplySource({ recipientKey: original.recipientKey, sourceMessageKey }), false);
+    assert.equal(store.isCurrentReplySource({ recipientKey: original.recipientKey, sourceMessageKey: confirmationKey }), true);
+    assert.equal(store.consumePendingExpenseConfirmation(original.conversationKey, confirmationKey).status, 'active');
+  } finally { store.close(); }
+});
+
+test('failed old replies and late old results cannot replace a new recipient message', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-reply-freshness-'));
+  const path = join(dir, 'receipts.sqlite');
+  const first = new SqliteReceiptStore(path);
+  const second = new SqliteReceiptStore(path);
+  const original = freshnessInbound('synthetic-original-query');
+  const replyKey = 'd'.repeat(64);
+  const outboundRunKey = 'e'.repeat(64);
+  try {
+    const sourceMessageKey = enqueueRealInbound(first, original);
+    const reply = { replyKey, deliveryKey: original.deliveryKey, recipientKey: original.recipientKey,
+      text: 'synthetic old result', sourceMessageKey, expiresAt: Date.now() + 600_000 };
+    first.storeAuthoritativeReply(reply);
+    assert.equal(second.reserveUniqueAuthoritativeReply({ ...reply, outboundRunKey }).text, reply.text);
+    second.finishAuthoritativeReplyDelivery(outboundRunKey, false);
+    enqueueRealInbound(second, freshnessInbound('synthetic-new-query'));
+    assert.equal(first.reserveUniqueAuthoritativeReply({ ...reply, outboundRunKey }), undefined);
+    assert.equal(first.storeAuthoritativeReply({ ...reply, replyKey: 'f'.repeat(64) }), false);
+    assert.equal(second.isCurrentReplySource({ recipientKey: original.recipientKey, sourceMessageKey }), false);
+    assert.equal(second.reserveUniqueAuthoritativeReply({ ...reply, outboundRunKey }), undefined);
+  } finally {
+    second.close();
+    first.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('real message redelivery preserves retry and never rolls freshness back after queue expiry', () => {
+  const store = new SqliteReceiptStore(':memory:');
+  const original = freshnessInbound('synthetic-retry');
+  const replyKey = 'd'.repeat(64);
+  try {
+    const sourceMessageKey = enqueueRealInbound(store, original);
+    const reply = { replyKey, deliveryKey: original.deliveryKey, recipientKey: original.recipientKey,
+      text: 'synthetic retry result', sourceMessageKey, expiresAt: Date.now() + 600_000 };
+    assert.equal(store.storeAuthoritativeReply(reply), true);
+    enqueueRealInbound(store, original);
+    const firstRun = 'e'.repeat(64);
+    assert.equal(store.reserveUniqueAuthoritativeReply({ ...reply, outboundRunKey: firstRun }).text, reply.text);
+    store.finishAuthoritativeReplyDelivery(firstRun, false);
+    assert.equal(store.reserveUniqueAuthoritativeReply({ ...reply, outboundRunKey: 'f'.repeat(64) }).text, reply.text);
+    const latestKey = enqueueRealInbound(store, freshnessInbound('synthetic-newer'));
+    // Purge only the expired unclaimed delivery, as ordinary queue cleanup does.
+    store.database.prepare('UPDATE trusted_inbound_queue SET expires_at = 1 WHERE message_key = ?').run(sourceMessageKey);
+    store.claimTrustedInbound(['synthetic-unmatched']);
+    enqueueRealInbound(store, original);
+    assert.equal(store.isCurrentReplySource({ recipientKey: original.recipientKey, sourceMessageKey }), false);
+    assert.equal(store.isCurrentReplySource({ recipientKey: original.recipientKey, sourceMessageKey: latestKey }), true);
+    assert.equal(store.reserveUniqueAuthoritativeReply({ ...reply, outboundRunKey: 'f'.repeat(64) }), undefined);
+  } finally { store.close(); }
+});
+
+test('correlated and bridge enqueues never advance real message freshness', () => {
+  const store = new SqliteReceiptStore(':memory:');
+  const original = freshnessInbound('synthetic-original');
+  try {
+    const sourceMessageKey = enqueueRealInbound(store, original);
+    store.enqueueTrustedInbound(['synthetic-bridge'], 'd'.repeat(64), freshnessInbound('synthetic-bridge'), Date.now() + 600_000);
+    assert.equal(store.isCurrentReplySource({ recipientKey: original.recipientKey, sourceMessageKey }), true);
+    assert.equal(store.isCurrentExpenseProposalSource({ conversationKey: original.conversationKey, sourceMessageKey }), true);
+    assert.equal(store.isCurrentReplySource({ recipientKey: original.recipientKey }), false);
+    assert.equal(store.isCurrentExpenseProposalSource({ conversationKey: original.conversationKey }), false);
+  } finally { store.close(); }
+});
+
+test('real inbound freshness and old reply deletion roll back if queue lookup persistence fails', () => {
+  const store = new SqliteReceiptStore(':memory:');
+  const original = freshnessInbound('synthetic-before-failure');
+  const incoming = freshnessInbound('synthetic-failed-incoming');
+  try {
+    const sourceMessageKey = enqueueRealInbound(store, original);
+    const reply = { replyKey: 'd'.repeat(64), deliveryKey: original.deliveryKey, recipientKey: original.recipientKey,
+      text: 'synthetic current result', sourceMessageKey, expiresAt: Date.now() + 600_000 };
+    store.storeAuthoritativeReply(reply);
+    store.database.exec(`CREATE TRIGGER fail_freshness_lookup BEFORE INSERT ON trusted_inbound_queue_lookups
+      BEGIN SELECT RAISE(ABORT, 'SYNTHETIC-FRESHNESS-FAILURE'); END;`);
+    assert.throws(() => enqueueRealInbound(store, incoming), /SYNTHETIC-FRESHNESS-FAILURE/u);
+    assert.equal(store.isCurrentReplySource({ recipientKey: original.recipientKey, sourceMessageKey }), true);
+    assert.equal(store.reserveUniqueAuthoritativeReply({ ...reply, outboundRunKey: 'e'.repeat(64) }).text, reply.text);
+    store.database.exec('DROP TRIGGER fail_freshness_lookup');
+    const latestKey = enqueueRealInbound(store, incoming);
+    assert.equal(store.isCurrentReplySource({ recipientKey: original.recipientKey, sourceMessageKey: latestKey }), true);
+    assert.equal(store.isCurrentReplySource({ recipientKey: original.recipientKey, sourceMessageKey }), false);
+  } finally { store.close(); }
+});
+
+test('legacy reply schema upgrades without losing receipts and closes legacy recovery once tracking begins', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-freshness-upgrade-'));
+  const path = join(dir, 'receipts.sqlite');
+  const original = freshnessInbound('synthetic-legacy');
+  const legacyKey = trustedInboundMessageKey(original.channel, original.messageId);
+  createLegacyConfirmationDatabase(path, [{ messageKey: legacyKey, claimedAt: Date.now() - 1_000, expiresAt: Date.now() + 600_000 }]);
+  const legacy = new DatabaseSync(path);
+  legacy.exec(`CREATE TABLE pending_authoritative_replies (
+    reply_key TEXT PRIMARY KEY, delivery_key TEXT NOT NULL, recipient_key TEXT NOT NULL,
+    text TEXT NOT NULL, expires_at INTEGER NOT NULL, reserved_by TEXT, reserved_at INTEGER
+  );`);
+  legacy.prepare('INSERT INTO pending_authoritative_replies VALUES (?, ?, ?, ?, ?, NULL, NULL)')
+    .run('d'.repeat(64), original.deliveryKey, original.recipientKey, 'synthetic legacy reply', Date.now() + 600_000);
+  legacy.close();
+  let store;
+  try {
+    store = new SqliteReceiptStore(path);
+    assert.ok(store.database.prepare('PRAGMA table_info(pending_authoritative_replies)').all().some(x => x.name === 'source_message_key'));
+    const reservation = { recipientKey: original.recipientKey, deliveryKey: original.deliveryKey, outboundRunKey: 'e'.repeat(64) };
+    assert.equal(store.reserveUniqueAuthoritativeReply(reservation).text, 'synthetic legacy reply');
+    store.finishAuthoritativeReplyDelivery(reservation.outboundRunKey, false);
+    const latestKey = enqueueRealInbound(store, freshnessInbound('synthetic-new-after-upgrade'));
+    enqueueRealInbound(store, original);
+    assert.equal(store.isCurrentReplySource({ recipientKey: original.recipientKey, sourceMessageKey: latestKey }), true);
+    assert.equal(store.reserveUniqueAuthoritativeReply(reservation), undefined);
+    assert.equal(store.consumePendingExpenseConfirmation(original.conversationKey, legacyKey).status, 'duplicate');
+    store.close();
+    store = new SqliteReceiptStore(path);
+    assert.equal(store.isCurrentReplySource({ recipientKey: original.recipientKey, sourceMessageKey: latestKey }), true);
+  } finally {
+    store?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('SQLite busy classifier accepts primary and extended BUSY codes only', () => {
   assert.equal(isSqliteBusyError({ errcode: 5 }), true);
   assert.equal(isSqliteBusyError({ errcode: 261 }), true);
@@ -232,13 +412,15 @@ test('confirmation history migration imports claimed hashes once and preserves n
       pendingExpenseProposal({ messageId: 'synthetic-new-proposal' }), now + 600_000, now);
     second = new SqliteReceiptStore(path);
     assert.equal(second.consumePendingExpenseConfirmation(conversationKey, freshKey, now).status, 'active');
-    assert.equal(second.database.prepare('SELECT COUNT(*) AS count FROM receipt_store_migrations').get().count, 1);
+    assert.equal(second.database.prepare('SELECT COUNT(*) AS count FROM receipt_store_migrations WHERE migration_key = ?')
+      .get('processed-expense-confirmations-v1').count, 1);
     first.close();
     first = undefined;
     second.close();
     second = new SqliteReceiptStore(path);
     assert.deepEqual(second.consumePendingExpenseConfirmation(conversationKey, oldKey, now), { status: 'duplicate' });
-    assert.equal(second.database.prepare('SELECT COUNT(*) AS count FROM receipt_store_migrations').get().count, 1);
+    assert.equal(second.database.prepare('SELECT COUNT(*) AS count FROM receipt_store_migrations WHERE migration_key = ?')
+      .get('processed-expense-confirmations-v1').count, 1);
   } finally {
     second?.close();
     first?.close();
@@ -268,7 +450,8 @@ test('confirmation history migration rolls back historical claims when its marke
     inspection.exec('DROP TRIGGER fail_history_migration');
     store = new SqliteReceiptStore(path);
     assert.deepEqual(store.consumePendingExpenseConfirmation('a'.repeat(64), oldKey, now), { status: 'duplicate' });
-    assert.equal(inspection.prepare('SELECT COUNT(*) AS count FROM receipt_store_migrations').get().count, 1);
+    assert.equal(inspection.prepare('SELECT COUNT(*) AS count FROM receipt_store_migrations WHERE migration_key = ?')
+      .get('processed-expense-confirmations-v1').count, 1);
   } finally {
     store?.close();
     inspection.close();
@@ -311,7 +494,8 @@ test('confirmation history migration serializes concurrent process startup witho
       store.replacePendingExpenseConfirmation(conversationKey, pendingExpenseProposal(), now + 600_000, now);
       assert.equal(store.consumePendingExpenseConfirmation(conversationKey, key, now).status, 'active');
     }
-    assert.equal(store.database.prepare('SELECT COUNT(*) AS count FROM receipt_store_migrations').get().count, 1);
+    assert.equal(store.database.prepare('SELECT COUNT(*) AS count FROM receipt_store_migrations WHERE migration_key = ?')
+      .get('processed-expense-confirmations-v1').count, 1);
   } finally {
     store?.close();
     rmSync(dir, { recursive: true, force: true });

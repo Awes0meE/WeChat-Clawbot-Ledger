@@ -9,6 +9,7 @@ const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const SQLITE_BUSY_RETRY_MS = 10;
 const TRUSTED_RUN_END_TTL_MS = 10 * 60 * 1000;
 const CONFIRMATION_HISTORY_MIGRATION_KEY = 'processed-expense-confirmations-v1';
+const INBOUND_FRESHNESS_MIGRATION_KEY = 'trusted-inbound-freshness-v1';
 const SQLITE_BUSY_WAIT = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 
 export function isSqliteBusyError(error) {
@@ -223,6 +224,7 @@ export class SqliteReceiptStore {
     try {
       this.#migrateLegacyTrustedInboundMessages();
       this.#migrateProcessedExpenseConfirmations();
+      this.#migrateInboundFreshness();
     } catch (error) {
       this.database.close();
       throw error;
@@ -307,8 +309,35 @@ export class SqliteReceiptStore {
     `);
     this.insertAuthoritativeReply = this.database.prepare(`
       INSERT OR IGNORE INTO pending_authoritative_replies
-        (reply_key, delivery_key, recipient_key, text, expires_at)
-      VALUES (?, ?, ?, ?, ?)
+        (reply_key, delivery_key, recipient_key, text, expires_at, source_message_key)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    this.insertRealInboundHistory = this.database.prepare(`
+      INSERT OR IGNORE INTO real_inbound_message_history (message_key, observed_at)
+      VALUES (?, ?)
+    `);
+    this.updateLatestReplySource = this.database.prepare(`
+      INSERT INTO latest_recipient_messages (recipient_key, message_key) VALUES (?, ?)
+      ON CONFLICT(recipient_key) DO UPDATE SET message_key = excluded.message_key
+    `);
+    this.updateLatestProposalSource = this.database.prepare(`
+      INSERT INTO latest_substantive_messages (conversation_key, message_key) VALUES (?, ?)
+      ON CONFLICT(conversation_key) DO UPDATE SET message_key = excluded.message_key
+    `);
+    this.selectLatestReplySource = this.database.prepare(`
+      SELECT message_key FROM latest_recipient_messages WHERE recipient_key = ?
+    `);
+    this.selectLatestProposalSource = this.database.prepare(`
+      SELECT message_key FROM latest_substantive_messages WHERE conversation_key = ?
+    `);
+    this.deleteOutdatedAuthoritativeReplies = this.database.prepare(`
+      DELETE FROM pending_authoritative_replies
+      WHERE EXISTS (
+        SELECT 1 FROM latest_recipient_messages AS latest
+        WHERE latest.recipient_key = pending_authoritative_replies.recipient_key
+          AND (pending_authoritative_replies.source_message_key IS NULL
+            OR pending_authoritative_replies.source_message_key <> latest.message_key)
+      )
     `);
     this.deleteExpiredAuthoritativeReplies = this.database.prepare(`
       DELETE FROM pending_authoritative_replies
@@ -381,12 +410,16 @@ export class SqliteReceiptStore {
       || !normalized || normalized.sourceInbound.conversationKey !== conversationKey) {
       throw new Error('pending expense confirmation is invalid');
     }
-    this.upsertPendingExpenseConfirmation.run(
-      conversationKey,
-      JSON.stringify(normalized),
-      expiresAt,
-      now,
-    );
+    return this.#withImmediateTransaction(() => {
+      if (!this.isCurrentExpenseProposalSource({ conversationKey, sourceMessageKey: normalized.sourceMessageKey })) return false;
+      this.upsertPendingExpenseConfirmation.run(
+        conversationKey,
+        JSON.stringify(normalized),
+        expiresAt,
+        now,
+      );
+      return true;
+    });
   }
 
   takePendingExpenseConfirmation(conversationKey, now = Date.now()) {
@@ -425,7 +458,9 @@ export class SqliteReceiptStore {
     } catch {
       proposal = undefined;
     }
-    return proposal ? { status: 'active', proposal } : { status: 'missing' };
+    return proposal && this.isCurrentExpenseProposalSource({ conversationKey, sourceMessageKey: proposal.sourceMessageKey })
+      ? { status: 'active', proposal }
+      : { status: 'missing' };
   }
 
   discardPendingExpenseConfirmation(conversationKey) {
@@ -435,17 +470,38 @@ export class SqliteReceiptStore {
     return Number(this.deletePendingExpenseConfirmation.run(conversationKey).changes) === 1;
   }
 
-  storeAuthoritativeReply({ replyKey, deliveryKey, recipientKey, text, expiresAt }) {
+  isCurrentReplySource({ recipientKey, sourceMessageKey }) {
+    if (!HASH_KEY_PATTERN.test(String(recipientKey ?? ''))
+      || (sourceMessageKey !== undefined && !HASH_KEY_PATTERN.test(String(sourceMessageKey)))) {
+      throw new Error('authoritative reply source is invalid');
+    }
+    const latest = this.selectLatestReplySource.get(recipientKey);
+    return !latest || latest.message_key === sourceMessageKey;
+  }
+
+  isCurrentExpenseProposalSource({ conversationKey, sourceMessageKey }) {
+    if (!HASH_KEY_PATTERN.test(String(conversationKey ?? ''))
+      || (sourceMessageKey !== undefined && !HASH_KEY_PATTERN.test(String(sourceMessageKey)))) {
+      throw new Error('pending expense confirmation source is invalid');
+    }
+    const latest = this.selectLatestProposalSource.get(conversationKey);
+    return !latest || latest.message_key === sourceMessageKey;
+  }
+
+  storeAuthoritativeReply({ replyKey, deliveryKey, recipientKey, text, expiresAt, sourceMessageKey }) {
     if (!HASH_KEY_PATTERN.test(String(replyKey ?? ''))
       || !HASH_KEY_PATTERN.test(String(deliveryKey ?? ''))
       || !HASH_KEY_PATTERN.test(String(recipientKey ?? ''))
+      || (sourceMessageKey !== undefined && !HASH_KEY_PATTERN.test(String(sourceMessageKey)))
       || typeof text !== 'string' || text.length === 0
       || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) {
       throw new Error('authoritative reply is invalid');
     }
-    this.#withImmediateTransaction(() => {
+    return this.#withImmediateTransaction(() => {
+      if (!this.isCurrentReplySource({ recipientKey, sourceMessageKey })) return false;
       this.deleteExpiredAuthoritativeReplies.run(Date.now());
-      this.insertAuthoritativeReply.run(replyKey, deliveryKey, recipientKey, text, expiresAt);
+      this.insertAuthoritativeReply.run(replyKey, deliveryKey, recipientKey, text, expiresAt, sourceMessageKey ?? null);
+      return true;
     });
   }
 
@@ -458,6 +514,7 @@ export class SqliteReceiptStore {
     }
     return this.#withImmediateTransaction(() => {
       this.deleteExpiredAuthoritativeReplies.run(now);
+      this.deleteOutdatedAuthoritativeReplies.run();
       const existing = this.selectReservedAuthoritativeReplies.all(outboundRunKey, now);
       if (existing.length === 1) {
         const [reserved] = existing;
@@ -519,18 +576,37 @@ export class SqliteReceiptStore {
     return this.selectEndedTrustedRun.get(runKey, now) !== undefined;
   }
 
-  enqueueTrustedInbound(lookupKeys, messageKey, payload, expiresAt, { discardPendingConfirmation = false } = {}) {
+  enqueueTrustedInbound(lookupKeys, messageKey, payload, expiresAt, {
+    discardPendingConfirmation = false,
+    isRealInbound = false,
+  } = {}) {
     const keys = [...new Set(lookupKeys.filter((key) => typeof key === 'string' && key.length > 0))];
     if (keys.length === 0 || typeof messageKey !== 'string' || messageKey.length === 0) return;
-    if (typeof discardPendingConfirmation !== 'boolean'
+    if (typeof discardPendingConfirmation !== 'boolean' || typeof isRealInbound !== 'boolean'
       || (discardPendingConfirmation && !HASH_KEY_PATTERN.test(String(payload?.conversationKey ?? '')))) {
       throw new Error('trusted inbound confirmation invalidation is invalid');
+    }
+    if (isRealInbound && (!normalizeTrustedInboundPayload(payload)
+      || !HASH_KEY_PATTERN.test(String(payload.conversationKey ?? ''))
+      || !HASH_KEY_PATTERN.test(String(payload.recipientKey ?? ''))
+      || !HASH_KEY_PATTERN.test(String(payload.deliveryKey ?? ''))
+      || messageKey !== trustedInboundMessageKey(payload.channel, payload.messageId))) {
+      throw new Error('real trusted inbound source is invalid');
     }
     const payloadJson = JSON.stringify(payload);
     this.#withImmediateTransaction(() => {
       this.#deleteExpiredTrustedInbound(Date.now());
       const inserted = this.insertTrustedInbound.run(messageKey, payloadJson, expiresAt);
-      if (Number(inserted.changes) === 1 && discardPendingConfirmation) {
+      const isNewRealMessage = isRealInbound
+        && Number(this.insertRealInboundHistory.run(messageKey, Date.now()).changes) === 1;
+      if (isNewRealMessage) {
+        this.updateLatestReplySource.run(payload.recipientKey, messageKey);
+        this.deleteOutdatedAuthoritativeReplies.run();
+        if (discardPendingConfirmation) {
+          this.updateLatestProposalSource.run(payload.conversationKey, messageKey);
+        }
+      }
+      if ((isRealInbound ? isNewRealMessage : Number(inserted.changes) === 1) && discardPendingConfirmation) {
         this.deletePendingExpenseConfirmation.run(payload.conversationKey);
       }
       const reactivated = Number(inserted.changes) === 1
@@ -699,6 +775,46 @@ export class SqliteReceiptStore {
       this.database.prepare(`
         INSERT INTO receipt_store_migrations (migration_key, applied_at) VALUES (?, ?)
       `).run(CONFIRMATION_HISTORY_MIGRATION_KEY, now);
+    });
+  }
+
+  #migrateInboundFreshness() {
+    this.#withImmediateTransaction(() => {
+      const applied = this.database.prepare(`
+        SELECT 1 FROM receipt_store_migrations WHERE migration_key = ?
+      `).get(INBOUND_FRESHNESS_MIGRATION_KEY);
+      if (applied) return;
+
+      this.database.exec(`
+        CREATE TABLE IF NOT EXISTS real_inbound_message_history (
+          message_key TEXT PRIMARY KEY,
+          observed_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS latest_recipient_messages (
+          recipient_key TEXT PRIMARY KEY,
+          message_key TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS latest_substantive_messages (
+          conversation_key TEXT PRIMARY KEY,
+          message_key TEXT NOT NULL
+        );
+      `);
+      const replyColumns = this.database.prepare('PRAGMA table_info(pending_authoritative_replies)').all();
+      if (!replyColumns.some((column) => column.name === 'source_message_key')) {
+        this.database.exec('ALTER TABLE pending_authoritative_replies ADD COLUMN source_message_key TEXT');
+      }
+      const now = Date.now();
+      // Remember pre-upgrade hashes so an old delivery cannot become "new" again.
+      // Scrubbed payloads cannot establish a reliable latest source; legacy state
+      // remains usable until its recipient/conversation receives a new real message.
+      this.database.prepare(`
+        INSERT OR IGNORE INTO real_inbound_message_history (message_key, observed_at)
+        SELECT message_key, ? FROM trusted_inbound_queue
+        WHERE length(message_key) = 64 AND message_key NOT GLOB '*[^a-f0-9]*'
+      `).run(now);
+      this.database.prepare(`
+        INSERT INTO receipt_store_migrations (migration_key, applied_at) VALUES (?, ?)
+      `).run(INBOUND_FRESHNESS_MIGRATION_KEY, now);
     });
   }
 

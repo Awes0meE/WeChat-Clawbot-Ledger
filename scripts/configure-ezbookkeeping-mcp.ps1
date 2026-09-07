@@ -113,15 +113,57 @@ function Copy-ConfigToUniqueBackup {
     throw 'Could not create a unique ezBookkeeping configuration backup.'
 }
 
+function Assert-McpFileHash {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ExpectedHash
+    )
+
+    Assert-LedgerNoExistingReparsePath -Path $Path
+    if ((Get-LedgerFileSha256 -Path $Path) -cne $ExpectedHash) {
+        throw 'The ezBookkeeping MCP configuration or its verified backup changed independently.'
+    }
+}
+
+function Assert-McpSetupSnapshot {
+    param(
+        [Parameter(Mandatory = $true)][string]$ConfigPath,
+        [Parameter(Mandatory = $true)][string]$ExpectedConfigHash,
+        [Parameter(Mandatory = $true)][string]$BackupPath,
+        [Parameter(Mandatory = $true)][string]$ExpectedBackupHash
+    )
+
+    Assert-LedgerOwnerOnlyFile -Path $BackupPath
+    Assert-McpFileHash -Path $BackupPath -ExpectedHash $ExpectedBackupHash
+    Assert-McpFileHash -Path $ConfigPath -ExpectedHash $ExpectedConfigHash
+}
+
 function Write-ConfigAtomically {
     param(
         [Parameter(Mandatory = $true)][string]$ConfigPath,
-        [Parameter(Mandatory = $true)][string]$Text,
-        [Parameter(Mandatory = $true)][System.Text.Encoding]$Encoding
+        [Parameter(Mandatory = $true)][byte[]]$Bytes,
+        [Parameter(Mandatory = $true)][string]$ExpectedCurrentHash,
+        [string]$BackupPath,
+        [string]$ExpectedBackupHash
     )
 
-    Write-LedgerTextAtomically -Path $ConfigPath -Text $Text
-    Assert-LedgerOwnerOnlyFile -Path $ConfigPath
+    Assert-McpFileHash -Path $ConfigPath -ExpectedHash $ExpectedCurrentHash
+    $temporaryPath = Join-Path (Split-Path -Parent $ConfigPath) ('.' + (Split-Path -Leaf $ConfigPath) + '.mcp-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+    try {
+        New-LedgerOwnerOnlyEmptyFile -Path $temporaryPath
+        Write-LedgerBytesIntoExistingFile -Path $temporaryPath -Bytes $bytes
+        Assert-LedgerOwnerOnlyFile -Path $temporaryPath
+        if (-not [string]::IsNullOrWhiteSpace($BackupPath)) {
+            Assert-McpFileHash -Path $BackupPath -ExpectedHash $ExpectedBackupHash
+        }
+        Assert-McpFileHash -Path $ConfigPath -ExpectedHash $ExpectedCurrentHash
+        Move-LedgerFileAtomicallyReplacingDestination -SourcePath $temporaryPath -DestinationPath $ConfigPath
+        Protect-LedgerOwnerOnlyFile -Path $ConfigPath
+        Assert-LedgerOwnerOnlyFile -Path $ConfigPath
+    } finally {
+        if ($null -ne $bytes -and $bytes.Length -gt 0) { [Array]::Clear($bytes, 0, $bytes.Length) }
+        Remove-LedgerOwnedFileIfPresent -Path $temporaryPath
+    }
 }
 
 function Assert-McpTokenDestination {
@@ -221,11 +263,15 @@ function Restore-ConfigurationAndService {
         [Parameter(Mandatory = $true)][string]$ExpectedExecutable,
         [Parameter(Mandatory = $true)][string]$ExpectedInstallDirectory,
         [Parameter(Mandatory = $true)][string]$ExpectedConfigPath,
+        [Parameter(Mandatory = $true)][string]$ExpectedBackupHash,
+        [Parameter(Mandatory = $true)][string]$ExpectedCurrentHash,
         [bool]$TaskWasRunning,
         [bool]$TaskStopped,
         [bool]$TaskStarted
     )
 
+    # Refuse independent edits before taking any action against the running service.
+    Assert-McpSetupSnapshot -ConfigPath $ConfigPath -ExpectedConfigHash $ExpectedCurrentHash -BackupPath $BackupPath -ExpectedBackupHash $ExpectedBackupHash
     if ($TaskStarted) {
         $verifiedTask = Get-LedgerExpectedTask -TaskName $Task.TaskName -InstallDirectory $ExpectedInstallDirectory -ExpectedExecutable $ExpectedExecutable -ConfigPath $ExpectedConfigPath -Mode Explicit
         if ([string]$verifiedTask.State -ceq 'Running') {
@@ -233,6 +279,7 @@ function Restore-ConfigurationAndService {
             if (@(Get-LedgerListeningTcpConnections -Port 8888).Count -gt 0) {
                 $rollbackIdentity = Get-LedgerListenerOwner -Port 8888 -ExpectedExecutable $ExpectedExecutable -ExpectedConfigPath $ExpectedConfigPath
             }
+            Assert-McpSetupSnapshot -ConfigPath $ConfigPath -ExpectedConfigHash $ExpectedCurrentHash -BackupPath $BackupPath -ExpectedBackupHash $ExpectedBackupHash
             Stop-ScheduledTask -InputObject $verifiedTask -ErrorAction Stop
             Wait-LedgerListenerExit -Identity $rollbackIdentity -Port 8888 -ExpectedExecutable $ExpectedExecutable -ExpectedConfigPath $ExpectedConfigPath
         } elseif ([string]$verifiedTask.State -ceq 'Ready') {
@@ -244,10 +291,11 @@ function Restore-ConfigurationAndService {
             throw 'The restarted ezBookkeeping task has an unexpected state during rollback.'
         }
     }
-    $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
-    $backupText = [IO.File]::ReadAllText($BackupPath, $strictUtf8)
-    Write-LedgerTextAtomically -Path $ConfigPath -Text $backupText
-    Assert-LedgerOwnerOnlyFile -Path $ConfigPath
+    Assert-McpSetupSnapshot -ConfigPath $ConfigPath -ExpectedConfigHash $ExpectedCurrentHash -BackupPath $BackupPath -ExpectedBackupHash $ExpectedBackupHash
+    $backupBytes = [IO.File]::ReadAllBytes($BackupPath)
+    Assert-McpSetupSnapshot -ConfigPath $ConfigPath -ExpectedConfigHash $ExpectedCurrentHash -BackupPath $BackupPath -ExpectedBackupHash $ExpectedBackupHash
+    Write-ConfigAtomically -ConfigPath $ConfigPath -Bytes $backupBytes -ExpectedCurrentHash $ExpectedCurrentHash -BackupPath $BackupPath -ExpectedBackupHash $ExpectedBackupHash
+    Assert-McpFileHash -Path $ConfigPath -ExpectedHash $ExpectedBackupHash
     if ($TaskWasRunning -and $TaskStopped) {
         Start-ScheduledTask -InputObject $Task -ErrorAction Stop
     }
@@ -268,6 +316,7 @@ $taskWasRunning = $false
 $taskStopped = $false
 $taskStarted = $false
 $configWritten = $false
+$candidateConfigHash = $null
 $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $configurationSettingNames = @(
@@ -325,8 +374,15 @@ try {
         (Get-LedgerFileSha256 -Path $backupPath) -cne $approvedConfigHash) {
         throw 'The ezBookkeeping configuration changed before the MCP update.'
     }
+    $candidateHashAlgorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        $candidateConfigHash = ([BitConverter]::ToString($candidateHashAlgorithm.ComputeHash($utf8NoBom.GetBytes($updatedConfig)))).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $candidateHashAlgorithm.Dispose()
+    }
     $configWritten = $true
-    Write-ConfigAtomically -ConfigPath $ConfigPath -Text $updatedConfig -Encoding $utf8NoBom
+    Write-ConfigAtomically -ConfigPath $ConfigPath -Bytes ($utf8NoBom.GetBytes($updatedConfig)) -ExpectedCurrentHash $approvedConfigHash -BackupPath $backupPath -ExpectedBackupHash $approvedConfigHash
+    Assert-McpSetupSnapshot -ConfigPath $ConfigPath -ExpectedConfigHash $candidateConfigHash -BackupPath $backupPath -ExpectedBackupHash $approvedConfigHash
     $task = Get-LedgerExpectedTask -TaskName $TaskName -InstallDirectory $normalizedInstallDirectory -ExpectedExecutable $expectedExecutable -ConfigPath $ConfigPath -Mode Explicit
     if ([string]$task.State -cne 'Running') {
         throw 'The exact ezBookkeeping scheduled task stopped before controlled restart.'
@@ -337,6 +393,7 @@ try {
         throw 'The ezBookkeeping listener identity changed before controlled restart.'
     }
     Assert-LedgerNoConfigurationOverrides -SettingNames $configurationSettingNames
+    Assert-McpSetupSnapshot -ConfigPath $ConfigPath -ExpectedConfigHash $candidateConfigHash -BackupPath $backupPath -ExpectedBackupHash $approvedConfigHash
     Stop-ScheduledTask -InputObject $task -ErrorAction Stop
     $taskStopped = $true
     Wait-LedgerListenerExit -Identity $listenerIdentity -Port 8888 -ExpectedExecutable $expectedExecutable -ExpectedConfigPath $ConfigPath
@@ -377,7 +434,12 @@ try {
     }
     $headers = @{ Authorization = "Bearer $apiToken" }
     $body = @{ expiresInSeconds = $ExpiresInSeconds; password = $plainPassword } | ConvertTo-Json -Compress
+    # The interactive password prompt can leave this process idle for a long time.
+    # Revalidate both files around the token request before persisting credentials.
+    Assert-McpSetupSnapshot -ConfigPath $ConfigPath -ExpectedConfigHash $candidateConfigHash -BackupPath $backupPath -ExpectedBackupHash $approvedConfigHash
+    $null = Get-LedgerListenerOwner -Port 8888 -ExpectedExecutable $expectedExecutable -ExpectedConfigPath $ConfigPath
     $response = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8888/api/v1/tokens/generate/mcp.json' -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $body -MaximumRedirection 0 -TimeoutSec 15 -ErrorAction Stop
+    Assert-McpSetupSnapshot -ConfigPath $ConfigPath -ExpectedConfigHash $candidateConfigHash -BackupPath $backupPath -ExpectedBackupHash $approvedConfigHash
     $mcpToken = ([string]$response.result.token).Trim()
     if ($response.success -ne $true -or [string]::IsNullOrWhiteSpace($mcpToken) -or $mcpToken -match '[\r\n]') {
         throw 'ezBookkeeping did not return an MCP token.'
@@ -390,8 +452,9 @@ try {
         $configurationNeedsRestore = $true
         try {
             Assert-LedgerOwnerOnlyFile -Path $backupPath
+            Assert-McpFileHash -Path $backupPath -ExpectedHash $approvedConfigHash
             if (-not $taskStopped -and -not $taskStarted -and
-                (Get-LedgerFileSha256 -Path $ConfigPath) -ceq (Get-LedgerFileSha256 -Path $backupPath)) {
+                (Get-LedgerFileSha256 -Path $ConfigPath) -ceq $approvedConfigHash) {
                 Assert-LedgerOwnerOnlyFile -Path $ConfigPath
                 $configurationNeedsRestore = $false
             }
@@ -400,7 +463,7 @@ try {
         }
         if ($configurationNeedsRestore) {
             try {
-                Restore-ConfigurationAndService -BackupPath $backupPath -ConfigPath $ConfigPath -Task $task -ExpectedExecutable $expectedExecutable -ExpectedInstallDirectory $normalizedInstallDirectory -ExpectedConfigPath $ConfigPath -TaskWasRunning $taskWasRunning -TaskStopped $taskStopped -TaskStarted $taskStarted
+                Restore-ConfigurationAndService -BackupPath $backupPath -ConfigPath $ConfigPath -Task $task -ExpectedExecutable $expectedExecutable -ExpectedInstallDirectory $normalizedInstallDirectory -ExpectedConfigPath $ConfigPath -ExpectedBackupHash $approvedConfigHash -ExpectedCurrentHash $candidateConfigHash -TaskWasRunning $taskWasRunning -TaskStopped $taskStopped -TaskStarted $taskStarted
             } catch {
                 $rollbackSucceeded = $false
             }

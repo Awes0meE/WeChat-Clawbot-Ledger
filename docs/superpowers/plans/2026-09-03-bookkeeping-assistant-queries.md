@@ -1,6 +1,6 @@
 # Local Bookkeeping Assistant Queries Implementation Plan
 
-> **Historical record (2026-09-04):** This plan has been implemented in later commits and must not be executed verbatim. The runtime moved from local Qwen to the official Codex harness, deterministic summaries are live, and native MCP activation is still pending. Use `README.md` and `WINDOWS-HANDOFF.md` for current operations.
+> **Historical record (2026-09-04; status note updated 2026-09-07):** This plan has been implemented in later commits and must not be executed verbatim. The runtime moved from local Qwen to the official Codex harness, deterministic summaries are live, and native MCP was activated on 2026-09-07. Use `README.md` and `WINDOWS-HANDOFF.md` for current operations.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
