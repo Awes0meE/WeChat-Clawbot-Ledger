@@ -281,6 +281,7 @@ function Copy-BookkeepingSource {
 
     $requiredFiles = @(
         'adapter.mjs',
+        'deployment-profile.mjs',
         'bookkeeping-core.mjs',
         'categories.mjs',
         'expense-history.mjs',

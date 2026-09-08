@@ -1,0 +1,34 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import { mkdtempSync, chmodSync, rmSync, readFileSync, readdirSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { databaseAudit } from '../../../deploy/docker/database-audit.mjs';
+test('clean closed WAL is audited on a non-writable directory without recreating sidecars', { skip: process.platform === 'win32' }, t => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-clean-wal-')), path = join(dir, 'state.db');
+  t.after(() => { chmodSync(dir, 0o700); rmSync(dir, { recursive: true, force: true }); });
+  const db = new DatabaseSync(path); db.exec('CREATE TABLE t(v); INSERT INTO t VALUES(7)'); db.close();
+  const expected = databaseAudit(path);
+  const wal = new DatabaseSync(path); wal.exec('PRAGMA journal_mode=WAL'); wal.close();
+  assert.ok(!existsSync(`${path}-wal`));
+  const bytes = readFileSync(path); chmodSync(dir, 0o500);
+  assert.throws(() => databaseAudit(path, { requireDelete: false }));
+  assert.deepEqual(databaseAudit(path, { requireDelete: false, offlineWithoutWal: true }), expected);
+  assert.deepEqual(readFileSync(path), bytes); assert.deepEqual(readdirSync(dir), ['state.db']);
+  assert.throws(() => databaseAudit(path));
+  assert.throws(() => databaseAudit(path, { offlineWithoutWal: true }), /REQUIRES_OFFLINE_MODE/);
+});
+test('offline WAL option still includes committed data from a present crash-left WAL', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'clawbot-present-wal-')), path = join(dir, 'state.db');
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const db = new DatabaseSync(path); db.exec('CREATE TABLE t(v); INSERT INTO t VALUES(7)'); db.close();
+  const original = databaseAudit(path);
+  const child = spawnSync(process.execPath, ['-e', 'const D=require("node:sqlite").DatabaseSync,d=new D(process.argv[1]);d.exec("PRAGMA journal_mode=WAL;PRAGMA wal_autocheckpoint=0; INSERT INTO t VALUES(9)");process.exit(0)', path], { encoding: 'utf8' });
+  assert.equal(child.status, 0); assert.ok(existsSync(`${path}-wal`));
+  const walBytes = readFileSync(`${path}-wal`), expected = databaseAudit(path, { requireDelete: false });
+  assert.notEqual(expected.auditSha256, original.auditSha256);
+  assert.deepEqual(databaseAudit(path, { requireDelete: false, offlineWithoutWal: true }), expected);
+  assert.deepEqual(readFileSync(`${path}-wal`), walBytes);
+});

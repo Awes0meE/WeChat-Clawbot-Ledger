@@ -1,0 +1,72 @@
+{
+  "checkedDate": "2026-09-08",
+  "timezone": "Asia/Singapore",
+  "sourceCommit": "7cde428b45c9b3a358e80484a1ec1c4e5107fe3f",
+  "scope": "Public registry manifest/config and npm metadata only; no image layers pulled and no Linux runtime executed.",
+  "images": [
+    {
+      "reference": "ghcr.io/openclaw/openclaw:2026.8.2",
+      "role": "preferred OpenClaw base",
+      "indexDigest": "sha256:5d25165995041caa6a7175bec82b25ad98c44eb269bb42435da8e27ec06e6be4",
+      "arm64ManifestDigest": "sha256:14d1afacd0ba82ba0e9d1a14065694d6f574ac2914192169863acc37e74fc780",
+      "platform": "linux/arm64",
+      "compressedLayerBytes": 446378673,
+      "configUser": "node",
+      "sourceRevisionLabel": "0965053fe6b9341776df147a6934b7485c60b5ca"
+    },
+    {
+      "reference": "docker.io/mayswind/ezbookkeeping:1.6.1",
+      "role": "ledger base",
+      "indexDigest": "sha256:6d71a0d0f62806f609634886d0cbe9133e8177e1cb76b569d8dcc0587f734f0a",
+      "arm64ManifestDigest": "sha256:1043c95201f0432cd30328f6feb9a5b57359449400ea54fdf9a0c6138ab4c227",
+      "platform": "linux/arm64",
+      "compressedLayerBytes": 22192523,
+      "configUser": "1000:1000",
+      "sourceRevisionLabel": "6ccd0c462100828c78e203792a5b2feb8d569039"
+    },
+    {
+      "reference": "docker.io/library/node:22.23.1-bookworm-slim",
+      "role": "auxiliary test candidate; does not override OpenClaw embedded Node",
+      "indexDigest": "sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3",
+      "arm64ManifestDigest": "sha256:ef03a3d0e663b3c9d38c95be3fd31a100514d41df2599562b68a58a57f979adf",
+      "platform": "linux/arm64",
+      "compressedLayerBytes": 79895055,
+      "configUser": null
+    },
+    {
+      "reference": "docker.io/cloudflare/cloudflared:2026.8.3",
+      "role": "P2 candidate only; Windows runtime version not measured",
+      "indexDigest": "sha256:51c9cefcb4569df44e1ad403ab1d3d8065aa8e84339bcfc6aee75502e1140339",
+      "arm64ManifestDigest": "sha256:4ecc4283c0f7cc127522e5ef261595cfe8571ee28f5c8d3751b24f52f9d04ebe",
+      "platform": "linux/arm64",
+      "compressedLayerBytes": 27666401,
+      "configUser": "65532:65532"
+    }
+  ],
+  "npm": [
+    {
+      "name": "openclaw",
+      "version": "2026.8.2",
+      "metadataUrl": "https://registry.npmjs.org/openclaw/2026.8.2",
+      "integrity": "sha512-I9aqK1attaONePpWs2gPqh23s1s1EDcN/6icF2AAfONdtowu4156QD7g6oD7KlA2vQ9yiqnvlAVH6yduvGH9Ig==",
+      "matchesRepositoryLockfile": true
+    },
+    {
+      "name": "@openclaw/codex",
+      "version": "2026.8.2",
+      "metadataUrl": "https://registry.npmjs.org/@openclaw%2Fcodex/2026.8.2",
+      "integrity": "sha512-PNzKde/T1eSIYJtrjk7V1m5jF9cq+ltOYGc5/hDU2CXmLD5n9sszS7dsLByoaV82Yp4BJ665p2JqHOKJ+XS8sg==",
+      "codexDependency": "0.151.0",
+      "installedRuntimeVersion": null
+    },
+    {
+      "name": "@openai/codex",
+      "version": "0.151.0-linux-arm64",
+      "metadataUrl": "https://registry.npmjs.org/@openai%2Fcodex/0.151.0-linux-arm64",
+      "integrity": "sha512-CsLgFeX4TQ6I2Gdrxd2r5UbgIbDLCdtcLAlnMYjr06bCL057MTNGec7Ewb3+Z2DBiMuXCljdTBGqLOePkMV0sQ==",
+      "os": "linux",
+      "cpu": "arm64",
+      "unpackedBytes": 303007847
+    }
+  ]
+}

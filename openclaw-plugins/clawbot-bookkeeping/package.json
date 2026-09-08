@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "test:portable": "node ../../scripts/run-portable-tests.mjs"
   },
   "dependencies": {
     "typebox": "1.3.17"

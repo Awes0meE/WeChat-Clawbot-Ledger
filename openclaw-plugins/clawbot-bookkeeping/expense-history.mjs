@@ -39,7 +39,7 @@ export function normalizeExpenseHistoryQuery(params, accountName) {
   return { ...params, type: 'expense', account_name: accountName, count: Math.min(count, 10), page, response_fields: DISPLAY_FIELDS };
 }
 
-function resultPayload(result) {
+export function readExpenseHistoryPayload(result) {
   if (!result || typeof result !== 'object' || Array.isArray(result)
     || result.isError === true || result.details?.status === 'error') {
     throw new Error('history tool failed');
@@ -73,7 +73,7 @@ function displayTime(milliseconds) {
 }
 
 export function formatExpenseHistory(result, query, { accountName, ledgerDisplayName }) {
-  const payload = resultPayload(result);
+  const payload = readExpenseHistoryPayload(result);
   const count = query.count;
   const page = query.page;
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)
@@ -101,7 +101,9 @@ export function formatExpenseHistory(result, query, { accountName, ledgerDisplay
     const minor = BigInt(parseAmountToMinorUnits(transaction.amount));
     const amount = `${minor / 100n}.${(minor % 100n).toString().padStart(2, '0')} SGD`;
     const category = displayText(transaction.category_name, 200) || '未识别分类';
-    const comment = displayText(transaction.comment, 255) || '无';
+    // ezBookkeeping's MCP response omits the optional field for empty notes.
+    // Explicit null, objects and other malformed supplied values still fail.
+    const comment = displayText(Object.hasOwn(transaction, 'comment') ? transaction.comment : '', 255) || '无';
     lines.push(`${index + 1}. ${displayTime(time)}｜${amount}｜分类：${category}｜备注：${comment}`);
   }
   if (payload.total_page > page) lines.push(`还有更多符合条件的记录，这里只列本页 ${payload.transactions.length} 笔。`);

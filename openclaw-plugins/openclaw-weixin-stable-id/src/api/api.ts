@@ -438,7 +438,7 @@ export async function getUpdates(
      */
     abortSignal?: AbortSignal;
   },
-): Promise<GetUpdatesResp> {
+): Promise<GetUpdatesResp & { localTransportTimeout?: true }> {
   const timeout = params.timeoutMs ?? DEFAULT_LONG_POLL_TIMEOUT_MS;
   try {
     const rawText = await apiPostFetch({
@@ -464,7 +464,7 @@ export async function getUpdates(
       } else {
         logger.debug(`getUpdates: client-side timeout after ${timeout}ms, returning empty response`);
       }
-      return { ret: 0, msgs: [], get_updates_buf: params.get_updates_buf };
+      return { ret: 0, msgs: [], get_updates_buf: params.get_updates_buf, localTransportTimeout: true };
     }
     throw err;
   }

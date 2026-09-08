@@ -1,0 +1,86 @@
+name: clawbot-test
+x-runtime: &runtime
+  image: clawbot-openclaw-test:p1
+  platform: linux/arm64
+  build:
+    context: ../..
+    dockerfile: deploy/docker/Dockerfile.openclaw
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: ["/tmp:rw,nosuid,nodev,size=128m,mode=1777"]
+  environment:
+    HOME: /var/lib/clawbot-test/openclaw
+    CODEX_HOME: /var/lib/clawbot-test/codex
+  volumes:
+    - openclaw-state:/var/lib/clawbot-test/openclaw
+    - codex-state:/var/lib/clawbot-test/codex
+    - receipts:/var/lib/clawbot-test/receipts
+    - secrets:/var/lib/clawbot-test/secrets:ro
+  logging:
+    driver: json-file
+    options: {max-size: 5m, max-file: "2"}
+services:
+  init:
+    <<: *runtime
+    profiles: [setup]
+    user: "0:0"
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    network_mode: none
+    entrypoint: [node, /opt/clawbot/docker/initialize.mjs]
+    volumes:
+      - openclaw-state:/var/lib/clawbot-test/openclaw
+      - codex-state:/var/lib/clawbot-test/codex
+      - receipts:/var/lib/clawbot-test/receipts
+      - secrets:/var/lib/clawbot-test/secrets
+      - bootstrap:/var/lib/clawbot-test/bootstrap
+      - ledger-config:/var/lib/clawbot-test/config
+      - ledger-data:/var/lib/clawbot-test/ledger
+  origin:
+    image: mayswind/ezbookkeeping@sha256:1043c95201f0432cd30328f6feb9a5b57359449400ea54fdf9a0c6138ab4c227
+    platform: linux/arm64
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=32m,mode=1777"]
+    entrypoint: [/ezbookkeeping/ezbookkeeping]
+    command: [--conf-path, /var/lib/clawbot-test/config/ezbookkeeping.ini, --no-boot-log, server, run]
+    volumes:
+      - ledger-config:/var/lib/clawbot-test/config:ro
+      - ledger-data:/var/lib/clawbot-test/ledger
+      - bootstrap:/var/lib/clawbot-test/bootstrap:ro
+    healthcheck:
+      test: [CMD-SHELL, "wget -q -O /dev/null http://127.0.0.1:18888/healthz.json"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    logging:
+      driver: json-file
+      options: {max-size: 5m, max-file: "2"}
+  openclaw:
+    <<: *runtime
+    network_mode: service:origin
+    depends_on:
+      origin: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, node, /opt/clawbot/docker/health.mjs]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+  cli:
+    <<: *runtime
+    profiles: [tools]
+    network_mode: service:origin
+    entrypoint: [node]
+    command: [/opt/clawbot/docker/verify-runtime.mjs]
+    depends_on:
+      origin: {condition: service_healthy}
+volumes:
+  ledger-config:
+  ledger-data:
+  bootstrap:
+  secrets:
+  receipts:
+  openclaw-state:
+  codex-state:

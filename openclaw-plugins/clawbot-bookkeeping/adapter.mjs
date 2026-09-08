@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { assertDeploymentOrigin, PRODUCTION_DEPLOYMENT } from './deployment-profile.mjs';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_REQUEST_TIMEOUT_MS = 60_000;
@@ -849,14 +850,13 @@ export class EzBookkeepingApi {
     tokenPath,
     fetchImpl = globalThis.fetch,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+    deployment = PRODUCTION_DEPLOYMENT,
   }) {
-    if (serverBaseUrl !== 'http://127.0.0.1:8888') {
-      throw new Error('bookkeeping server must be the fixed loopback endpoint http://127.0.0.1:8888');
-    }
+    assertDeploymentOrigin(serverBaseUrl, deployment);
     const parsed = new URL(serverBaseUrl);
     if (parsed.protocol !== 'http:'
       || parsed.hostname !== '127.0.0.1'
-      || parsed.port !== '8888'
+      || parsed.port !== new URL(deployment.origin).port
       || parsed.username
       || parsed.password
       || parsed.pathname !== '/'

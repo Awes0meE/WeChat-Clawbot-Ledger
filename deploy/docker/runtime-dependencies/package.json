@@ -1,0 +1,6 @@
+{
+  "name": "clawbot-test-runtime-dependencies",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": { "qrcode-terminal": "0.12.0" }
+}

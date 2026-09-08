@@ -1,6 +1,6 @@
 # 微信记账候选项目调研
 
-更新：当前发布链路已改为 Windows OpenClaw + OpenAI GPT-5.6 Sol 官方 Codex harness + 定制安全插件 + ezBookkeeping，不再使用本地 Qwen；详见 `../WINDOWS-HANDOFF.md` 和 `../docs/bookkeeping-deployment-brief.md`。当前分类为 11/45，超市消费整笔归“超市购物”，结构化回执、对话确认和确定性汇总已上线。下文仅保留 2026-09-03 首轮历史调研，不作为当前部署指令。
+更新于 2026-09-09：当前使用 OpenAI GPT-5.6 Sol 官方 Codex harness、定制插件与 ezBookkeeping，参考部署已从 Windows 迁至 Mac Docker，Windows 原生路线保留。见 [部署方案](../docs/bookkeeping-deployment-brief.md)。下文仅保留 2026-09-03 首轮历史调研，不作为当前部署指令。
 
 核验日期：2026-09-03。仅检索公开仓库、下载并阅读关键源码，未安装插件、未运行候选服务、未更改 OpenClaw 权限。不是完整安全审计或兼容性验收。
 

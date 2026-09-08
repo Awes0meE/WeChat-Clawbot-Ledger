@@ -354,6 +354,13 @@ if ($bookkeepingToolNames -ccontains 'find_expenses' -and
     throw 'Release find_expenses contract requires the amount-search module.'
 }
 $bookkeepingEntryText = [IO.File]::ReadAllText($actualByPath['openclaw-plugins/clawbot-bookkeeping/index.ts'], $script:StrictUtf8Encoding)
+if ($bookkeepingEntryText.Contains('./deployment-profile.mjs') -and
+    -not $actualByPath.ContainsKey('openclaw-plugins/clawbot-bookkeeping/deployment-profile.mjs')) {
+    throw 'Release deployment profile integration requires its policy module.'
+}
+if ($bookkeepingManifestText.Contains('isolated-test')) {
+    throw 'A test deployment manifest cannot enter a production release.'
+}
 if ($bookkeepingEntryText.Contains('./expense-history.mjs') -and
     -not $actualByPath.ContainsKey('openclaw-plugins/clawbot-bookkeeping/expense-history.mjs')) {
     throw 'Release history reply integration requires the history-formatting module.'

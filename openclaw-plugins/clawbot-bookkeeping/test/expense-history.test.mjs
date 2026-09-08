@@ -54,6 +54,14 @@ test('accepts the SDK structured-content projection without copying its wrapper'
   assert.equal(format({ details: { structuredContent: payload() }, content: [{ type: 'text', text: 'structuredContent:\n{}' }] }), format());
 });
 
+test('formats an omitted empty MCP note as none and rejects malformed supplied notes', () => {
+  const noComment = row(); delete noComment.comment;
+  assert.match(format(response(payload({ transactions: [noComment] }))), /备注：无/u);
+  for (const comment of [null, 7, {}, ['note']]) {
+    assert.throws(() => format(response(payload({ transactions: [row({ comment })] }))), /display field/u);
+  }
+});
+
 test('normalizes UTC to Singapore time and preserves decimal cents exactly', () => {
   const result = format(response(payload({ transactions: [row({ time: '2026-09-06T16:05:00Z', amount: '0.29' })] })));
   assert.match(result, /2026\/09\/07 00:05｜0\.29 SGD/u);

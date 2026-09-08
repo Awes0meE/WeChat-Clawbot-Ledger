@@ -32,6 +32,7 @@ import {
   resolveExpenseRange,
 } from './expense-summary.mjs';
 import { createOwnerMcpConnectionResolver } from './mcp-connection.mjs';
+import { resolveDeploymentProfile } from './deployment-profile.mjs';
 import { formatExpenseSearch, resolveExpenseSearch } from './expense-search.mjs';
 import { HISTORY_TOOL_NAME, HISTORY_FAILURE_TEXT, normalizeExpenseHistoryQuery, formatExpenseHistory } from './expense-history.mjs';
 
@@ -151,8 +152,15 @@ const AUTHORITATIVE_REPLY_TOOL_NAMES = new Set([
   'find_expenses',
   HISTORY_TOOL_NAME,
 ]);
-const AFFIRMATIVE_REPLIES = new Set(['是', '对', '对的', '确认', '嗯', '嗯嗯', '好', '好的', '可以', '记吧', '记下吧']);
-const NEGATIVE_REPLIES = new Set(['不是', '否', '不对', '取消', '不用', '别记', '不要']);
+const AFFIRMATIVE_REPLIES = new Set([
+  '是', '是的', '对', '对的', '没错', '没问题', '确认', '确认记账', '确认入账',
+  '嗯', '嗯嗯', '好', '好的', '行', '行的', '可以', '可以的',
+  '记入', '记账', '入账', '记吧', '记下吧', '记上吧',
+]);
+const NEGATIVE_REPLIES = new Set([
+  '不是', '否', '不对', '取消', '取消吧', '不记', '不记了', '不用', '不用记',
+  '别记', '不要', '不要记', '撤销', '撤销吧', '忽略', '忽略吧', '拉倒', '拉倒吧', '算了',
+]);
 
 function trustedInboundLookupKey(kind: 'session' | 'sender' | 'run' | 'message', value: string) {
   return createHash('sha256').update(`${kind}\u0000${value}`, 'utf8').digest('hex');
@@ -224,7 +232,7 @@ function correlatedRunLookupKey(runId: string) {
 }
 
 function confirmationDecision(content: string): 'confirm' | 'cancel' | undefined {
-  const normalized = content.trim();
+  const normalized = content.trim().replace(/[。.!！,，~～]+$/u, '').trim();
   if (AFFIRMATIVE_REPLIES.has(normalized)) return 'confirm';
   if (NEGATIVE_REPLIES.has(normalized)) return 'cancel';
   return undefined;
@@ -350,6 +358,16 @@ const EXPENSE_PARAMETERS = Type.Union([
   }, { additionalProperties: false }),
 ]);
 
+function expenseCategoryBlockReason(toolName: string, params: unknown): string | undefined {
+  if (toolName !== 'record_expense' && toolName !== 'prepare_expense') return;
+  const input = params as Partial<RecordExpenseParams> | undefined;
+  try {
+    normalizeSubcategory(input?.primaryCategory, input?.subcategory);
+  } catch {
+    return '分类参数不匹配，尚未执行记账或生成确认单。请按分类清单纠正参数后重试。';
+  }
+}
+
 function expenseTimeSource(input: RecordExpenseParams) {
   if (input.timeMode === 'received') return 'received';
   return input.localTime === undefined ? 'explicit-date' : 'explicit-clock';
@@ -361,6 +379,7 @@ export default definePluginEntry({
   description: 'Least-privilege local expense recording',
   register(api) {
     const config = api.pluginConfig ?? {};
+    const deployment = resolveDeploymentProfile(config, api.config);
     const serverBaseUrl = typeof config.serverBaseUrl === 'string'
       ? config.serverBaseUrl
       : 'http://127.0.0.1:8888';
@@ -377,7 +396,7 @@ export default definePluginEntry({
     const ledgerDisplayName = typeof config.ledgerDisplayName === 'string' ? config.ledgerDisplayName : '日常账本';
     const requestTimeoutMs = (config.requestTimeoutMs === undefined ? 10_000 : config.requestTimeoutMs) as number;
 
-    const bookkeepingApi = new EzBookkeepingApi({ serverBaseUrl, tokenPath, requestTimeoutMs });
+    const bookkeepingApi = new EzBookkeepingApi({ serverBaseUrl, tokenPath, requestTimeoutMs, deployment });
     const receiptStore = new SqliteReceiptStore(stateDbPath);
     const persistCorrelatedInbound = (runId: string, inbound: InboundMessage) => {
       // Hook dispatch and tool execution may use separate plugin registries.
@@ -483,6 +502,7 @@ export default definePluginEntry({
         config: api.config,
         serverBaseUrl,
         mcpTokenPath,
+        deployment,
       }),
     });
 
@@ -654,6 +674,10 @@ export default definePluginEntry({
 
     api.on('before_tool_call', (event, context) => {
       if (!AUTHORITATIVE_REPLY_TOOL_NAMES.has(event.toolName)) return;
+      // Reject invalid category pairs before consuming the current message.
+      // A corrected call must still pass the original owner/run binding below.
+      const categoryBlockReason = expenseCategoryBlockReason(event.toolName, event.params);
+      if (categoryBlockReason) return { block: true, blockReason: categoryBlockReason };
       let historyQuery: Record<string, unknown> | undefined;
       if (event.toolName === HISTORY_TOOL_NAME) {
         try {
@@ -776,6 +800,12 @@ export default definePluginEntry({
 
     api.on('after_tool_call', (event, context) => {
       if (!AUTHORITATIVE_REPLY_TOOL_NAMES.has(event.toolName)) return;
+      // These calls were blocked before execution; they cannot establish an
+      // unknown-write result or replace the corrected call's final authority.
+      const categoryBlockReason = expenseCategoryBlockReason(event.toolName, event.params);
+      const blockedDetails = (event.result as { details?: { status?: string; reason?: string } } | undefined)?.details;
+      if (!event.error && categoryBlockReason && blockedDetails?.status === 'blocked'
+        && blockedDetails.reason === categoryBlockReason) return;
       const runId = context.runId ?? event.runId;
       if (!runId) return;
       const runKey = transientBindingKey('run', runId);
@@ -1067,10 +1097,10 @@ export default definePluginEntry({
           ) as DurableToolBridge | undefined
           : undefined;
         if (durableInbound) {
-          const durableRunKey = transientBindingKey(
-            'run',
-            `tool-bridge\u0000${toolName}\u0000${durableInbound.channel}\u0000${durableInbound.messageId}`,
-          );
+          // Preserve the issuing run's authority across execution instances.
+          // Minting another key here made execute and the original after-tool
+          // hook persist two replies for one message, defeating unique recovery.
+          const durableRunKey = durableInbound.authorityRunKey;
           slot = {
             runKey: durableRunKey,
             authorityRunKey: durableInbound.authorityRunKey,
@@ -1172,7 +1202,7 @@ export default definePluginEntry({
 
     const expenseFailureResponse = (error: ExpenseRecordingError) => {
       api.logger?.error?.(
-        `clawbot-bookkeeping: ExpenseRecordingError outcome=${error.outcome} message=${error.message}`,
+        `clawbot-bookkeeping: ExpenseRecordingError outcome=${error.outcome} rejectionReason=${error.rejectionReason ?? 'unspecified'} message=${error.message}`,
       );
       if (error.dedupeStatus === 'unconfirmed') {
         api.logger?.warn?.(
@@ -1187,13 +1217,16 @@ export default definePluginEntry({
           text: rejected
             ? error.rejectionReason === 'time'
               ? '这笔消费的时间没能正确识别，所以还没有入账。请补充日期或具体时间后再发一次哦～'
-              : '这笔金额或语气还不够确定，所以我没有入账哦～'
+              : error.rejectionReason === 'amount'
+                ? '这次没能从消息中核对出唯一的支出金额，所以没有入账。请把消费金额单独标明后再发一次哦～'
+                : '这次记账信息没有通过校验，所以没有入账。请核对金额、币种和消费内容后再发一次哦～'
             : unknown
               ? '这次记账结果暂时拿不准，请先看一眼账本，先别重复发送这条消费哦。'
               : '账本暂时连不上，这次没有写入任何数据～ 稍后再试试吧。',
         }],
         details: {
           status: rejected ? 'rejected' : unknown ? 'unknown' : 'failed',
+          ...(error.rejectionReason === undefined ? {} : { rejectionReason: error.rejectionReason }),
           ...(error.dedupeStatus === undefined ? {} : { dedupeStatus: error.dedupeStatus }),
         },
       };
@@ -1396,13 +1429,13 @@ export default definePluginEntry({
           ].join('\n'),
           parameters: EXPENSE_PARAMETERS,
           async execute(_id, params: RecordExpenseParams) {
-            const binding = takeToolCallBinding(_id, 'record_expense', toolContext, params);
-            if ('cachedResponse' in binding) return binding.cachedResponse;
-            const { inbound, isStillAuthorized, authoritativeResponse } = binding;
             const normalizedInput = {
               ...params,
               subcategory: normalizeSubcategory(params.primaryCategory, params.subcategory),
             };
+            const binding = takeToolCallBinding(_id, 'record_expense', toolContext, params);
+            if ('cachedResponse' in binding) return binding.cachedResponse;
+            const { inbound, isStillAuthorized, authoritativeResponse } = binding;
             if (requiresExpenseConfirmation(inbound.content)) {
               let candidate;
               try {
@@ -1485,13 +1518,13 @@ export default definePluginEntry({
         ].join('\n'),
         parameters: EXPENSE_PARAMETERS,
         async execute(_id, params: RecordExpenseParams) {
-          const binding = takeToolCallBinding(_id, 'prepare_expense', toolContext, params);
-          if ('cachedResponse' in binding) return binding.cachedResponse;
-          const { inbound, isStillAuthorized, authoritativeResponse } = binding;
           const normalizedInput = {
             ...params,
             subcategory: normalizeSubcategory(params.primaryCategory, params.subcategory),
           };
+          const binding = takeToolCallBinding(_id, 'prepare_expense', toolContext, params);
+          if ('cachedResponse' in binding) return binding.cachedResponse;
+          const { inbound, isStillAuthorized, authoritativeResponse } = binding;
           let candidate;
           try {
             candidate = prepareExpenseConfirmation({ input: normalizedInput, inbound });
@@ -1548,7 +1581,9 @@ export default definePluginEntry({
         description: [
           '处理用户对上一张待确认支出单独回复的确认或取消。',
           '只有当前消息本身是简短确认词或取消词时才调用；不要传金额、分类或备注。',
+          `确认词：${[...AFFIRMATIVE_REPLIES].join('、')}。取消词：${[...NEGATIVE_REPLIES].join('、')}。可带句尾句号、感叹号、逗号或波浪号。`,
           '用户发送其他新内容时，按新请求正常处理，不要调用本工具。',
+          '取消或撤销只处理当前待确认单，不删除已入账交易。',
           '工具返回后只逐字回复结果，不展示思考、参数或工具名。',
         ].join('\n'),
         parameters: Type.Object({

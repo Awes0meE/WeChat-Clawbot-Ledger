@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Clawbot · 家庭服务器</title><link rel="stylesheet" href="/dashboard.css"><script src="/dashboard.js" defer></script></head>
+<body><main><header><div><p class="eyebrow">CLAWBOT / HOME SERVER</p><h1>这台 Mac 的运行状态</h1></div><div id="clock" class="clock">—</div></header>
+<section class="overview"><div><span class="dot" id="overall-dot"></span><strong id="overall">正在读取状态</strong><p id="stage">正在检查本地开发环境</p></div><div class="tag">仅本机可见 · 只读</div></section>
+<section class="metrics"><article><p>供电</p><h2 id="power">—</h2><small>长期运行需要保持插电</small></article><article><p>磁盘立即可用</p><h2 id="disk">—</h2><small>不含系统可回收容量</small></article><article><p>Mac 已运行</p><h2 id="uptime">—</h2><small>系统启动后的累计时间</small></article><article><p>当前生产端</p><h2>Windows</h2><small id="production">尚未进行 Mac 接管</small></article></section>
+<section><div class="section-title"><h2>Docker 服务</h2><span>每 5 秒刷新</span></div><div id="services" class="services"><article class="service">等待 Docker 状态</article></div></section>
+<section class="progress"><div><p class="eyebrow">迁移进度</p><h2 id="migration-title">Mac 交接前准备已完成</h2><p id="migration-detail">P1–P6 的 Mac 独立准备已验收。SSH 与文件传输已验证，正在推进真实数据交接与正式切换。现在仍由 Windows 接收真实微信，Mac 运行隔离测试服务。</p><p id="migration-updated" class="details">迁移进度等待同步</p></div><ol><li class="done">P0 环境准备</li><li class="done">P1 业务适配与验收</li><li class="done">P2 守护与恢复演练通过</li><li class="done">P3 迁移工具与导入演练通过</li><li class="done">P4 授权恢复演练与 3 小时观察通过</li><li class="done">P5 备份、更新与最终归档通过</li><li class="done">P6 最终审计与交接资料完成</li></ol></section>
+<section class="service"><h3>加密备份</h3><p id="backup">正在检查最近的恢复演练</p><p class="details">目前保存在这台 Mac；离机副本随 Windows 交接配置。</p></section>
+<section class="service"><h3>模型授权（隔离测试）</h3><p id="model-authorization">等待授权检查</p><p id="model-authorization-updated" class="details">每 5 分钟检查一次本地授权状态</p><p class="details">本地凭据存在不代表云端调用成功。此检查不发送模型请求，也不会自动重新登录或重启；微信与账本授权另行验收。</p></section>
+<section class="service"><h3>账本授权（隔离测试）</h3><p id="ledger-http-authorization">账本连接：等待检查</p><p id="ledger-mcp-authorization">历史查询连接：等待检查</p><p id="ledger-authorization-updated" class="details">每 5 分钟检查一次</p><p class="details">只验证账本接受授权和查询工具可见，不写账、不执行历史查询。账户权限与真实微信另行验收。</p></section>
+<section class="service"><h3>Mac 微信接收</h3><p id="weixin-authorization">等待运行配置检查</p><p id="weixin-authorization-updated" class="details">每 5 分钟检查一次</p><p class="details">当前使用隔离测试环境。真实微信接收和授权恢复在 Windows 停服切换时验收。</p></section>
+<section class="service"><h3>守护与日常监控</h3><p class="details">验收记录：2026-09-08 隔离环境连续健康 181.93 分钟，三小时观察已通过。本轮验收等待已结束。</p><p id="host-state">正在读取守护状态</p><p id="observation">等待首次采样</p><p class="details">以下为当前看板版本的日常采样。更新、维护或异常会重新计算连续健康时长，不影响已保存的三小时验收记录；监控范围仍是隔离环境。</p></section>
+<footer><span id="updated">等待首次采样</span><span>Mac 准备已完成 · 正式迁移进行中</span></footer></main></body></html>

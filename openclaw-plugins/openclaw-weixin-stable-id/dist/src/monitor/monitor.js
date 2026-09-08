@@ -5,6 +5,7 @@ import { processOneMessage } from "../messaging/process-message.js";
 import { getSyncBufFilePath, loadGetUpdatesBuf, saveGetUpdatesBuf } from "../storage/sync-buf.js";
 import { logger } from "../util/logger.js";
 import { redactBody } from "../util/redact.js";
+import { authorizationStatusForPoll } from "./authorization-status.js";
 const DEFAULT_LONG_POLL_TIMEOUT_MS = 35_000;
 const MAX_CONSECUTIVE_FAILURES = 3;
 const BACKOFF_DELAY_MS = 30_000;
@@ -40,7 +41,9 @@ export async function monitorWeixinProvider(opts) {
     const configManager = new WeixinConfigManager({ baseUrl, token }, log);
     let nextTimeoutMs = longPollTimeoutMs ?? DEFAULT_LONG_POLL_TIMEOUT_MS;
     let consecutiveFailures = 0;
+    let reauthorizationRequired = false;
     while (!abortSignal?.aborted) {
+        let receivedPoll = false;
         try {
             aLog.debug(`getUpdates: get_updates_buf=${getUpdatesBuf.substring(0, 50)}..., timeoutMs=${nextTimeoutMs}`);
             const resp = await getUpdates({
@@ -52,6 +55,21 @@ export async function monitorWeixinProvider(opts) {
                 // instead of waiting for the server-side long-poll timeout.
                 abortSignal,
             });
+            if (abortSignal?.aborted)
+                return;
+            receivedPoll = true;
+            const pollStatus = authorizationStatusForPoll(resp);
+            if (pollStatus.lastError === "CLAWBOT_WEIXIN_REAUTHORIZATION_REQUIRED")
+                reauthorizationRequired = true;
+            if (pollStatus.connected)
+                reauthorizationRequired = false;
+            setStatus?.({ accountId, ...pollStatus,
+                ...(reauthorizationRequired ? { lastError: "CLAWBOT_WEIXIN_REAUTHORIZATION_REQUIRED" } : {}),
+                lastEventAt: Date.now() });
+            // This response was made locally, not accepted by iLink. Preserve both
+            // the existing auth failure and the saved cursor until a server reply.
+            if (resp.localTransportTimeout)
+                continue;
             aLog.debug(`getUpdates response: ret=${resp.ret}, msgs=${resp.msgs?.length ?? 0}, get_updates_buf_length=${resp.get_updates_buf?.length ?? 0}`);
             if (resp.longpolling_timeout_ms != null && resp.longpolling_timeout_ms > 0) {
                 nextTimeoutMs = resp.longpolling_timeout_ms;
@@ -84,7 +102,6 @@ export async function monitorWeixinProvider(opts) {
                 continue;
             }
             consecutiveFailures = 0;
-            setStatus?.({ accountId, lastEventAt: Date.now() });
             if (resp.get_updates_buf != null && resp.get_updates_buf !== "") {
                 saveGetUpdatesBuf(syncFilePath, resp.get_updates_buf);
                 getUpdatesBuf = resp.get_updates_buf;
@@ -117,6 +134,10 @@ export async function monitorWeixinProvider(opts) {
                 aLog.info(`Monitor stopped (aborted)`);
                 return;
             }
+            setStatus?.({ accountId, lastEventAt: Date.now(),
+                ...(receivedPoll ? { lastError: "CLAWBOT_WEIXIN_MESSAGE_PROCESSING_FAILED" }
+                    : { connected: false, lastError: reauthorizationRequired ? "CLAWBOT_WEIXIN_REAUTHORIZATION_REQUIRED"
+                            : "CLAWBOT_WEIXIN_TRANSPORT_UNAVAILABLE" }) });
             consecutiveFailures += 1;
             const classified = classifyFetchError(err);
             errLog(`weixin getUpdates error (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}): ${String(err)} type=${classified.type} description=${classified.description}${classified.code ? ` code=${classified.code}` : ""}`);

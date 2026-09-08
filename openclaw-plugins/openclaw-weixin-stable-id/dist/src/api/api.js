@@ -377,7 +377,7 @@ export async function getUpdates(params) {
             else {
                 logger.debug(`getUpdates: client-side timeout after ${timeout}ms, returning empty response`);
             }
-            return { ret: 0, msgs: [], get_updates_buf: params.get_updates_buf };
+            return { ret: 0, msgs: [], get_updates_buf: params.get_updates_buf, localTransportTimeout: true };
         }
         throw err;
     }

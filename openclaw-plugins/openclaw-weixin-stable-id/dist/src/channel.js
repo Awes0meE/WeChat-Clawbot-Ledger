@@ -256,6 +256,7 @@ export const weixinPlugin = {
         collectStatusIssues: () => [],
         buildChannelSummary: ({ snapshot }) => ({
             configured: snapshot.configured ?? false,
+            connected: snapshot.connected ?? false,
             lastError: snapshot.lastError ?? null,
             lastInboundAt: snapshot.lastInboundAt ?? null,
             lastOutboundAt: snapshot.lastOutboundAt ?? null,
@@ -349,13 +350,16 @@ export const weixinPlugin = {
             ctx.setStatus?.({
                 accountId: account.accountId,
                 running: true,
+                connected: false,
+                lastError: "CLAWBOT_WEIXIN_AWAITING_POLL",
                 lastStartAt: Date.now(),
                 lastEventAt: Date.now(),
             });
             if (!account.configured) {
                 aLog.error(`account not configured`);
                 ctx.log?.error?.(`[${account.accountId}] weixin not logged in — run: openclaw channels login --channel openclaw-weixin`);
-                ctx.setStatus?.({ accountId: account.accountId, running: false });
+                ctx.setStatus?.({ accountId: account.accountId, running: false, connected: false,
+                    lastError: "CLAWBOT_WEIXIN_LOGIN_REQUIRED" });
                 throw new Error("weixin not configured: missing token");
             }
             ctx.log?.info?.(`[${account.accountId}] starting weixin provider (${DEFAULT_BASE_URL})`);

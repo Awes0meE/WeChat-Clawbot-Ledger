@@ -1,0 +1,7 @@
+{
+  "profile": "isolated-test",
+  "project": "clawbot-test",
+  "ledgerServerId": 1,
+  "owner": "openclaw-weixin:clawbot-test-owner",
+  "origin": "http://127.0.0.1:18888"
+}

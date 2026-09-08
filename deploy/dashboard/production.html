@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Clawbot · 生产运行状态</title><link rel="stylesheet" href="/dashboard.css"><script src="/production.js" defer></script></head>
+<body class="production"><main>
+<header><div><p class="eyebrow">CLAWBOT · MAC SERVER</p><h1>微信账本服务器</h1></div><span id="clock" class="clock">—</span></header>
+<section class="overview" aria-live="polite"><div><span class="dot" id="overall-dot"></span><strong id="overall">正在检查</strong><p id="host-state">等待当前运行状态</p></div><a class="ledger-link" href="https://ledger.66ccff-labs.com" target="_blank" rel="noopener noreferrer">打开账本 ↗</a></section>
+<section aria-label="主要服务"><div id="services" class="services"><article class="service">正在读取服务</article></div></section>
+<section class="machine-info" aria-label="Mac 状态"><span>电源 <strong id="power">—</strong></span><span>立即可用空间 <strong id="disk">—</strong></span><span>Mac 已运行 <strong id="uptime">—</strong></span></section>
+<details class="runtime-details"><summary>查看运行详情</summary><div class="detail-grid">
+<section><h3>模型授权</h3><p id="model">等待检查</p><p class="details">本项只检查本地授权；实际模型调用以微信验收为准。</p></section>
+<section><h3>账本连接</h3><p id="ledger-http">等待检查</p><p id="ledger-mcp">等待检查</p></section>
+<section><h3>微信连接</h3><p id="weixin">等待检查</p><p id="weixin-time" class="details">等待最近轮询</p></section>
+<section><h3>公网隧道</h3><p id="tunnel">等待检查</p><p class="details">隧道状态与网页访问分开核验，可用上方入口打开账本。</p></section>
+</div><p id="authorization-updated" class="details">授权状态定期检查</p></details>
+<footer><span id="updated">等待首次采样</span><span>本机状态页 · 自动刷新</span></footer>
+</main></body></html>

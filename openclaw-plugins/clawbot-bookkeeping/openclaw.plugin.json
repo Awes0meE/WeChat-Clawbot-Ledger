@@ -49,6 +49,11 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "deploymentProfile": {
+        "type": "string",
+        "const": "production",
+        "default": "production"
+      },
       "serverBaseUrl": {
         "type": "string",
         "const": "http://127.0.0.1:8888"

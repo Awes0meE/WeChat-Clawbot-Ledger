@@ -1,0 +1,72 @@
+name: clawbot-production
+x-policy: &policy
+  platform: linux/arm64
+  user: "1000:1000"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: ["/tmp:rw,nosuid,nodev,size=128m,mode=1777"]
+  logging:
+    driver: json-file
+    options: {max-size: 5m, max-file: "2"}
+services:
+  origin:
+    <<: *policy
+    image: mayswind/ezbookkeeping@sha256:1043c95201f0432cd30328f6feb9a5b57359449400ea54fdf9a0c6138ab4c227
+    entrypoint: [/ezbookkeeping/ezbookkeeping]
+    command: [--conf-path, /var/lib/clawbot/config/ezbookkeeping.ini, --no-boot-log, server, run]
+    volumes:
+      - ledger-config:/var/lib/clawbot/config:ro
+      - ledger-data:/var/lib/clawbot/ledger
+    healthcheck:
+      test: [CMD-SHELL, "wget -q -O /dev/null http://127.0.0.1:8888/healthz.json"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+  openclaw:
+    <<: *policy
+    image: ${CLAWBOT_PRODUCTION_RUNTIME_IMAGE:?Supply the verified production image digest}
+    network_mode: service:origin
+    depends_on:
+      origin: {condition: service_healthy}
+    environment:
+      HOME: /var/lib/clawbot/openclaw
+      CODEX_HOME: /var/lib/clawbot/codex
+    volumes:
+      - runtime-config:/run/clawbot-runtime:ro
+      - guard-config:/run/clawbot-guard:ro
+      - openclaw-state:/var/lib/clawbot/openclaw
+      - codex-state:/var/lib/clawbot/codex
+      - receipts:/var/lib/clawbot/receipts
+      - secrets:/var/lib/clawbot/secrets:ro
+    healthcheck:
+      test: [CMD, node, /opt/clawbot/docker/health.mjs]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+  guard:
+    <<: *policy
+    image: ${CLAWBOT_GUARD_IMAGE:?Supply the verified guard image digest}
+    command: [--tunnel]
+    healthcheck:
+      test: [CMD, node, /opt/clawbot-guard/health.mjs]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    network_mode: service:origin
+    pid: service:origin
+    depends_on:
+      origin: {condition: service_healthy}
+    volumes:
+      - guard-config:/run/clawbot-guard:ro
+      - tunnel-config:/run/clawbot-tunnel:ro
+volumes:
+  ledger-config: {external: true, name: clawbot-production_ledger-config}
+  ledger-data: {external: true, name: clawbot-production_ledger-data}
+  runtime-config: {external: true, name: clawbot-production_runtime-config}
+  guard-config: {external: true, name: clawbot-production_guard-config}
+  tunnel-config: {external: true, name: clawbot-production_tunnel-config}
+  openclaw-state: {external: true, name: clawbot-production_openclaw-state}
+  codex-state: {external: true, name: clawbot-production_codex-state}
+  receipts: {external: true, name: clawbot-production_receipts}
+  secrets: {external: true, name: clawbot-production_secrets}

@@ -462,6 +462,13 @@ for (const [label, content, amount] of [
   ['explicit self-paid unknown merchant', '我在麦当劳花了7.2', '7.2'],
   ['merchant shorthand delegated to the model', '麦当劳7.2', '7.2'],
   ['store shorthand delegated to the model', 'NTUC 8.25', '8.25'],
+  ['numbered canteen after payment', '晚餐 8.4 Canteen12鸡饭', '8.4'],
+  ['numbered canteen before payment', 'Canteen12鸡饭8.4', '8.4'],
+  ['spaced numbered canteen', 'canteen 12 午饭8.4', '8.4'],
+  ['numbered canteen with hash', 'CANTEEN #12 鸡饭8.4', '8.4'],
+  ['numbered canteen with addition', 'Canteen12鸡饭6.5+2.5', '9'],
+  ['decimal amount after canteen name', 'Canteen7.2', '7.2'],
+  ['decimal amount after store name', 'NTUC8.25', '8.25'],
 ]) {
   test(`authorizes ${label} from the current trusted message`, async () => {
     let claimCount = 0;
@@ -523,6 +530,15 @@ for (const [label, content, amount, comment = ''] of [
   ['polite question', '能帮我记午饭7.2吗', '7.2'],
   ['questioned self payment', '我在麦当劳花了7.2吗', '7.2'],
   ['questioned shorthand', '午饭7.2吗', '7.2'],
+  ['canteen identifier mistaken for payment', '晚餐8.4 Canteen12鸡饭', '12'],
+  ['canteen identifier without payment', 'Canteen12鸡饭', '12'],
+  ['numbered canteen with separate payments', 'Canteen12鸡饭8.4，咖啡3', '8.4'],
+  ['decimal after canteen still a second amount', '晚餐8.4 Canteen7.2', '8.4'],
+  ['arithmetic after canteen still a second amount', '晚餐8.4 Canteen2+3', '8.4'],
+  ['money unit after canteen still a second amount', '晚餐8.4 Canteen12块', '8.4'],
+  ['spaced currency after canteen still a second amount', '晚餐8.4，Canteen 12 SGD', '8.4'],
+  ['Chinese currency after canteen still a second amount', '晚餐8.4，Canteen 12 新币', '8.4'],
+  ['question about numbered canteen expense', 'Canteen12鸡饭8.4吗', '8.4'],
 ]) {
   test(`rejects ${label} before claiming or contacting the ledger`, async () => {
     let claimCount = 0;

@@ -17,6 +17,7 @@ import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test, { after } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import * as deploymentPolicy from '../deployment-profile.mjs';
 
 const projectDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const pluginDirectory = join(projectDirectory, 'openclaw-plugins', 'clawbot-bookkeeping');
@@ -116,7 +117,7 @@ test('listener queries treat the Windows no-match CIM error as an empty result o
   assert.match(transportFailure.stdout, /OTHER_ERROR_PROPAGATED/u);
 });
 
-test('static MCP credential scan terminates on PowerShell JSON timestamp values', () => {
+test('static MCP credential scan terminates on PowerShell JSON timestamp values', { skip: spawnSync('pwsh.exe', ['-NoProfile', '-Command', 'exit 0']).error?.code === 'ENOENT' ? 'PowerShell 7 is not installed; Windows PowerShell 5.1 coverage runs separately' : false }, () => {
   const directory = mkdtempSync(join(tmpdir(), 'clawbot-ledger-openclaw-config-'));
   try {
     const configPath = join(directory, 'openclaw.json');
@@ -609,7 +610,13 @@ test('production code and active configuration use only the exact loopback 8888 
   const categoryCatalog = JSON.parse(readFileSync(join(configDirectory, 'expense-categories.json'), 'utf8'));
   assert.match(adapterSource, /http:\/\/127\.0\.0\.1:8888/u);
   assert.match(indexSource, /http:\/\/127\.0\.0\.1:8888/u);
-  assert.match(mcpSource, /const EZBOOKKEEPING_ORIGIN = 'http:\/\/127\.0\.0\.1:8888'/u);
+  assert.match(mcpSource, /deployment = PRODUCTION_DEPLOYMENT/u);
+  assert.match(mcpSource, /assertDeploymentOrigin\(serverBaseUrl, deployment, 'MCP'\)/u);
+  const { PRODUCTION_DEPLOYMENT, assertDeploymentOrigin } = deploymentPolicy;
+  assert.equal(PRODUCTION_DEPLOYMENT.origin, 'http://127.0.0.1:8888');
+  for (const origin of ['http://127.0.0.1:18888', 'http://localhost:8888', 'http://0.0.0.0:8888']) {
+    assert.throws(() => assertDeploymentOrigin(origin, PRODUCTION_DEPLOYMENT, 'MCP'));
+  }
   assert.equal(manifest.configSchema.properties.serverBaseUrl.const, 'http://127.0.0.1:8888');
   assert.equal(manifest.mcpServers.ezbookkeeping.url, 'http://127.0.0.1:8888/mcp');
   assert.equal(Object.hasOwn(categoryCatalog, 'target'), false);

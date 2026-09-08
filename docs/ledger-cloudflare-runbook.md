@@ -1,10 +1,12 @@
 # Ledger Cloudflare Tunnel 运维手册
 
+本文的计划任务、目录、PowerShell 安装与重启步骤适用于 Windows 原生部署。2026-09-09 参考部署已迁至 Mac；当前状态见 [正式切换记录](handoffs/2026-09-09-production-cutover.md)，Mac 启停、备份和凭据恢复使用 [Mac 清单](mac-before-windows-checklist.md) 中的入口。下述公网域名、回环端口和 Cloudflare 边界由两条路线共同遵守。
+
 Windows 无窗口启动的当前设置与迁移方法见 [后台启动维护说明](windows-background-startup.md)。新建账本和 Tunnel 任务使用同一账户的 `S4U` 后台会话；已有任务须精确核验后迁移，不通过关闭控制台来停止服务。
 
 本文说明如何把现有 ezBookkeeping 通过 `https://ledger.66ccff-labs.com` 安全发布，同时保持 `66ccff-labs.com` 和 `www.66ccff-labs.com` 的作品集不变。它是实施手册，不是凭据存放处；任何真实账户、密码、token、Tunnel UUID、Cloudflare 身份、微信身份、SQLite、交易正文、响应正文和运行日志都必须留在 Git 与仓库之外。
 
-当前发布与验收范围见 [最新审计](handoffs/2026-09-07-history-reply-audit.md)；[2026-09-07 较早系统检查](handoffs/2026-09-07-bookkeeping-system-audit.md) 和 [2026-09-05 Tunnel 交接](handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md) 保留当时的部署证据。恢复工作前先只读核验，不能重复创建已存在的 Tunnel、DNS 或规则。
+Windows 历史发布见 [食堂编号修复上线记录](handoffs/2026-09-07-numbered-canteen-fix.md)；[历史明细审计](handoffs/2026-09-07-history-reply-audit.md)、[2026-09-07 较早系统检查](handoffs/2026-09-07-bookkeeping-system-audit.md) 和 [2026-09-05 Tunnel 交接](handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md) 保留当时的部署证据。恢复工作前先只读核验，不能重复创建已存在的 Tunnel、DNS 或规则。
 
 ## 固定合同
 

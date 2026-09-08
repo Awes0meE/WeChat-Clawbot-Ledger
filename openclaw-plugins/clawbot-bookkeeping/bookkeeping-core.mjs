@@ -19,6 +19,10 @@ const LOCAL_TIME = /^(\d{2}):(\d{2})$/u;
 const EXPLICIT_TIME_CUE = /(?:今天|今日|昨天|昨日|前天|大前天|明天|后天|今晚|昨晚|今早|昨早|凌晨|早上|上午|中午|下午|晚上|周[一二三四五六日天]|星期[一二三四五六日天]|\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*[日号]|\d{1,2}\s*月\s*\d{1,2}\s*[日号]|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|(?:[01]?\d|2[0-3]):[0-5]\d|[零〇一二两三四五六七八九十百\d]{1,3}\s*(?:点|时)(?:\s*[零〇一二两三四五六七八九十百\d]{1,3}\s*分)?)/u;
 const EXPENSE_TIME_EXPRESSIONS = new RegExp(EXPLICIT_TIME_CUE.source, 'gu');
 const VAGUE_DAY_PART = /^(?:凌晨|早上|上午|中午|下午|晚上)$/u;
+// A canteen number identifies the venue. Preserve decimal amounts and arithmetic
+// after the name, and never discard arbitrary digits merely because a model put
+// them in a comment.
+const NUMBERED_CANTEEN = /(?<![A-Za-z0-9])canteen[ \t]*(?:#[ \t]*)?\d+(?![\d.A-Za-z]|[ \t]*(?:[+＋加块元毛分$＄¥￥]|新币|新元|人民币|美元|SGD\b|USD\b|CNY\b|RMB\b))/giu;
 
 export class ExpenseRecordingError extends Error {
   constructor(outcome, { dedupeStatus, rejectionReason } = {}) {
@@ -31,7 +35,7 @@ export class ExpenseRecordingError extends Error {
     this.name = 'ExpenseRecordingError';
     this.outcome = outcome;
     if (dedupeStatus) this.dedupeStatus = dedupeStatus;
-    if (rejectionReason === 'time') this.rejectionReason = rejectionReason;
+    if (rejectionReason === 'time' || rejectionReason === 'amount') this.rejectionReason = rejectionReason;
   }
 }
 
@@ -98,7 +102,9 @@ function amountPartToMinorUnits(part) {
 function eligibleAmountCandidates(clause, clauseIndex) {
   if (ADMIN_AMOUNT_CLAUSE.test(clause)) return [];
   // Keep original offsets and prevent amount expressions from crossing a time span.
-  const amountText = clause.replace(EXPENSE_TIME_EXPRESSIONS, (match) => '#'.repeat(match.length));
+  const amountText = clause
+    .replace(EXPENSE_TIME_EXPRESSIONS, (match) => '#'.repeat(match.length))
+    .replace(NUMBERED_CANTEEN, (match) => '#'.repeat(match.length));
   const candidates = [];
   for (const match of amountText.matchAll(AMOUNT_EXPRESSION)) {
     const matchIndex = match.index ?? 0;
@@ -372,7 +378,7 @@ function validateExpenseInput(input, inbound, resolvedTime) {
 export function prepareExpenseConfirmation({ input, inbound }) {
   const candidate = validateExpenseInput(input, inbound);
   if (!messageSupportsExpenseAmount(inbound.content, candidate.sourceAmount)) {
-    throw new ExpenseRecordingError('rejected');
+    throw new ExpenseRecordingError('rejected', { rejectionReason: 'amount' });
   }
   return {
     amountMinor: candidate.sourceAmount,
@@ -487,8 +493,10 @@ async function writeExpense({
 
 export async function recordExpense(options) {
   const sourceAmount = parseAmountToMinorUnits(options.input.amount);
-  if (!messageSupportsExpenseAmount(options.inbound.content, sourceAmount)
-    || requiresExpenseConfirmation(options.inbound.content)) {
+  if (!messageSupportsExpenseAmount(options.inbound.content, sourceAmount)) {
+    throw new ExpenseRecordingError('rejected', { rejectionReason: 'amount' });
+  }
+  if (requiresExpenseConfirmation(options.inbound.content)) {
     throw new ExpenseRecordingError('rejected');
   }
   return writeExpense(options);

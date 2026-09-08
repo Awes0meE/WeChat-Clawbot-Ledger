@@ -1,0 +1,48 @@
+FROM ghcr.io/openclaw/openclaw@sha256:14d1afacd0ba82ba0e9d1a14065694d6f574ac2914192169863acc37e74fc780 AS runtime-base
+USER root
+COPY deploy/docker/runtime-dependencies/ /opt/clawbot/runtime-dependencies/
+RUN cd /opt/clawbot/runtime-dependencies && npm ci --ignore-scripts --omit=dev --no-audit --no-fund && npm cache clean --force
+COPY openclaw-plugins/clawbot-bookkeeping/ /opt/clawbot/plugins/clawbot-bookkeeping/
+COPY openclaw-plugins/openclaw-weixin-stable-id/ /opt/clawbot/plugins/openclaw-weixin-stable-id/
+COPY openclaw-workspace/ /opt/clawbot/workspace/
+COPY openclaw-hooks/session-memory/ /opt/clawbot/hooks/session-memory/
+COPY config/expense-categories.json config/weixin-bookkeeper-agent.example.json /opt/clawbot/config/
+COPY deploy/docker/ /opt/clawbot/docker/
+COPY deploy/guard/*.mjs /opt/clawbot/guard/
+RUN for p in clawbot-bookkeeping openclaw-weixin-stable-id; do \
+      mkdir -p /opt/clawbot/plugins/$p/node_modules/@modelcontextprotocol; \
+      ln -s /app/node_modules/@modelcontextprotocol/sdk /opt/clawbot/plugins/$p/node_modules/@modelcontextprotocol/sdk; \
+      ln -s /app /opt/clawbot/plugins/$p/node_modules/openclaw; \
+      ln -s /app/node_modules/typebox /opt/clawbot/plugins/$p/node_modules/typebox; \
+      ln -s /app/node_modules/zod /opt/clawbot/plugins/$p/node_modules/zod; \
+      ln -s /opt/clawbot/runtime-dependencies/node_modules/qrcode-terminal /opt/clawbot/plugins/$p/node_modules/qrcode-terminal; \
+    done && \
+    cp /opt/clawbot/hooks/session-memory/handler-linux.js /opt/clawbot/hooks/session-memory/handler.js && \
+    mv /opt/clawbot/plugins/clawbot-bookkeeping/index.ts /opt/clawbot/plugins/clawbot-bookkeeping/index-core.ts && \
+    cp /opt/clawbot/docker/bookkeeping-linux.ts /opt/clawbot/plugins/clawbot-bookkeeping/index.ts
+FROM runtime-base AS production
+ARG SOURCE_COMMIT
+RUN node -e 'const fs=require("node:fs"),commit=process.argv[1];if(!/^[a-f0-9]{40}$/.test(commit))throw Error("A source commit is required");fs.writeFileSync("/etc/clawbot-release.json",JSON.stringify({sourceCommit:commit}),{mode:0o444})' "$SOURCE_COMMIT" && \
+    node /opt/clawbot/docker/prepare-production-manifest.mjs && chmod -R a-w /opt/clawbot
+ENV TZ=Asia/Singapore \
+    CLAWBOT_DEPLOYMENT_PROFILE=production \
+    OPENCLAW_STATE_DIR=/var/lib/clawbot/openclaw \
+    OPENCLAW_CONFIG_PATH=/run/clawbot-runtime/openclaw.json \
+    OPENCLAW_DISABLE_BONJOUR=1
+USER 1000:1000
+WORKDIR /app
+ENTRYPOINT ["node", "/opt/clawbot/docker/entrypoint.mjs"]
+CMD ["gateway"]
+
+FROM runtime-base AS isolated-test
+COPY deploy/docker/profile.test.json /etc/clawbot-test/profile.json
+RUN node /opt/clawbot/docker/prepare-test-manifest.mjs && chmod -R a-w /opt/clawbot /etc/clawbot-test
+ENV TZ=Asia/Singapore \
+    CLAWBOT_DEPLOYMENT_PROFILE=isolated-test \
+    OPENCLAW_STATE_DIR=/var/lib/clawbot-test/openclaw \
+    OPENCLAW_CONFIG_PATH=/var/lib/clawbot-test/openclaw/openclaw.json \
+    OPENCLAW_DISABLE_BONJOUR=1
+USER 1000:1000
+WORKDIR /app
+ENTRYPOINT ["node", "/opt/clawbot/docker/entrypoint.mjs"]
+CMD ["gateway"]

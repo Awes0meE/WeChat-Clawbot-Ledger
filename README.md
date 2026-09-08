@@ -6,7 +6,7 @@
 
 在微信里记录日常支出，获取可靠回执，随时查询自己的账本。
 
-[![平台：Windows](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows-0078D4?style=flat-square)](#环境要求)
+[![平台：Windows 与 Mac](https://img.shields.io/badge/platform-Windows%20%7C%20Mac-0078D4?style=flat-square)](#选择部署系统)
 [![OpenClaw：2026.8.2](https://img.shields.io/badge/OpenClaw-2026.8.2-2563EB?style=flat-square)](https://github.com/openclaw/openclaw)
 [![ezBookkeeping：1.6.1](https://img.shields.io/badge/ezBookkeeping-1.6.1-16A34A?style=flat-square)](https://github.com/mayswind/ezbookkeeping)
 [![代码：TypeScript 与 JavaScript](https://img.shields.io/badge/%E4%BB%A3%E7%A0%81-TypeScript%20%2B%20JavaScript-3178C6?style=flat-square)](openclaw-plugins/)
@@ -20,7 +20,16 @@
 
 WeChat Clawbot Ledger 将微信中的自然语言对话连接到个人 ezBookkeeping 账本。OpenClaw 与官方 Codex harness 负责理解消息，本地记账插件负责校验、调用账本 API，并生成与实际结果一致的回复。
 
-项目面向**单个所有者、一个 SGD 支出账户和持续运行的 Windows 主机**，包含插件源码、测试、配置模板与部署脚本。使用时需要配置自己的服务与凭据。
+项目面向**单个所有者、一个 SGD 支出账户和持续运行的本地主机**，保留 Windows 原生部署与 Mac Apple Silicon Docker 两条路线。仓库包含插件源码、测试、配置模板与运维脚本；使用时需要配置自己的服务与凭据。
+
+## 选择部署系统
+
+| 你的电脑 | 配置入口 | 已验证范围 |
+| --- | --- | --- |
+| Windows | [Windows 安装与恢复](WINDOWS-HANDOFF.md#windows-安装) · [公网账本运维](docs/ledger-cloudflare-runbook.md) | 原生 OpenClaw、ezBookkeeping、计划任务及原生 MCP；部署接口继续维护 |
+| Mac（Apple Silicon） | [Docker 隔离环境配置](deploy/docker/README.md) · [迁移与运维清单](docs/mac-before-windows-checklist.md) | ARM64 Docker 原型，以及既有 Windows 账本迁入后的正式微信、网页和备份恢复 |
+
+Mac 的全新生产安装向导尚未验收，测试初始化不会自动启用正式微信；Intel Mac 和 Windows Docker 也未验证。现有 Windows 用户迁移时使用 [九卷迁移合同](docs/mac-migration-intake.md)，必须先停止旧端，不能同时运行两个生产接收器。
 
 ## 效果展示
 
@@ -34,15 +43,15 @@ WeChat Clawbot Ledger 将微信中的自然语言对话连接到个人 ezBookkee
 
 - **自然语言记账**：理解金额、分类、备注和明确的消费时间，默认使用 SGD 与 `Asia/Singapore` 时区。
 - **用餐描述按发送时间记账**：“中午吃饭”“晚上吃饭”和“午饭”“晚饭”一样，没有另外写日期或具体钟点时，直接使用消息发送时间；加法金额合计为一笔。
-- **有疑问先确认**：将不明确的支出保存为临时确认单，收到单独确认后才写入；取消则不记账。
+- **有疑问先确认**：将不明确的支出保存为临时确认单，收到“是的、好的、没问题、行、记入、确认、对的”等单独确认后才写入；“取消、不记、不要、撤销、忽略、拉倒”等会取消待确认项。带问号或修改内容的消息不按确认词前缀入账，取消不删除历史交易。
 - **以账本结果为准**：只有 API 确认写入后才回复成功，明确区分写入失败与提交结果不确定。
 - **按消息去重**：关联可信发送者与上游消息 ID，同一条入站消息最多产生一笔支出；新消息中的相同文字仍视为独立事件。
 - **精确支出汇总**：按时间范围计算总额、笔数、分类汇总和最大三笔，支持分类与备注关键词筛选。
 - **按金额查账**：通过账本服务端过滤精确查找单笔 SGD 支出，默认查询全部历史，也可限定日期。
-- **清晰展示历史明细**：校验原生 MCP 查询结果，按编号展示时间、SGD 金额、分类和备注；专用代理固定查询支出账户，每次最多十笔，不发送原始 JSON。
+- **清晰展示历史明细**：校验 MCP 查询结果，按编号展示时间、SGD 金额、分类和备注；专用代理固定查询支出账户，每次最多十笔，不发送原始 JSON。
 - **网页查看同一本账**：通过带健康检查的 Cloudflare Tunnel 访问 ezBookkeeping 原生网页界面。
-- **后台无窗口启动**：账本与 Tunnel 任务在登录后使用非交互会话运行，详见[后台启动说明](docs/windows-background-startup.md)。
-- **独立发布与回滚**：Windows 正式服务加载仓库外经过哈希校验的固定发布包，测试实例与正式账本分离。
+- **常驻与状态页**：Windows 使用[后台任务](docs/windows-background-startup.md)，Mac 使用登录服务及[简洁生产看板](docs/mac-production-dashboard.md)，在本机查看账本、微信和公网状态。
+- **固定发布与备份恢复**：正式服务加载仓库外的已验证发布。Mac 提供九卷加密备份、独立恢复及保留旧卷的版本更新，测试和生产数据分离。
 
 ### 对话示例
 
@@ -93,20 +102,20 @@ Tunnel supervisor 在开放网页入口前，会核对正式进程、显式配�
 | `resolve_expense_confirmation` | 确认或取消当前确认单 | 已启用 |
 | `summarize_expenses` | 计算精确支出汇总 | 已启用 |
 | `find_expenses` | 按单笔 SGD 金额查账 | 已启用 |
-| `ezbookkeeping__query_transactions` | 仅供所有者使用的原生 MCP 只读历史查询 | 已激活；明细格式已完成本机验证 |
+| `ezbookkeeping__query_transactions` | 仅供所有者使用的 MCP 只读历史查询 | 已通过真实微信验收 |
 
-可选 MCP 集成需要独立启用本地服务并配置专用 token。记账、支出汇总和金额查询直接使用 HTTP API，不依赖 MCP；原生 MCP 的交易写入工具不在允许列表中。
+MCP 集成需要独立启用本地服务并配置专用 token。Windows 保留原生 MCP，Mac 使用固定官方 MCP SDK 的受限适配，官方 Codex harness 不变。记账、支出汇总和金额查询直接使用 HTTP API，不依赖 MCP；原生 MCP 的交易写入工具不在允许列表中。
 
 ## 项目状态
 
-以下状态更新于 **2026-09-07**：
+以下状态更新于 **2026-09-09**，描述参考部署的实际验收：
 
-- 记账、确认、汇总和精确金额查询已启用。
-- 金额查询已通过本地检查与真实微信验收，详见[发布记录](docs/handoffs/2026-09-06-amount-search-release.md)。
-- 原生 MCP 历史查询已激活。代理使用 full 基础工具配置与六项精确 allowlist，保留只读查询能力。
-- 当前正式 release 为 `3ed3f1bff5a7119d066f75df03d3f59f5fc0b76b`，修复历史 JSON 展示、旧回复串用、迟到确认单及身份恢复边界，并保留此前记账和用餐时间规则。完整回归 841/841、本机检查 14/14 通过，实际服务已加载新版本；详见[本轮审计](docs/handoffs/2026-09-07-history-reply-audit.md)。
-- 所有者明确取消本轮真实微信验收，本轮采用实际 MCP 数据的只读格式验证和跨实例自动化测试。较早的微信记账、历史查询、汇总、金额查询及确认验收保留在[此前记录](docs/handoffs/2026-09-07-bookkeeping-system-audit.md)，不代表本轮实测。
-- 平台使用同一个上游消息 ID 的真实重放验收仍未完成。自动化去重测试不能替代该项，因此整体部署验收仍有待完成的项目。
+- Windows → Mac 迁移已完成。真实历史查询、直接记账、确认后入账、待确认后取消及公网账本访问通过。
+- 自然确认／取消修复通过 37 个定向场景；Mac 可移植回归 685 通过、1 跳过，Windows 回执／持久化回归 141 项通过。各平台测试范围分别记录。
+- 最终九卷加密备份通过完整恢复；Windows 上的数据副本和单独保存的第二份密钥下载后，11112 项文件与两库全表再次匹配。旧测试实例已在备份验证后退役。
+- 插电常亮、锁屏、整机重启后人工登录恢复，以及约三小时连续健康观察通过。无人登录启动、家庭路由器断网补收和腾讯平台同消息 ID 的真实重放未实测。
+
+当前版本及完整证据见 [正式切换记录](docs/handoffs/2026-09-09-production-cutover.md)；[需求核对](docs/mac-requirements-audit.md) 保留未覆盖的适用边界。上述结果不代表克隆仓库后已配置好服务。
 
 当前规则围绕单个所有者的 SGD 支出设计。人民币等其他币种、自由切换账户和更广泛的账本操作，需要同步调整校验与授权规则。
 
@@ -114,12 +123,12 @@ Tunnel supervisor 在开放网页入口前，会核对正式进程、显式配�
 
 ### 环境要求
 
-- Windows 与 PowerShell，用于部署和运维脚本。
+- Windows 与 PowerShell，或 Apple Silicon Mac 与 Docker Desktop；按对应路线配置。
 - OpenClaw 2026.8.2 支持的 Node.js 版本：`>=22.22.3 <23`、`>=24.15.0 <25` 或 `>=25.9.0`。
 - npm 与 Git。
 - 联调服务：OpenClaw 2026.8.2、ezBookkeeping 1.6.1。
 
-### 运行本地检查
+### Windows 本地检查
 
 克隆仓库，安装锁定版本的依赖，然后运行插件检查：
 
@@ -139,17 +148,31 @@ node --test test\inbound-message-id.test.mjs
 Pop-Location
 ```
 
+### Mac 本地检查
+
+```sh
+git clone https://github.com/Awes0meE/WeChat-Clawbot-Ledger.git
+cd WeChat-Clawbot-Ledger
+npm --prefix openclaw-plugins/clawbot-bookkeeping ci
+npm --prefix openclaw-plugins/openclaw-weixin-stable-id ci
+node scripts/run-portable-tests.mjs
+npm --prefix openclaw-plugins/openclaw-weixin-stable-id run build
+node --test openclaw-plugins/openclaw-weixin-stable-id/test/*.test.mjs
+```
+
+Docker 构建、独立账本初始化和本机模型登录按 [Mac Docker 配置](deploy/docker/README.md) 顺序执行。该环境不导入生产账目，也不启动真实微信接收器。
+
 仓库测试不得访问 `8888` 正式账本。真实账本联调必须使用 `18888` 独立测试实例及其专用凭据。
 
 ### 配置与部署
 
-1. 阅读 [Windows 部署与恢复说明](WINDOWS-HANDOFF.md)和 [Ledger 运维手册](docs/ledger-cloudflare-runbook.md)。
+1. 按上面的系统表选择 Windows 或 Mac 入口；现有服务先核验实际身份与备份，新环境先建立独立测试实例。
 2. 根据 [`config/`](config/) 中的模板配置自己的所有者绑定与服务，将真实凭据和运行状态保存在 Git 之外。
 3. 按文档为专用记账助手完成官方 Codex harness 的交互式认证。
 4. 在独立测试账本中验证功能。
 5. 发布经过 manifest 校验的固定版本，依照运维手册完成服务、网页、重启、失败关闭和微信验收。
 
-会修改状态的安装、迁移、发布和重启脚本支持 `-WhatIf`，执行前先预演。正式服务加载仓库外的已验证发布包，编辑工作区文件不会直接更新正在运行的服务。
+Windows 安装和运维脚本按文档使用 `-WhatIf` 预演；Mac 生产入口使用独立的准备、审核与执行阶段，不能套用 PowerShell 参数。正式服务加载仓库外的已验证发布包，编辑工作区文件不会直接更新正在运行的服务。
 
 ## 仓库结构
 
@@ -160,13 +183,16 @@ Pop-Location
 | [`openclaw-hooks/session-memory/`](openclaw-hooks/session-memory/) | 保护固定版本记账工作区的 hook |
 | [`openclaw-workspace/`](openclaw-workspace/) | 专用记账助手的运行提示与行为约定 |
 | [`config/`](config/) | 服务配置模板与分类定义 |
-| [`scripts/`](scripts/) | Windows 安装、迁移、发布、Tunnel 监督与验收脚本 |
+| [`scripts/`](scripts/) | Windows 与 Mac 安装／迁移、发布、备份、守护与验收脚本 |
 | [`docs/`](docs/) | 设计、实施计划、运维手册、验收记录与展示图片 |
 | [`research/`](research/) | 记账集成方案的研究笔记 |
 
 ## 使用文档
 
 - [Windows 部署与恢复](WINDOWS-HANDOFF.md)
+- [Mac Docker 配置](deploy/docker/README.md)与[运维清单](docs/mac-before-windows-checklist.md)
+- [Mac 备份与恢复](docs/mac-maintenance-backup.md)
+- [模型、微信和账本授权恢复](docs/mac-authorization-recovery.md)
 - [Cloudflare Tunnel 部署与验收](docs/ledger-cloudflare-runbook.md)
 - [精确金额查询发布记录](docs/handoffs/2026-09-06-amount-search-release.md)
 - [微信回执关联修复与待验收项](docs/handoffs/2026-09-05-wechat-stale-reply-repair.md)
