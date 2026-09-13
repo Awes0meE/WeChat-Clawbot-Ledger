@@ -29,6 +29,7 @@ function parseArguments(values) {
     apiTokenPath: '',
     mcpTokenPath: '',
     verifyRateLimit: false,
+    verifyPublicTrafficRateLimit: false,
     validateFreeGate: false,
     freeRateLimitEvidencePath: '',
     expectLedgerUnavailable: false,
@@ -49,6 +50,7 @@ function parseArguments(values) {
       case '--api-token-path': options.apiTokenPath = nextValue(); break;
       case '--mcp-token-path': options.mcpTokenPath = nextValue(); break;
       case '--verify-rate-limit': options.verifyRateLimit = true; break;
+      case '--verify-public-traffic-rate-limit': options.verifyPublicTrafficRateLimit = true; break;
       case '--validate-free-rate-limit-gate': options.validateFreeGate = true; break;
       case '--free-rate-limit-evidence': options.freeRateLimitEvidencePath = nextValue(); break;
       case '--expect-ledger-unavailable': options.expectLedgerUnavailable = true; break;
@@ -62,19 +64,21 @@ function parseArguments(values) {
   if (options.capture && options.compare) fail('LEDGER_PUBLIC_BASELINE_MODE_CONFLICT');
   if ((options.capture || options.compare) && !options.baselinePath) fail('LEDGER_PUBLIC_BASELINE_REQUIRED');
   if (options.expectLedgerUnavailable
-      && (!options.compare || options.apiTokenPath || options.mcpTokenPath || options.verifyRateLimit || options.validateFreeGate)) {
+      && (!options.compare || options.apiTokenPath || options.mcpTokenPath || options.verifyRateLimit
+        || options.verifyPublicTrafficRateLimit || options.validateFreeGate)) {
     fail('LEDGER_PUBLIC_ARGUMENT_INVALID');
   }
   if (options.validateFreeGate
       && (!options.freeRateLimitEvidencePath || options.capture || options.expectLedgerUnavailable
-        || options.apiTokenPath || options.mcpTokenPath || options.verifyRateLimit)) {
+        || options.apiTokenPath || options.mcpTokenPath || options.verifyRateLimit || options.verifyPublicTrafficRateLimit)) {
     fail('LEDGER_PUBLIC_ARGUMENT_INVALID');
   }
   if (!options.validateFreeGate && options.freeRateLimitEvidencePath) fail('LEDGER_PUBLIC_ARGUMENT_INVALID');
   if (options.preHstsValidation && (options.capture || options.expectLedgerUnavailable || options.validateFreeGate)) {
     fail('LEDGER_PUBLIC_ARGUMENT_INVALID');
   }
-  if (!options.capture && !options.expectLedgerUnavailable && !options.validateFreeGate && !options.apiTokenPath) {
+  if (!options.capture && !options.expectLedgerUnavailable && !options.validateFreeGate
+      && !options.verifyRateLimit && !options.verifyPublicTrafficRateLimit && !options.apiTokenPath) {
     fail('LEDGER_PUBLIC_API_TOKEN_REQUIRED');
   }
   return options;
@@ -481,6 +485,22 @@ async function assertRateLimit(timeoutMs) {
   fail('LEDGER_PUBLIC_RATE_LIMIT_NOT_OBSERVED');
 }
 
+async function assertPublicTrafficRateLimit(timeoutMs) {
+  const path = '/ledger-acceptance/path?probe=1';
+  const requestCount = 80;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let index = 0; index < requestCount; index += 1) {
+      const response = await request({
+        method: 'GET',
+        url: `https://${LEDGER_HOST}${path}&probe=${attempt * requestCount + index}`,
+      }, timeoutMs);
+      assertNotCached(response);
+      if (response.statusCode === 429) return;
+    }
+  }
+  fail('LEDGER_PUBLIC_PUBLIC_TRAFFIC_RATE_LIMIT_NOT_OBSERVED');
+}
+
 async function assertLedgerUnavailable(timeoutMs) {
   try {
     const response = await request({ method: 'GET', url: `https://${LEDGER_HOST}/` }, timeoutMs);
@@ -540,6 +560,7 @@ async function main() {
       await assertLedgerSurface(options.timeoutMs, options.preHstsValidation);
       if (options.apiTokenPath) await assertCredentialRejected('api', options.apiTokenPath, options.timeoutMs);
       if (options.mcpTokenPath) await assertCredentialRejected('mcp', options.mcpTokenPath, options.timeoutMs);
+      if (options.verifyPublicTrafficRateLimit) await assertPublicTrafficRateLimit(options.timeoutMs);
       if (options.verifyRateLimit) await assertRateLimit(options.timeoutMs);
     }
   } finally {

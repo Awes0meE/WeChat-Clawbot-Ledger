@@ -4,11 +4,12 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { createRequire } from 'node:module';
 const hash = value => createHash('sha256').update(value).digest('hex');
 const encode = value => JSON.stringify(value, (_, v) => typeof v === 'bigint' ? { sqliteInteger: v.toString() } : v);
 const agentDB = 'agents/bookkeeper/agent/openclaw-agent.sqlite';
 const sharedDB = 'state/openclaw.sqlite';
-export async function authorizationStateAudit(root) {
+export async function authorizationStateAudit(root, { bootstrapModelProfile = false } = {}) {
   assert.equal(realpathSync(root), root);
   const databases = [agentDB, sharedDB], entries = []; let bytes = 0;
   async function walk(relative) {
@@ -42,8 +43,11 @@ export async function authorizationStateAudit(root) {
     let databasePath = path;
     try { lstatSync(path + '-wal'); }
     catch (e) { if (e.code !== 'ENOENT') throw e; databasePath = pathToFileURL(path).href + '?immutable=1'; }
-    const db = new DatabaseSync(databasePath, { readOnly: true });
+    const db = new DatabaseSync(databasePath, { readOnly: true, allowExtension: true });
     try {
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND sql LIKE '%USING vec0%' LIMIT 1").get()) {
+        createRequire('/app/package.json')('sqlite-vec').load(db);
+      }
       assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok'); db.exec('BEGIN');
       const schema = db.prepare('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').all();
       const tables = {};
@@ -52,6 +56,11 @@ export async function authorizationStateAudit(root) {
         const rows = [];
         for (const row of statement.iterate()) {
           assert.ok(rows.length < 1000000);
+          // Bootstrap separately checks both complete auth JSON cells. Permit
+          // their first insertion while retaining all schemas and other rows.
+          if (bootstrapModelProfile && relative === agentDB
+            && ((table.name === 'auth_profile_store' && row.store_key === 'primary')
+              || (table.name === 'auth_profile_state' && row.state_key === 'primary'))) continue;
           // The renewal helper separately compares the full primary JSON cells.
           // Preserve every other column, including unknown future columns.
           if (relative === agentDB && ((table.name === 'auth_profile_store' && row.store_key === 'primary')

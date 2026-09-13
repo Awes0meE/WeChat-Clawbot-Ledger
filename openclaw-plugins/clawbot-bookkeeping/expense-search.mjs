@@ -1,5 +1,6 @@
 import { parseAmountToMinorUnits } from './bookkeeping-core.mjs';
 import { resolveExpenseRange } from './expense-summary.mjs';
+import { normalizeCurrency } from './currency.mjs';
 
 const PARAMETER_KEYS = new Set(['amount', 'currency', 'period', 'startDate', 'endDate', 'limit']);
 const PERIODS = new Set(['all', 'today', 'this_week', 'this_month', 'last_month', 'this_year', 'custom']);
@@ -15,7 +16,8 @@ export function resolveExpenseSearch(params, nowMs = Date.now()) {
     throw new Error('expense search amount must be a decimal string');
   }
   const amountMinor = parseAmountToMinorUnits(params.amount);
-  if (params.currency !== 'SGD') throw new Error('expense search currency must be SGD');
+  const currency = normalizeCurrency(params.currency);
+  const currencyField = currency === 'SGD' ? {} : { currency };
 
   const limit = params.limit === undefined ? 3 : params.limit;
   if (!Number.isInteger(limit) || limit < 1 || limit > 10) {
@@ -26,7 +28,7 @@ export function resolveExpenseSearch(params, nowMs = Date.now()) {
   if (period !== 'custom' && (Object.hasOwn(params, 'startDate') || Object.hasOwn(params, 'endDate'))) {
     throw new Error('expense search dates require a custom period');
   }
-  if (period === 'all') return { amountMinor, limit, label: '全部历史' };
+  if (period === 'all') return { amountMinor, limit, label: '全部历史', ...currencyField };
   if (period === 'custom') {
     for (const date of [params.startDate, params.endDate]) {
       if (typeof date !== 'string' || date.length !== 10 || !/^\d{4}-\d{2}-\d{2}$/u.test(date)) {
@@ -37,12 +39,12 @@ export function resolveExpenseSearch(params, nowMs = Date.now()) {
   if (!Number.isFinite(nowMs) || !Number.isFinite(new Date(nowMs).getTime())) {
     throw new Error('expense search current date is invalid');
   }
-  return { amountMinor, limit, ...resolveExpenseRange({ ...params, period }, nowMs) };
+  return { amountMinor, limit, ...resolveExpenseRange({ ...params, period }, nowMs), ...currencyField };
 }
 
-function formatMinor(amountMinor) {
+function formatMinor(amountMinor, currency = 'SGD') {
   const amount = BigInt(amountMinor);
-  return `${amount / 100n}.${(amount % 100n).toString().padStart(2, '0')} SGD`;
+  return `${amount / 100n}.${(amount % 100n).toString().padStart(2, '0')} ${currency}`;
 }
 
 function displayData(value) {
@@ -70,9 +72,10 @@ export function formatExpenseSearch(query, { transactions, hasMore }, categoryNa
     || (transactions.length === 0 && hasMore)) {
     throw new Error('expense search result is invalid');
   }
-  const amount = formatMinor(query.amountMinor);
+  const currency = normalizeCurrency(query.currency ?? 'SGD');
+  const amount = formatMinor(query.amountMinor, currency);
   const lines = [
-    '日常账本 · SGD 支出查询',
+    `日常账本 · ${currency} 支出查询`,
     `- 单笔金额：精确匹配 ${amount}`,
     `- 查询范围：${query.label}`,
   ];

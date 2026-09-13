@@ -14,6 +14,7 @@ param(
     [string]$McpTokenPath,
 
     [switch]$VerifyRateLimit,
+    [switch]$VerifyPublicTrafficRateLimit,
 
     [switch]$ValidateFreePlanRateLimitGate,
 
@@ -83,6 +84,9 @@ if (-not [string]::IsNullOrWhiteSpace($McpTokenPath)) {
 }
 if ($VerifyRateLimit) {
     $arguments += '--verify-rate-limit'
+}
+if ($VerifyPublicTrafficRateLimit) {
+    $arguments += '--verify-public-traffic-rate-limit'
 }
 if ($ValidateFreePlanRateLimitGate) {
     $arguments += @(

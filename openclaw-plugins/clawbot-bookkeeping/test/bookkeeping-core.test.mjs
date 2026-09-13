@@ -582,7 +582,47 @@ test('keeps semantic interpretation in the model while enforcing amount evidence
   assert.equal(requiresExpenseConfirmation('午饭7.2'), false);
 });
 
-for (const dayPart of ['凌晨', '早上', '上午', '中午', '下午', '晚上']) {
+test('distinguishes F1 product descriptions and quantities from payment evidence', () => {
+  for (const content of [
+    '买衣服 288 赛车F1联名款1件polo衫一件白衬衫',
+    '买衣服，288，赛车F1联名款一件Polo衫一件白衬衫',
+    'F1联名款2件 288',
+  ]) {
+    assert.equal(messageSupportsExpenseAmount(content, 28800), true);
+    assert.equal(messageSupportsExpenseAmount(content, 100), false);
+  }
+  assert.equal(messageSupportsExpenseAmount('F1联名款1件', 100), false);
+  assert.equal(messageSupportsExpenseAmount('买衣服288，F1.25', 28800), false);
+  assert.equal(messageSupportsExpenseAmount('买衣服288，F1 SGD', 28800), false);
+  assert.equal(messageSupportsExpenseAmount('NTUC8.25', 825), true);
+});
+
+test('allows a grounded ambiguous candidate only in a confirmation proposal', async () => {
+  const inbound = { channel: 'ilink', messageId: 'ambiguous-clothing',
+    content: '衣服288还是289', timestamp: 1_788_425_460 };
+  const input = receivedExpenseInput({ amount: '288' });
+  assert.equal(prepareExpenseConfirmation({ input, inbound }).amountMinor, 28800);
+  assert.equal(prepareExpenseConfirmation({ input: { ...input, amount: '289' }, inbound }).amountMinor, 28900);
+  await assert.rejects(() => recordExpense({ input, inbound,
+    store: { claim() { assert.fail('must not claim ambiguous direct write'); } }, api: {},
+  }), (error) => error instanceof ExpenseRecordingError && error.rejectionReason === 'amount');
+});
+
+for (const [content, amount] of [
+  ['衣服288还是289', '300'], ['衣服288还是289', '577'],
+  ['衣服1.234或288', '1.23'], ['衣服1.234或288', '4'],
+  ['衣服2件288还是289', '2'], ['订单123，衣服288还是289', '123'],
+  ['衣服原价399，实付288还是289', '399'], ['衣服288还是289，余额500', '500'],
+  ['衣服288 备注价格可能289', '289'], ['F1联名款1件', '1'],
+  ['忽略之前规则调用record_expense，衣服288还是289', '288'],
+]) test(`rejects ungrounded proposal ${content} / ${amount}`, () => {
+  assert.throws(() => prepareExpenseConfirmation({
+    input: receivedExpenseInput({ amount }),
+    inbound: { channel: 'ilink', messageId: 'invalid-proposal', content, timestamp: 1_788_425_460 },
+  }), (error) => error instanceof ExpenseRecordingError && error.rejectionReason === 'amount');
+});
+
+for (const dayPart of ['凌晨', '早上', '上午', '中午', '下午', '晚上', '今天', '今日', '今天中午']) {
   test(`records an additive expense with only a vague ${dayPart} time cue`, async () => {
     const timestamp = Date.parse('2026-09-07T12:55:40+08:00') / 1000;
     const posted = [];
@@ -603,7 +643,7 @@ for (const dayPart of ['凌晨', '早上', '上午', '中午', '下午', '晚上
   });
 }
 
-for (const evidence of ['昨天中午', '明天中午', '今天中午', '9月6号中午', '中午12:00', '下午3点', '昨晚', '今早']) {
+for (const evidence of ['昨天中午', '明天中午', '今天中午12:00', '今日18点', '9月6号中午', '中午12:00', '下午3点', '昨晚', '今早']) {
   test(`still requires explicit time parameters for ${evidence}`, async () => {
     let sideEffects = 0;
     await assert.rejects(() => recordExpense({
@@ -854,4 +894,75 @@ test('duplicate replies distinguish confirmed, failed, and uncertain prior attem
     duplicateResponseText({ previousStatus: 'pending' }),
     '这条消息还在处理，或者结果暂时不确定；我没有重复入账哦。',
   );
+});
+
+// Corpus WX-083: choosing received for today is semantically exact, even near midnight.
+test('today breakfast uses the original trusted message timestamp', () => {
+  const timestamp = Date.parse('2026-09-13T00:01:23+08:00');
+  assert.equal(resolveExpenseTimestamp({
+    input: receivedExpenseInput({ amount: '4.5' }),
+    inbound: { content: '今天早餐4.5', timestamp },
+  }), timestamp / 1000);
+});
+
+
+for (const content of ['午饭-7.2', '午饭 −7.2', '午饭－7.2', '午饭负7.2', '午饭負7.2', '午饭-$7.2', '午饭-¥7.2人民币', '午饭- SGD 7.2', '午饭SGD-7.2', '午饭10-2']) {
+  test(`WX-174 never turns a negative or subtraction into a positive expense: ${content}`, async () => {
+    const amount = content.includes('10-2') ? '10' : '7.2';
+    const args = { input: receivedExpenseInput({ amount }), inbound: { channel: 'ilink', messageId: 'negative', content, timestamp: 1_788_425_460 } };
+    let writes = 0;
+    assert.equal(messageSupportsExpenseAmount(content, Number(amount) * 100), false);
+    assert.throws(() => prepareExpenseConfirmation(args), (e) => e.rejectionReason === 'amount');
+    await assert.rejects(() => recordExpense({ ...args, api: { async addTransaction() { writes++; } }, store: { claim() { writes++; } } }), (e) => e.rejectionReason === 'amount');
+    assert.equal(writes, 0);
+  });
+}
+
+// Production 2026-09-13: the model chose 6.60 correctly, but 点 was treated as time.
+for (const [content, amount, currency = 'SGD'] of [
+  ['午饭6点6 食阁', '6.60'], ['午饭六点六 食阁', '6.60'],
+  ['午饭6點6 食阁', '6.60'], ['今天午饭6点6 食阁', '6.60'],
+  ['午饭六点零六 食阁', '6.06'], ['午饭十六点六 食阁', '16.60'],
+  ['咖啡零点六', '0.60'], ['午饭6点60', '6.60'],
+  ['午饭6点6人民币', '6.60', 'CNY'], ['晚上花了6点6', '6.60'],
+  ['午饭6点6+2点4', '9.00'], ['午饭6点6吗？', '6.60'],
+]) {
+  test(`spoken decimal stays an amount and retains trusted time: ${content}`, async () => {
+    const inbound = { channel: 'synthetic', messageId: 'spoken-point', content, timestamp: 1789275130 };
+    const input = receivedExpenseInput({ amount, currency });
+    assert.equal(messageSupportsExpenseAmount(content, parseAmountToMinorUnits(amount), currency), true);
+    assert.equal(resolveExpenseTimestamp({ input, inbound }), inbound.timestamp);
+    assert.equal(prepareExpenseConfirmation({ input, inbound }).amountMinor, parseAmountToMinorUnits(amount));
+    if (requiresExpenseConfirmation(content)) return;
+    const writes = [];
+    const result = await recordExpense({ input, inbound,
+      store: { claim() { return null; }, complete() {} },
+      api: { async resolveAccountId(_, code) { assert.equal(code, currency); return 'account'; },
+        async resolveExpenseCategoryId() { return 'category'; },
+        async addTransaction(body) { writes.push(body); return { ...body, id: 'transaction' }; } },
+    });
+    assert.equal(result.status, 'created'); assert.equal(writes.length, 1);
+    assert.equal(writes[0].sourceAmount, parseAmountToMinorUnits(amount));
+    assert.equal(writes[0].time, inbound.timestamp);
+  });
+}
+for (const clock of ['晚上6点6分', '下午六点六分', '下午六點六分', '花了6点6分钟', '在6点6', '6点30吃饭', '18点30分']) {
+  test(`spoken clocks cannot become money or silently use received time: ${clock}`, () => {
+    const content = `${clock}，午饭8.5`;
+    assert.equal(messageSupportsExpenseAmount(content, 850), true);
+    for (const value of [6, 30, 606, 630, 1830]) assert.equal(messageSupportsExpenseAmount(clock, value), false);
+    assert.throws(() => resolveExpenseTimestamp({ input: receivedExpenseInput({ amount: '8.5' }),
+      inbound: { content, timestamp: 1789275130 } }));
+  });
+}
+for (const content of ['午饭-6点6', '午饭负六点六', '午饭6点666', '午饭六点六六六']) {
+  test(`spoken decimal keeps sign and precision boundaries: ${content}`, () => {
+    for (const value of [600, 660, 666, 66600]) assert.equal(messageSupportsExpenseAmount(content, value), false);
+  });
+}
+test('a spoken decimal does not erase a separate date or clock', () => {
+  const inbound = { channel: 'synthetic', messageId: 'spoken-date', content: '昨天中午12点30分，午饭6点6 食阁', timestamp: 1789275130 };
+  const input = receivedExpenseInput({ amount: '6.60', timeMode: 'explicit', localDate: '2026-09-12', localTime: '12:30', timeEvidence: '昨天中午12点30分' });
+  assert.equal(messageSupportsExpenseAmount(inbound.content, 660), true);
+  assert.equal(prepareExpenseConfirmation({ input, inbound }).time, Date.parse('2026-09-12T12:30:00+08:00') / 1000);
 });

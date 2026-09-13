@@ -76,6 +76,21 @@
           "refuseWhenAnyGateIsUnknownOrFalse": true
         }
       }
+    },
+    "publicTrafficRateLimit": {
+      "paidPlan": {
+        "expression": "http.host eq \"ledger.66ccff-labs.com\"",
+        "action": "block",
+        "ratelimit": {
+          "characteristics": [
+            "cf.colo.id",
+            "ip.src"
+          ],
+          "period": 60,
+          "requests_per_period": 60,
+          "mitigation_timeout": 30
+        }
+      }
     }
   }
 }

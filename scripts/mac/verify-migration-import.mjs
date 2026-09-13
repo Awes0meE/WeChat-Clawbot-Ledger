@@ -104,7 +104,7 @@ async function verifyNonemptyDestination(directory, image, sourceSha, targetComm
         for (const role of MIGRATION_ROLES) recoveryResources.push({ name: `${project}-recovery-${next.volumeGeneration}_${role}`, key: 'clawbot.generation', value: next.volumeGeneration });
         const upgraded = await stageRecoveryGeneration({ spec: next, candidate: secondCandidate, review: upgradeReview, image: nextImage,
           reservePath: directory, releaseUpdateFrom: before });
-        assert.equal(upgraded.status, 'CLAWBOT_RELEASE_UPDATE_GENERATION_STAGED'); assert.ok(upgraded.filesPreservedExceptSourceBindings);
+        assert.equal(upgraded.status, 'CLAWBOT_RELEASE_UPDATE_GENERATION_STAGED'); assert.ok(upgraded.filesPreservedExceptReviewedConfig);
         assert.deepEqual(upgraded.stagedAudit.databases, secondCandidate.audit.databases);
         assert.equal(upgraded.stagedAudit.entries, secondCandidate.audit.entries);
         console.log('CLAWBOT_RELEASE_UPDATE_NEW_IMAGE_NEW_SOURCE_BINDINGS_AND_ALL_PERSISTENT_DATA_PRESERVED');
@@ -181,12 +181,12 @@ try {
   const config = { agents: { entries: { bookkeeper: agent } }, commands: { ownerAllowFrom: ['openclaw-weixin:fixture-owner'] },
     bindings: [{ type: 'route', agentId: 'bookkeeper', match: { channel: 'openclaw-weixin', accountId: 'fixture-account' }, session: { dmScope: 'per-account-channel-peer' } }],
     gateway: { mode: 'local', bind: 'loopback', port: 18789, auth: { mode: 'token', token: 'synthetic-gateway-'.repeat(4) } },
-    channels: { 'openclaw-weixin': { enabled: true } }, plugins: { allow: ['clawbot-bookkeeping', 'openclaw-weixin', 'codex'],
+    channels: { 'openclaw-weixin': { enabled: true } }, plugins: { allow: ['clawbot-bookkeeping', 'openclaw-weixin', 'codex', 'openai'],
       load: { paths: ['/opt/clawbot/plugins/clawbot-bookkeeping', '/opt/clawbot/plugins/openclaw-weixin-stable-id'] },
       entries: { 'clawbot-bookkeeping': { enabled: true, hooks: { allowConversationAccess: true, allowPromptInjection: true },
         config: { deploymentProfile: 'production', serverBaseUrl: 'http://127.0.0.1:8888', tokenPath: '/var/lib/clawbot/secrets/http-token',
           mcpTokenPath: '/var/lib/clawbot/secrets/mcp-token', stateDbPath: '/var/lib/clawbot/receipts/message-receipts.sqlite', accountName: '日常支出', ledgerDisplayName: '日常账本' } },
-        'openclaw-weixin': { enabled: true }, codex: { enabled: true, config: { codexDynamicToolsLoading: 'direct' } } } },
+        'openclaw-weixin': { enabled: true }, openai: { enabled: true }, codex: { enabled: true, config: { codexDynamicToolsLoading: 'direct' } } } },
     hooks: { internal: { enabled: true, entries: { 'session-memory': { enabled: true } } } } };
   json('runtime-config/openclaw.json', config);
   const secret = 'synthetic-ledger-key-for-import-only';

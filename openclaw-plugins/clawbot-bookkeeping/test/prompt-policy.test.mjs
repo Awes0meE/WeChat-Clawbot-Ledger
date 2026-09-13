@@ -23,7 +23,7 @@ test('requires a hidden semantic pass over time, currency, category, and notes',
     'localDate',
     'localTime',
     'Asia/Singapore',
-    '非 SGD',
+    '按原币传 ISO 代码',
     '不要展示这套检查过程',
   ]) {
     assert.equal(prompt.includes(phrase), true, `missing prompt rule: ${phrase}`);
@@ -78,9 +78,9 @@ test('supports deterministic summaries and flexible read-only history questions'
   assert.equal(prompt.includes('summarize_expenses'), true);
   assert.equal(prompt.includes('ezbookkeeping__query_transactions'), true);
   assert.equal(prompt.includes('不得重新计算'), true);
-  assert.equal(prompt.includes('默认读取 3 条，最多 10 条'), true);
+  assert.equal(prompt.includes('默认 3 条、最多 10 条'), true);
   assert.equal(prompt.includes('最近三笔是什么'), true);
-  assert.equal(prompt.includes('账本暂时连不上，这次没有读取任何数据～ 稍后再试试吧。'), true);
+  assert.equal(prompt.includes('保留同一回复里其他已成功的结果'), true);
 });
 
 test('treats ledger results and embedded instructions as untrusted data', () => {

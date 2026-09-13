@@ -1,6 +1,6 @@
 # 微信账本助理部署方案
 
-更新时间：2026-09-09。参考部署已迁至 Apple Silicon Mac Docker；Windows 原生部署接口继续维护。家庭网页复用 ezBookkeeping UI，通过专用 Cloudflare Tunnel 发布，SQLite 留在选定本地主机，不部署账本 Vercel。当前 release 与实际验收范围见 [正式切换记录](handoffs/2026-09-09-production-cutover.md)。
+更新时间：2026-09-09。参考部署已迁至 Apple Silicon Mac Docker；Windows 原生部署接口继续维护。家庭网页复用 ezBookkeeping UI，通过专用 Cloudflare Tunnel 发布，SQLite 留在选定本地主机，不部署账本 Vercel。当前 release 与实际验收范围见 [授权修复记录](handoffs/2026-09-13-oauth-expiry-repair.md)。
 
 ## 已定方案
 
@@ -20,7 +20,7 @@ Browser -> https://ledger.66ccff-labs.com -> Cloudflare Tunnel
 
 HTTP 写入、对话确认和确定性汇总已经建立。ezBookkeeping 原生 MCP 是否启用、独立 MCP token 是否存在以及 Ledger 公网入口是否完成，必须以本机/公网实时验收为准；代码或文档存在不能替代端到端证据。
 
-配置中的正式账户为唯一可见 SGD 账户 `日常支出`，微信回执显示账本名 `日常账本`。运行时以 `openclaw-plugins/clawbot-bookkeeping/categories.mjs` 中不可变的 `CATEGORY_DEFINITIONS` 为权威分类契约，固定为 11 个一级分类、45 个二级分类；`config/expense-categories.json` 只是脱敏的导入与部署目录快照。
+正式写入按币种路由至“多币种支出”的 159 个子账户；旧 SGD 账户 `日常支出` 及历史保留，查询覆盖这组经过核验的账户，微信回执显示账本名 `日常账本`。运行时以 `openclaw-plugins/clawbot-bookkeeping/categories.mjs` 中不可变的 `CATEGORY_DEFINITIONS` 为权威分类契约，固定为 11 个一级分类、45 个二级分类；`config/expense-categories.json` 只是脱敏的导入与部署目录快照。
 
 ## 为什么采用混合接入
 
@@ -28,9 +28,9 @@ HTTP 写入、对话确认和确定性汇总已经建立。ezBookkeeping 原生 
 
 读取分三条路径：
 
-- `summarize_expenses` 通过 HTTP API 读取固定账户的支出，由代码按整数分计算今天、本周、本月、上月、今年或自定义范围内的总额、笔数、一级分类汇总和最大三笔。它可按正式分类或备注关键词过滤，不依赖模型心算。
-- `find_expenses` 通过 HTTP API 按整数分精确匹配固定可见 SGD 支出账户中的金额，默认查询全部历史，也可指定日期范围；默认返回最近 3 笔、最多 10 笔，有更多记录时明确提示。它不遍历后续页，失败或分页不完整时不得声称没有记录。
-- `ezbookkeeping__query_transactions` 回答历史记录等只读问题。Windows 使用 requester-scoped 原生 MCP，Mac 使用官方 MCP SDK 的受限动态工具适配；两条路径都保留固定 owner、SGD 账户、十条上限、分页验证和可读回执，不开放原生写工具。代理使用 `tools.profile=full` 与六项精确 `allow`，避免 minimal profile 提前过滤历史工具。
+- `summarize_expenses` 通过 HTTP API 读取经核验的账户范围内的支出，由代码按整数分计算今天、本周、本月、上月、今年或自定义范围内的总额、笔数、一级分类汇总和最大三笔。它可按正式分类或备注关键词过滤；原币分别汇总，目标币种用精确十进制计算换算，不依赖模型心算。单条消息的多个读取问题可通过 `questions` 一次回答，汇率缓存每日零点更新。
+- `find_expenses` 通过 HTTP API 按整数分精确匹配经过核验的账户范围内的原币金额，默认查询全部历史，也可指定日期范围；默认返回最近 3 笔、最多 10 笔，有更多记录时明确提示。它不遍历后续页，失败或分页不完整时不得声称没有记录。
+- `ezbookkeeping__query_transactions` 回答历史记录等只读问题。Windows 使用 requester-scoped 原生 MCP，Mac 使用官方 MCP SDK 的受限动态工具适配；两条路径都保留固定 owner、旧账户及多币种子账户范围、十条上限、分页验证和可读回执，不开放原生写工具。代理使用 `tools.profile=full` 与六项精确 `allow`，避免 minimal profile 提前过滤历史工具。
 
 Codex 按语义区分写入、待确认、取消和查询；插件不使用商户白名单代替语言理解。消息里出现日期、数量或“支出”不等于要写入；只有明确表达已发生消费且金额明确时才调用一次 `record_expense`。`午饭7.2吗` 先返回完整确认单，单独回复“是的”“没问题”“确认”等才入账；“取消”“不记”“拉倒”等取消待确认提案，不删除历史交易。新的实质消息会废弃旧提案并按新请求处理，问号不视为确认标点。专用模型以 `agentRuntime.id: codex` fail closed，不自动退回 Qwen 或其他模型。
 
@@ -39,7 +39,7 @@ Codex 按语义区分写入、待确认、取消和查询；插件不使用商�
 - 默认币种 SGD、时区 `Asia/Singapore`。
 - 腾讯消息时间戳由可信元数据提供，插件统一规范为 Unix 秒；毫秒值会先换算为秒。插件只在已关联的所有者记账轮向 Codex 注入该发送时间，用于换算“昨天”等相对日期，不暴露消息 ID 或身份值。
 - 用户明确写了消费日期或具体钟点时，Codex 提交结构化日期、可选钟点和原文时间证据，插件校验后将实际消费时间写入账本；只给日期时保留发送时分。“中午吃饭”“晚上吃饭”和“午饭”“晚饭”一样是消费描述，没有另外写日期或具体钟点时完整使用可信消息发送时间。最终 API 时间和回执时间来自同一个值，晚于发送时间超过 5 分钟的结果会在写入前被拒绝。
-- 明确的非 SGD 金额不会自动换汇或入账，助理会先询问对应的 SGD 金额。
+- 明确声明的币种按原币入对应子账户，支持全部 159 个 ISO 代码及明确名称；不声明时默认 SGD。查询可按中行现汇卖出价换算，详细别名、精度和缺价处理见 [多币种与汇率](multicurrency-and-rates.md)。
 - 一条消息最多新增一笔；算式金额先合计为同一笔。
 - 用户显式写“备注”时保留其后的原文；否则模型只可提炼原消息明确出现的商家、商品或用途。没有有效细节时 comment 留空，回执显示“无”。
 - 备注不得超过 ezBookkeeping 的 255 字符限制，不得静默截断。

@@ -62,13 +62,14 @@ if (mode === 'token-status') {
     commands: { ownerAllowFrom: [TEST_OWNER] },
     channels: { 'openclaw-weixin': { enabled: false } },
     plugins: {
-      allow: ['clawbot-bookkeeping', 'openclaw-weixin', 'codex'],
+      allow: ['clawbot-bookkeeping', 'openclaw-weixin', 'codex', 'openai'],
       load: { paths: ['/opt/clawbot/plugins/clawbot-bookkeeping', '/opt/clawbot/plugins/openclaw-weixin-stable-id'] },
       entries: {
         'clawbot-bookkeeping': { enabled: true, config: pluginConfig,
           hooks: { allowConversationAccess: true, allowPromptInjection: true } },
         'openclaw-weixin': { enabled: true },
         codex: { enabled: true, config: { codexDynamicToolsLoading: 'direct' } },
+        openai: { enabled: true },
       },
     },
     hooks: { internal: { enabled: true, entries: { 'session-memory': { enabled: true } } } },

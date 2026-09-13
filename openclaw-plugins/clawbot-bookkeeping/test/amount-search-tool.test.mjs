@@ -134,7 +134,7 @@ test('invalid amount lookup parameters never reach HTTP', async () => {
   let requests = 0;
   const h = harness(async () => { requests++; assert.fail('Invalid query reached HTTP'); });
   try {
-    for (const invalid of [{ ...params, amount: '3.361' }, { ...params, currency: 'USD' }, { ...params, limit: 11 }, { ...params, startDate: '2026-09-01' }]) {
+    for (const invalid of [{ ...params, amount: '3.361' }, { ...params, currency: 'ZZZ' }, { ...params, limit: 11 }, { ...params, startDate: '2026-09-01' }]) {
       await assert.rejects(() => h.tool().execute('invalid', invalid));
     }
     assert.equal(requests, 0);

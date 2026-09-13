@@ -1,0 +1,983 @@
+{
+  "upstreamVersion": "1.6.1",
+  "amountFactor": 100,
+  "maxAmountDecimals": 2,
+  "sources": [
+    {
+      "url": "https://raw.githubusercontent.com/mayswind/ezbookkeeping/v1.6.1/src/consts/currency.ts",
+      "sha256": "617e00ee2b086675a6002bf797e8e8f2e57d914cd94478fdf0eac65aa551f328"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/mayswind/ezbookkeeping/v1.6.1/pkg/validators/currency.go",
+      "sha256": "52e29c9f4e592942756e3b886f130543145baa836746cbfd40beee5645ed0ba3"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/mayswind/ezbookkeeping/v1.6.1/src/locales/zh_Hans.json",
+      "sha256": "052b99277e94e56dee6ed41b0b967db05059ca99e30d6e606764eed26a9f9a58"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/mayswind/ezbookkeeping/v1.6.1/src/locales/zh_Hant.json",
+      "sha256": "a41b32d9cbdd3b547e6b0a4e644cd310c4fcfb879ffbfe4c5b338fc14daccc2c"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/mayswind/ezbookkeeping/v1.6.1/src/consts/numeral.ts",
+      "sha256": "0957834ef685170aac1681e12a3f711a6d4024d42d8eaadf2fa5a193b55b9a9e"
+    }
+  ],
+  "currencies": {
+    "AED": {
+      "fraction": 2,
+      "name": "UAE Dirham",
+      "nameZh": "阿联酋迪拉姆",
+      "nameZhHant": "阿拉伯聯合大公國迪拉姆"
+    },
+    "AFN": {
+      "fraction": 2,
+      "name": "Afghani",
+      "nameZh": "阿富汗尼",
+      "nameZhHant": "阿富汗尼"
+    },
+    "ALL": {
+      "fraction": 2,
+      "name": "Lek",
+      "nameZh": "阿尔巴尼亚列克",
+      "nameZhHant": "阿爾巴尼亞列克"
+    },
+    "AMD": {
+      "fraction": 2,
+      "name": "Armenian Dram",
+      "nameZh": "亚美尼亚德拉姆",
+      "nameZhHant": "亞美尼亞德拉姆"
+    },
+    "ANG": {
+      "fraction": 2,
+      "name": "Netherlands Antillean Guilder",
+      "nameZh": "荷属安的列斯盾",
+      "nameZhHant": "荷屬安地列斯盾"
+    },
+    "AOA": {
+      "fraction": 2,
+      "name": "Kwanza",
+      "nameZh": "安哥拉宽扎",
+      "nameZhHant": "安哥拉寬扎"
+    },
+    "ARS": {
+      "fraction": 2,
+      "name": "Argentine Peso",
+      "nameZh": "阿根廷比索",
+      "nameZhHant": "阿根廷披索"
+    },
+    "AUD": {
+      "fraction": 2,
+      "name": "Australian Dollar",
+      "nameZh": "澳大利亚元",
+      "nameZhHant": "澳大利亞元"
+    },
+    "AWG": {
+      "fraction": 2,
+      "name": "Aruban Florin",
+      "nameZh": "阿鲁巴弗罗林",
+      "nameZhHant": "阿魯巴弗羅林"
+    },
+    "AZN": {
+      "fraction": 2,
+      "name": "Azerbaijan Manat",
+      "nameZh": "阿塞拜疆马纳特",
+      "nameZhHant": "亞塞拜然馬納特"
+    },
+    "BAM": {
+      "fraction": 2,
+      "name": "Convertible Mark",
+      "nameZh": "波斯尼亚和黑塞哥维那可兑换马克",
+      "nameZhHant": "波士尼亞與赫塞哥維納可兌換馬克"
+    },
+    "BBD": {
+      "fraction": 2,
+      "name": "Barbados Dollar",
+      "nameZh": "巴巴多斯元",
+      "nameZhHant": "巴貝多元"
+    },
+    "BDT": {
+      "fraction": 2,
+      "name": "Taka",
+      "nameZh": "孟加拉塔卡",
+      "nameZhHant": "孟加拉塔卡"
+    },
+    "BGN": {
+      "fraction": 2,
+      "name": "Bulgarian Lev",
+      "nameZh": "保加利亚列弗",
+      "nameZhHant": "保加利亞列弗"
+    },
+    "BHD": {
+      "fraction": 3,
+      "name": "Bahraini Dinar",
+      "nameZh": "巴林第纳尔",
+      "nameZhHant": "巴林第納爾"
+    },
+    "BIF": {
+      "fraction": 0,
+      "name": "Burundi Franc",
+      "nameZh": "布隆迪法郎",
+      "nameZhHant": "蒲隆地法郎"
+    },
+    "BMD": {
+      "fraction": 2,
+      "name": "Bermudian Dollar",
+      "nameZh": "百慕大元",
+      "nameZhHant": "百慕達元"
+    },
+    "BND": {
+      "fraction": 2,
+      "name": "Brunei Dollar",
+      "nameZh": "文莱元",
+      "nameZhHant": "汶萊元"
+    },
+    "BOB": {
+      "fraction": 2,
+      "name": "Boliviano",
+      "nameZh": "玻利维亚诺",
+      "nameZhHant": "玻利維亞諾"
+    },
+    "BRL": {
+      "fraction": 2,
+      "name": "Brazilian Real",
+      "nameZh": "巴西雷亚尔",
+      "nameZhHant": "巴西雷亞爾"
+    },
+    "BSD": {
+      "fraction": 2,
+      "name": "Bahamian Dollar",
+      "nameZh": "巴哈马元",
+      "nameZhHant": "巴哈馬元"
+    },
+    "BTN": {
+      "fraction": 2,
+      "name": "Ngultrum",
+      "nameZh": "不丹努扎姆",
+      "nameZhHant": "不丹努爾特魯姆"
+    },
+    "BWP": {
+      "fraction": 2,
+      "name": "Pula",
+      "nameZh": "博茨瓦纳普拉",
+      "nameZhHant": "波札那普拉"
+    },
+    "BYN": {
+      "fraction": 2,
+      "name": "Belarusian Ruble",
+      "nameZh": "白俄罗斯卢布",
+      "nameZhHant": "白俄羅斯盧布"
+    },
+    "BZD": {
+      "fraction": 2,
+      "name": "Belize Dollar",
+      "nameZh": "伯利兹元",
+      "nameZhHant": "貝里斯元"
+    },
+    "CAD": {
+      "fraction": 2,
+      "name": "Canadian Dollar",
+      "nameZh": "加拿大元",
+      "nameZhHant": "加拿大元"
+    },
+    "CDF": {
+      "fraction": 2,
+      "name": "Congolese Franc",
+      "nameZh": "刚果民主共和国刚果法郎",
+      "nameZhHant": "剛果民主共和國剛果法郎"
+    },
+    "CHF": {
+      "fraction": 2,
+      "name": "Swiss Franc",
+      "nameZh": "瑞士法郎",
+      "nameZhHant": "瑞士法郎"
+    },
+    "CLP": {
+      "fraction": 0,
+      "name": "Chilean Peso",
+      "nameZh": "智利比索",
+      "nameZhHant": "智利披索"
+    },
+    "CNY": {
+      "fraction": 2,
+      "name": "Yuan Renminbi",
+      "nameZh": "人民币",
+      "nameZhHant": "人民幣"
+    },
+    "COP": {
+      "fraction": 2,
+      "name": "Colombian Peso",
+      "nameZh": "哥伦比亚比索",
+      "nameZhHant": "哥倫比亞披索"
+    },
+    "CRC": {
+      "fraction": 2,
+      "name": "Costa Rican Colon",
+      "nameZh": "哥斯达黎加科朗",
+      "nameZhHant": "哥斯大黎加科朗"
+    },
+    "CUC": {
+      "fraction": 2,
+      "name": "Peso Convertible",
+      "nameZh": "古巴可兑换比索",
+      "nameZhHant": "古巴可兌換披索"
+    },
+    "CUP": {
+      "fraction": 2,
+      "name": "Cuban Peso",
+      "nameZh": "古巴比索",
+      "nameZhHant": "古巴披索"
+    },
+    "CVE": {
+      "fraction": 2,
+      "name": "Cabo Verde Escudo",
+      "nameZh": "佛得角埃斯库多",
+      "nameZhHant": "維德角埃斯庫多"
+    },
+    "CZK": {
+      "fraction": 2,
+      "name": "Czech Koruna",
+      "nameZh": "捷克克朗",
+      "nameZhHant": "捷克克朗"
+    },
+    "DJF": {
+      "fraction": 0,
+      "name": "Djibouti Franc",
+      "nameZh": "吉布提法郎",
+      "nameZhHant": "吉布地法郎"
+    },
+    "DKK": {
+      "fraction": 2,
+      "name": "Danish Krone",
+      "nameZh": "丹麦克朗",
+      "nameZhHant": "丹麥克朗"
+    },
+    "DOP": {
+      "fraction": 2,
+      "name": "Dominican Peso",
+      "nameZh": "多米尼加比索",
+      "nameZhHant": "多明尼加披索"
+    },
+    "DZD": {
+      "fraction": 2,
+      "name": "Algerian Dinar",
+      "nameZh": "阿尔及利亚第纳尔",
+      "nameZhHant": "阿爾及利亞第納爾"
+    },
+    "EGP": {
+      "fraction": 2,
+      "name": "Egyptian Pound",
+      "nameZh": "埃及镑",
+      "nameZhHant": "埃及鎊"
+    },
+    "ERN": {
+      "fraction": 2,
+      "name": "Nakfa",
+      "nameZh": "厄立特里亚纳克法",
+      "nameZhHant": "厄立特里亞納克法"
+    },
+    "ETB": {
+      "fraction": 2,
+      "name": "Ethiopian Birr",
+      "nameZh": "埃塞俄比亚比尔",
+      "nameZhHant": "衣索比亞比爾"
+    },
+    "EUR": {
+      "fraction": 2,
+      "name": "Euro",
+      "nameZh": "欧元",
+      "nameZhHant": "歐元"
+    },
+    "FJD": {
+      "fraction": 2,
+      "name": "Fiji Dollar",
+      "nameZh": "斐济元",
+      "nameZhHant": "斐濟元"
+    },
+    "FKP": {
+      "fraction": 2,
+      "name": "Falkland Islands Pound",
+      "nameZh": "福克兰镑",
+      "nameZhHant": "福克蘭群島鎊"
+    },
+    "GBP": {
+      "fraction": 2,
+      "name": "Pound Sterling",
+      "nameZh": "英镑",
+      "nameZhHant": "英鎊"
+    },
+    "GEL": {
+      "fraction": 2,
+      "name": "Lari",
+      "nameZh": "格鲁吉亚拉里",
+      "nameZhHant": "喬治亞拉里"
+    },
+    "GHS": {
+      "fraction": 2,
+      "name": "Ghana Cedi",
+      "nameZh": "加纳塞地",
+      "nameZhHant": "迦納塞地"
+    },
+    "GIP": {
+      "fraction": 2,
+      "name": "Gibraltar Pound",
+      "nameZh": "直布罗陀镑",
+      "nameZhHant": "直布羅陀鎊"
+    },
+    "GMD": {
+      "fraction": 2,
+      "name": "Dalasi",
+      "nameZh": "冈比亚达拉西",
+      "nameZhHant": "甘比亞達拉西"
+    },
+    "GNF": {
+      "fraction": 0,
+      "name": "Guinean Franc",
+      "nameZh": "几内亚法郎",
+      "nameZhHant": "幾內亞法郎"
+    },
+    "GTQ": {
+      "fraction": 2,
+      "name": "Quetzal",
+      "nameZh": "危地马拉格查尔",
+      "nameZhHant": "瓜地馬拉格查爾"
+    },
+    "GYD": {
+      "fraction": 2,
+      "name": "Guyana Dollar",
+      "nameZh": "圭亚那元",
+      "nameZhHant": "蓋亞那元"
+    },
+    "HKD": {
+      "fraction": 2,
+      "name": "Hong Kong Dollar",
+      "nameZh": "港元",
+      "nameZhHant": "港幣"
+    },
+    "HNL": {
+      "fraction": 2,
+      "name": "Lempira",
+      "nameZh": "洪都拉斯伦皮拉",
+      "nameZhHant": "宏都拉斯倫皮拉"
+    },
+    "HTG": {
+      "fraction": 2,
+      "name": "Gourde",
+      "nameZh": "海地古德",
+      "nameZhHant": "海地古德"
+    },
+    "HUF": {
+      "fraction": 2,
+      "name": "Forint",
+      "nameZh": "匈牙利福林",
+      "nameZhHant": "匈牙利福林"
+    },
+    "IDR": {
+      "fraction": 2,
+      "name": "Rupiah",
+      "nameZh": "印度尼西亚卢比",
+      "nameZhHant": "印尼盾"
+    },
+    "ILS": {
+      "fraction": 2,
+      "name": "New Israeli Sheqel",
+      "nameZh": "以色列新谢克尔",
+      "nameZhHant": "以色列新謝克爾"
+    },
+    "INR": {
+      "fraction": 2,
+      "name": "Indian Rupee",
+      "nameZh": "印度卢比",
+      "nameZhHant": "印度盧比"
+    },
+    "IQD": {
+      "fraction": 3,
+      "name": "Iraqi Dinar",
+      "nameZh": "伊拉克第纳尔",
+      "nameZhHant": "伊拉克第納爾"
+    },
+    "IRR": {
+      "fraction": 2,
+      "name": "Iranian Rial",
+      "nameZh": "伊朗里亚尔",
+      "nameZhHant": "伊朗里亞爾"
+    },
+    "ISK": {
+      "fraction": 0,
+      "name": "Iceland Krona",
+      "nameZh": "冰岛克朗",
+      "nameZhHant": "冰島克朗"
+    },
+    "JMD": {
+      "fraction": 2,
+      "name": "Jamaican Dollar",
+      "nameZh": "牙买加元",
+      "nameZhHant": "牙買加元"
+    },
+    "JOD": {
+      "fraction": 3,
+      "name": "Jordanian Dinar",
+      "nameZh": "约旦第纳尔",
+      "nameZhHant": "約旦第納爾"
+    },
+    "JPY": {
+      "fraction": 0,
+      "name": "Yen",
+      "nameZh": "日元",
+      "nameZhHant": "日圓"
+    },
+    "KES": {
+      "fraction": 2,
+      "name": "Kenyan Shilling",
+      "nameZh": "肯尼亚先令",
+      "nameZhHant": "肯亞先令"
+    },
+    "KGS": {
+      "fraction": 2,
+      "name": "Som",
+      "nameZh": "吉尔吉斯斯坦索姆",
+      "nameZhHant": "吉爾吉斯索姆"
+    },
+    "KHR": {
+      "fraction": 2,
+      "name": "Riel",
+      "nameZh": "柬埔寨瑞尔",
+      "nameZhHant": "柬埔寨瑞爾"
+    },
+    "KMF": {
+      "fraction": 0,
+      "name": "Comorian Franc",
+      "nameZh": "科摩罗法郎",
+      "nameZhHant": "科摩羅法郎"
+    },
+    "KPW": {
+      "fraction": 2,
+      "name": "North Korean Won",
+      "nameZh": "朝鲜圆",
+      "nameZhHant": "北韓圓"
+    },
+    "KRW": {
+      "fraction": 0,
+      "name": "Won",
+      "nameZh": "韩元",
+      "nameZhHant": "韓圓"
+    },
+    "KWD": {
+      "fraction": 3,
+      "name": "Kuwaiti Dinar",
+      "nameZh": "科威特第纳尔",
+      "nameZhHant": "科威特第納爾"
+    },
+    "KYD": {
+      "fraction": 2,
+      "name": "Cayman Islands Dollar",
+      "nameZh": "开曼群岛元",
+      "nameZhHant": "開曼群島元"
+    },
+    "KZT": {
+      "fraction": 2,
+      "name": "Tenge",
+      "nameZh": "哈萨克斯坦坚戈",
+      "nameZhHant": "哈薩克堅戈"
+    },
+    "LAK": {
+      "fraction": 2,
+      "name": "Lao Kip",
+      "nameZh": "老挝基普",
+      "nameZhHant": "寮國基普"
+    },
+    "LBP": {
+      "fraction": 2,
+      "name": "Lebanese Pound",
+      "nameZh": "黎巴嫩镑",
+      "nameZhHant": "黎巴嫩鎊"
+    },
+    "LKR": {
+      "fraction": 2,
+      "name": "Sri Lanka Rupee",
+      "nameZh": "斯里兰卡卢比",
+      "nameZhHant": "斯里蘭卡盧比"
+    },
+    "LRD": {
+      "fraction": 2,
+      "name": "Liberian Dollar",
+      "nameZh": "利比里亚元",
+      "nameZhHant": "賴比瑞亞元"
+    },
+    "LSL": {
+      "fraction": 2,
+      "name": "Loti",
+      "nameZh": "莱索托洛蒂",
+      "nameZhHant": "賴索托洛蒂"
+    },
+    "LYD": {
+      "fraction": 3,
+      "name": "Libyan Dinar",
+      "nameZh": "利比亚第纳尔",
+      "nameZhHant": "利比亞第納爾"
+    },
+    "MAD": {
+      "fraction": 2,
+      "name": "Moroccan Dirham",
+      "nameZh": "摩洛哥迪拉姆",
+      "nameZhHant": "摩洛哥迪拉姆"
+    },
+    "MDL": {
+      "fraction": 2,
+      "name": "Moldovan Leu",
+      "nameZh": "摩尔多瓦列伊",
+      "nameZhHant": "摩爾多瓦列伊"
+    },
+    "MGA": {
+      "fraction": 2,
+      "name": "Malagasy Ariary",
+      "nameZh": "马达加斯加阿里亚里",
+      "nameZhHant": "馬達加斯加阿里亞里"
+    },
+    "MKD": {
+      "fraction": 2,
+      "name": "Denar",
+      "nameZh": "北马其顿代纳尔",
+      "nameZhHant": "北馬其頓代納爾"
+    },
+    "MMK": {
+      "fraction": 2,
+      "name": "Kyat",
+      "nameZh": "缅甸元",
+      "nameZhHant": "緬甸元"
+    },
+    "MNT": {
+      "fraction": 2,
+      "name": "Tugrik",
+      "nameZh": "蒙古图格里克",
+      "nameZhHant": "蒙古圖格里克"
+    },
+    "MOP": {
+      "fraction": 2,
+      "name": "Pataca",
+      "nameZh": "澳门元",
+      "nameZhHant": "澳門元"
+    },
+    "MRU": {
+      "fraction": 2,
+      "name": "Ouguiya",
+      "nameZh": "毛里塔尼亚乌吉亚",
+      "nameZhHant": "茅利塔尼亞烏吉亞"
+    },
+    "MUR": {
+      "fraction": 2,
+      "name": "Mauritius Rupee",
+      "nameZh": "毛里求斯卢比",
+      "nameZhHant": "模里西斯盧比"
+    },
+    "MVR": {
+      "fraction": 2,
+      "name": "Rufiyaa",
+      "nameZh": "马尔代夫拉菲亚",
+      "nameZhHant": "馬爾地夫拉菲亞"
+    },
+    "MWK": {
+      "fraction": 2,
+      "name": "Malawi Kwacha",
+      "nameZh": "马拉维克瓦查",
+      "nameZhHant": "馬拉威克瓦查"
+    },
+    "MXN": {
+      "fraction": 2,
+      "name": "Mexican Peso",
+      "nameZh": "墨西哥比索",
+      "nameZhHant": "墨西哥披索"
+    },
+    "MYR": {
+      "fraction": 2,
+      "name": "Malaysian Ringgit",
+      "nameZh": "马来西亚林吉特",
+      "nameZhHant": "馬來西亞令吉"
+    },
+    "MZN": {
+      "fraction": 2,
+      "name": "Mozambique Metical",
+      "nameZh": "莫桑比克梅蒂卡尔",
+      "nameZhHant": "莫三比克梅蒂卡爾"
+    },
+    "NAD": {
+      "fraction": 2,
+      "name": "Namibia Dollar",
+      "nameZh": "纳米比亚元",
+      "nameZhHant": "納米比亞元"
+    },
+    "NGN": {
+      "fraction": 2,
+      "name": "Naira",
+      "nameZh": "尼日利亚奈拉",
+      "nameZhHant": "奈及利亞奈拉"
+    },
+    "NIO": {
+      "fraction": 2,
+      "name": "Cordoba Oro",
+      "nameZh": "尼加拉瓜科多巴",
+      "nameZhHant": "尼加拉瓜科多巴"
+    },
+    "NOK": {
+      "fraction": 2,
+      "name": "Norwegian Krone",
+      "nameZh": "挪威克朗",
+      "nameZhHant": "挪威克朗"
+    },
+    "NPR": {
+      "fraction": 2,
+      "name": "Nepalese Rupee",
+      "nameZh": "尼泊尔卢比",
+      "nameZhHant": "尼泊爾盧比"
+    },
+    "NZD": {
+      "fraction": 2,
+      "name": "New Zealand Dollar",
+      "nameZh": "新西兰元",
+      "nameZhHant": "紐西蘭元"
+    },
+    "OMR": {
+      "fraction": 3,
+      "name": "Rial Omani",
+      "nameZh": "阿曼里亚尔",
+      "nameZhHant": "阿曼里亞爾"
+    },
+    "PAB": {
+      "fraction": 2,
+      "name": "Balboa",
+      "nameZh": "巴拿马巴波亚",
+      "nameZhHant": "巴拿馬巴波亞"
+    },
+    "PEN": {
+      "fraction": 2,
+      "name": "Sol",
+      "nameZh": "秘鲁新索尔",
+      "nameZhHant": "秘魯索爾"
+    },
+    "PGK": {
+      "fraction": 2,
+      "name": "Kina",
+      "nameZh": "巴布亚新几内亚基那",
+      "nameZhHant": "巴布亞紐幾內亞基那"
+    },
+    "PHP": {
+      "fraction": 2,
+      "name": "Philippine Peso",
+      "nameZh": "菲律宾比索",
+      "nameZhHant": "菲律賓披索"
+    },
+    "PKR": {
+      "fraction": 2,
+      "name": "Pakistan Rupee",
+      "nameZh": "巴基斯坦卢比",
+      "nameZhHant": "巴基斯坦盧比"
+    },
+    "PLN": {
+      "fraction": 2,
+      "name": "Zloty",
+      "nameZh": "波兰兹罗提",
+      "nameZhHant": "波蘭茲羅提"
+    },
+    "PYG": {
+      "fraction": 0,
+      "name": "Guarani",
+      "nameZh": "巴拉圭瓜拉尼",
+      "nameZhHant": "巴拉圭瓜拉尼"
+    },
+    "QAR": {
+      "fraction": 2,
+      "name": "Qatari Rial",
+      "nameZh": "卡塔尔里亚尔",
+      "nameZhHant": "卡達里亞爾"
+    },
+    "RON": {
+      "fraction": 2,
+      "name": "Romanian Leu",
+      "nameZh": "罗马尼亚列伊",
+      "nameZhHant": "羅馬尼亞列伊"
+    },
+    "RSD": {
+      "fraction": 2,
+      "name": "Serbian Dinar",
+      "nameZh": "塞尔维亚第纳尔",
+      "nameZhHant": "塞爾維亞第納爾"
+    },
+    "RUB": {
+      "fraction": 2,
+      "name": "Russian Ruble",
+      "nameZh": "俄罗斯卢布",
+      "nameZhHant": "俄羅斯盧布"
+    },
+    "RWF": {
+      "fraction": 0,
+      "name": "Rwanda Franc",
+      "nameZh": "卢旺达法郎",
+      "nameZhHant": "盧安達法郎"
+    },
+    "SAR": {
+      "fraction": 2,
+      "name": "Saudi Riyal",
+      "nameZh": "沙特里亚尔",
+      "nameZhHant": "沙烏地里亞爾"
+    },
+    "SBD": {
+      "fraction": 2,
+      "name": "Solomon Islands Dollar",
+      "nameZh": "所罗门群岛元",
+      "nameZhHant": "索羅門群島元"
+    },
+    "SCR": {
+      "fraction": 2,
+      "name": "Seychelles Rupee",
+      "nameZh": "塞舌尔卢比",
+      "nameZhHant": "塞席爾盧比"
+    },
+    "SDG": {
+      "fraction": 2,
+      "name": "Sudanese Pound",
+      "nameZh": "苏丹镑",
+      "nameZhHant": "蘇丹鎊"
+    },
+    "SEK": {
+      "fraction": 2,
+      "name": "Swedish Krona",
+      "nameZh": "瑞典克朗",
+      "nameZhHant": "瑞典克朗"
+    },
+    "SGD": {
+      "fraction": 2,
+      "name": "Singapore Dollar",
+      "nameZh": "新加坡元",
+      "nameZhHant": "新加坡元"
+    },
+    "SHP": {
+      "fraction": 2,
+      "name": "Saint Helena Pound",
+      "nameZh": "圣赫勒拿镑",
+      "nameZhHant": "聖赫勒拿鎊"
+    },
+    "SLE": {
+      "fraction": 2,
+      "name": "Leone",
+      "nameZh": "塞拉利昂利昂",
+      "nameZhHant": "獅子山利昂"
+    },
+    "SOS": {
+      "fraction": 2,
+      "name": "Somali Shilling",
+      "nameZh": "索马里先令",
+      "nameZhHant": "索馬利亞先令"
+    },
+    "SRD": {
+      "fraction": 2,
+      "name": "Surinam Dollar",
+      "nameZh": "苏里南元",
+      "nameZhHant": "蘇利南元"
+    },
+    "SSP": {
+      "fraction": 2,
+      "name": "South Sudanese Pound",
+      "nameZh": "南苏丹镑",
+      "nameZhHant": "南蘇丹鎊"
+    },
+    "STN": {
+      "fraction": 2,
+      "name": "Dobra",
+      "nameZh": "圣多美和普林西比多布拉",
+      "nameZhHant": "聖多美及普林西比多布拉"
+    },
+    "SVC": {
+      "fraction": 2,
+      "name": "El Salvador Colon",
+      "nameZh": "萨尔瓦多科朗",
+      "nameZhHant": "薩爾瓦多科朗"
+    },
+    "SYP": {
+      "fraction": 2,
+      "name": "Syrian Pound",
+      "nameZh": "叙利亚镑",
+      "nameZhHant": "敘利亞鎊"
+    },
+    "SZL": {
+      "fraction": 2,
+      "name": "Lilangeni",
+      "nameZh": "斯威士兰里兰吉尼",
+      "nameZhHant": "史瓦濟蘭里朗吉尼"
+    },
+    "THB": {
+      "fraction": 2,
+      "name": "Baht",
+      "nameZh": "泰铢",
+      "nameZhHant": "泰銖"
+    },
+    "TJS": {
+      "fraction": 2,
+      "name": "Somoni",
+      "nameZh": "塔吉克斯坦索莫尼",
+      "nameZhHant": "塔吉克索莫尼"
+    },
+    "TMT": {
+      "fraction": 2,
+      "name": "Turkmenistan New Manat",
+      "nameZh": "土库曼斯坦马纳特",
+      "nameZhHant": "土庫曼馬納特"
+    },
+    "TND": {
+      "fraction": 3,
+      "name": "Tunisian Dinar",
+      "nameZh": "突尼斯第纳尔",
+      "nameZhHant": "突尼西亞第納爾"
+    },
+    "TOP": {
+      "fraction": 2,
+      "name": "Pa’anga",
+      "nameZh": "汤加潘加",
+      "nameZhHant": "東加潘加"
+    },
+    "TRY": {
+      "fraction": 2,
+      "name": "Turkish Lira",
+      "nameZh": "土耳其里拉",
+      "nameZhHant": "土耳其里拉"
+    },
+    "TTD": {
+      "fraction": 2,
+      "name": "Trinidad and Tobago Dollar",
+      "nameZh": "特立尼达和多巴哥元",
+      "nameZhHant": "千里達及托巴哥元"
+    },
+    "TWD": {
+      "fraction": 2,
+      "name": "New Taiwan Dollar",
+      "nameZh": "新台币",
+      "nameZhHant": "新臺幣"
+    },
+    "TZS": {
+      "fraction": 2,
+      "name": "Tanzanian Shilling",
+      "nameZh": "坦桑尼亚先令",
+      "nameZhHant": "坦尚尼亞先令"
+    },
+    "UAH": {
+      "fraction": 2,
+      "name": "Hryvnia",
+      "nameZh": "乌克兰格里夫尼亚",
+      "nameZhHant": "烏克蘭格里夫納"
+    },
+    "UGX": {
+      "fraction": 0,
+      "name": "Uganda Shilling",
+      "nameZh": "乌干达先令",
+      "nameZhHant": "烏干達先令"
+    },
+    "USD": {
+      "fraction": 2,
+      "name": "US Dollar",
+      "nameZh": "美元",
+      "nameZhHant": "美元"
+    },
+    "UYU": {
+      "fraction": 2,
+      "name": "Peso Uruguayo",
+      "nameZh": "乌拉圭比索",
+      "nameZhHant": "烏拉圭披索"
+    },
+    "UZS": {
+      "fraction": 2,
+      "name": "Uzbekistan Sum",
+      "nameZh": "乌兹别克斯坦苏姆",
+      "nameZhHant": "烏茲別克蘇姆"
+    },
+    "VED": {
+      "fraction": 2,
+      "name": "Bolívar Soberano",
+      "nameZh": "委内瑞拉数字玻利瓦尔",
+      "nameZhHant": "委內瑞拉數位玻利瓦"
+    },
+    "VES": {
+      "fraction": 2,
+      "name": "Bolívar Soberano",
+      "nameZh": "委内瑞拉玻利瓦尔",
+      "nameZhHant": "委內瑞拉玻利瓦"
+    },
+    "VND": {
+      "fraction": 0,
+      "name": "Dong",
+      "nameZh": "越南盾",
+      "nameZhHant": "越南盾"
+    },
+    "VUV": {
+      "fraction": 0,
+      "name": "Vatu",
+      "nameZh": "瓦努阿图瓦图",
+      "nameZhHant": "萬那杜瓦圖"
+    },
+    "WST": {
+      "fraction": 2,
+      "name": "Tala",
+      "nameZh": "萨摩亚塔拉",
+      "nameZhHant": "薩摩亞塔拉"
+    },
+    "XAF": {
+      "fraction": 0,
+      "name": "CFA Franc BEAC",
+      "nameZh": "中非法郎",
+      "nameZhHant": "中非法郎"
+    },
+    "XCD": {
+      "fraction": 2,
+      "name": "East Caribbean Dollar",
+      "nameZh": "东加勒比元",
+      "nameZhHant": "東加勒比元"
+    },
+    "XOF": {
+      "fraction": 0,
+      "name": "CFA Franc BCEAO",
+      "nameZh": "西非法郎",
+      "nameZhHant": "西非法郎"
+    },
+    "XPF": {
+      "fraction": 0,
+      "name": "CFP Franc",
+      "nameZh": "太平洋法郎",
+      "nameZhHant": "太平洋法郎"
+    },
+    "XSU": {
+      "fraction": null,
+      "name": "Sucre",
+      "nameZh": "厄瓜多尔苏克雷",
+      "nameZhHant": "厄瓜多蘇克雷"
+    },
+    "YER": {
+      "fraction": 2,
+      "name": "Yemeni Rial",
+      "nameZh": "也门里亚尔",
+      "nameZhHant": "葉門里亞爾"
+    },
+    "ZAR": {
+      "fraction": 2,
+      "name": "Rand",
+      "nameZh": "南非兰特",
+      "nameZhHant": "南非蘭特"
+    },
+    "ZMW": {
+      "fraction": 2,
+      "name": "Zambian Kwacha",
+      "nameZh": "赞比亚克瓦查",
+      "nameZhHant": "尚比亞克瓦查"
+    },
+    "ZWG": {
+      "fraction": 2,
+      "name": "Zimbabwe Gold",
+      "nameZh": "津巴布韦金",
+      "nameZhHant": "辛巴威金"
+    },
+    "ZWL": {
+      "fraction": 2,
+      "name": "Zimbabwe Dollar",
+      "nameZh": "津巴布韦元",
+      "nameZhHant": "辛巴威元"
+    }
+  }
+}

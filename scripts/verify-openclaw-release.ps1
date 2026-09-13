@@ -358,6 +358,13 @@ if ($bookkeepingEntryText.Contains('./deployment-profile.mjs') -and
     -not $actualByPath.ContainsKey('openclaw-plugins/clawbot-bookkeeping/deployment-profile.mjs')) {
     throw 'Release deployment profile integration requires its policy module.'
 }
+if ($bookkeepingEntryText.Contains('./bookkeeping-queries.mjs')) {
+    foreach ($moduleName in @('bookkeeping-queries.mjs', 'currency.mjs', 'currency-catalog.json', 'bank-of-china-rates.mjs', 'daily-exchange-rates.mjs', 'expense-accounts.mjs')) {
+        if (-not $actualByPath.ContainsKey('openclaw-plugins/clawbot-bookkeeping/' + $moduleName)) {
+            throw 'Release multicurrency integration requires all currency and rate modules.'
+        }
+    }
+}
 if ($bookkeepingManifestText.Contains('isolated-test')) {
     throw 'A test deployment manifest cannot enter a production release.'
 }

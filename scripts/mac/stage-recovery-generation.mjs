@@ -100,7 +100,7 @@ export async function stageRecoveryGeneration({ spec, candidate, review, image, 
     '/opt/clawbot/docker/verify-generation-receipts.mjs', JSON.stringify(receipt)]), 'CLAWBOT_RECOVERY_GENERATION_COMPLETE');
   await unused(); assert.deepEqual(await audit(candidate.project), candidate.audit);
   return { status: releaseUpdateFrom ? 'CLAWBOT_RELEASE_UPDATE_GENERATION_STAGED' : 'CLAWBOT_RECOVERY_GENERATION_STAGED', volumePrefix: prefix, ...receipt,
-    ...(releaseUpdateFrom ? { previousSourceCommit: releaseUpdateFrom.sourceCommit, previousRuntimeImage: candidate.runtimeImage, runtimeImage: image, guardImage: spec.services.guard.image, filesPreservedExceptSourceBindings: true } : {}),
+    ...(releaseUpdateFrom ? { previousSourceCommit: releaseUpdateFrom.sourceCommit, previousRuntimeImage: candidate.runtimeImage, runtimeImage: image, guardImage: spec.services.guard.image, filesPreservedExceptReviewedConfig: true } : {}),
     sourceCandidate: candidate.project, sourceAudit: candidate.audit, stagedAudit: await audit(prefix), productionActivated: false };
   // Failure deliberately leaves only this new, unactivated generation for
   // inspection. No old volume is deleted and no completion is reported.

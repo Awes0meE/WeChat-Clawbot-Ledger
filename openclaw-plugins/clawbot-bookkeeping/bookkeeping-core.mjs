@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { currencyBesideAmount, normalizeCurrency, startsWithCurrency, hasNegativeAmountPrefix } from './currency.mjs';
 
 const MAX_EZBOOKKEEPING_AMOUNT_MINOR = 9_999_999_999_999;
 const MAX_COMMENT_CHARACTERS = 255;
@@ -16,13 +17,40 @@ const SINGAPORE_UTC_OFFSET_SECONDS = 8 * 60 * 60;
 const FUTURE_CLOCK_TOLERANCE_SECONDS = 5 * 60;
 const LOCAL_DATE = /^(\d{4})-(\d{2})-(\d{2})$/u;
 const LOCAL_TIME = /^(\d{2}):(\d{2})$/u;
-const EXPLICIT_TIME_CUE = /(?:今天|今日|昨天|昨日|前天|大前天|明天|后天|今晚|昨晚|今早|昨早|凌晨|早上|上午|中午|下午|晚上|周[一二三四五六日天]|星期[一二三四五六日天]|\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*[日号]|\d{1,2}\s*月\s*\d{1,2}\s*[日号]|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|(?:[01]?\d|2[0-3]):[0-5]\d|[零〇一二两三四五六七八九十百\d]{1,3}\s*(?:点|时)(?:\s*[零〇一二两三四五六七八九十百\d]{1,3}\s*分)?)/u;
+const EXPLICIT_TIME_CUE = /(?:今天|今日|昨天|昨日|前天|大前天|明天|后天|今晚|昨晚|今早|昨早|凌晨|早上|上午|中午|下午|晚上|周[一二三四五六日天]|星期[一二三四五六日天]|\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*[日号]|\d{1,2}\s*月\s*\d{1,2}\s*[日号]|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|(?:[01]?\d|2[0-3]):[0-5]\d|[零〇一二两三四五六七八九十百\d]{1,3}\s*(?:点|點|时|時)(?:\s*[零〇一二两三四五六七八九十百\d]{1,3}\s*分)?)/u;
 const EXPENSE_TIME_EXPRESSIONS = new RegExp(EXPLICIT_TIME_CUE.source, 'gu');
-const VAGUE_DAY_PART = /^(?:凌晨|早上|上午|中午|下午|晚上)$/u;
+const RECEIVED_TIME_CUE = /^(?:今天|今日|凌晨|早上|上午|中午|下午|晚上)$/u;
 // A canteen number identifies the venue. Preserve decimal amounts and arithmetic
 // after the name, and never discard arbitrary digits merely because a model put
 // them in a comment.
 const NUMBERED_CANTEEN = /(?<![A-Za-z0-9])canteen[ \t]*(?:#[ \t]*)?\d+(?![\d.A-Za-z]|[ \t]*(?:[+＋加块元毛分$＄¥￥]|新币|新元|人民币|美元|SGD\b|USD\b|CNY\b|RMB\b))/giu;
+// F1 is a racing/product name, not one dollar. Do not strip arbitrary merchant
+// suffixes: NTUC8.25 and Canteen7.2 still contain payment evidence.
+const FORMULA_ONE = /(?<![A-Za-z0-9])F1(?![\d.]|[ \t]*(?:[+＋加块元毛分$＄¥￥]|新币|新元|SGD\b|USD\b|CNY\b|RMB\b))/giu;
+
+// Voice input uses 点 for both a decimal separator and a clock. Classify the
+// complete token once for both validators: never accept only its trailing digit.
+const SPOKEN_POINT = /(?<![\d.零〇一二两三四五六七八九十百千万点點])(?<whole>\d+|[零〇一二两三四五六七八九十]+)[点點](?<fraction>[\d零〇一二两三四五六七八九]+)(?![\d.零〇一二两三四五六七八九十百千万点點])/gu;
+const POINT_DIGITS = '零一二三四五六七八九';
+function expenseNumberText(text, maskClocks = false) {
+  return text.replace(SPOKEN_POINT, (token, whole, fraction, offset) => {
+    const prefix = text.slice(0, offset);
+    const suffix = text.slice(offset + token.length);
+    const moneyCue = /(?:花了?|花费|付了?|实付|支付|支出|金额|价格|共|合计)\s*$/u.test(prefix)
+      || startsWithCurrency(suffix.trimStart()) || /^[块元]/u.test(suffix);
+    const clockUnit = /^\s*(?:分|秒|钟|鐘|整)/u.test(suffix);
+    const clockCue = /^\s*(?:左右|的时候|時候)/u.test(suffix)
+      || /(?:凌晨|早上|上午|中午|下午|晚上|今晚|昨晚|今早|昨早|在|于|於|从|從|到)\s*$/u.test(prefix)
+      || /^\s*(?:吃|去|到|开始|出发|上班|下班|用餐|午饭|晚饭|早餐)/u.test(suffix);
+    if (clockUnit || (clockCue && !moneyCue)) return maskClocks ? '#'.repeat(token.length) : token;
+    const integer = /^\d+$/u.test(whole) ? Number(whole)
+      : /^[零〇]$/u.test(whole) ? 0 : chineseWholeNumberToInteger(whole);
+    if (!Number.isSafeInteger(integer)) return token;
+    const digits = [...fraction].map(c => c === '〇' ? '0' : c === '两' ? '2'
+      : POINT_DIGITS.includes(c) ? String(POINT_DIGITS.indexOf(c)) : c).join('');
+    return `${integer}.${digits}`;
+  });
+}
 
 export class ExpenseRecordingError extends Error {
   constructor(outcome, { dedupeStatus, rejectionReason } = {}) {
@@ -35,7 +63,7 @@ export class ExpenseRecordingError extends Error {
     this.name = 'ExpenseRecordingError';
     this.outcome = outcome;
     if (dedupeStatus) this.dedupeStatus = dedupeStatus;
-    if (rejectionReason === 'time' || rejectionReason === 'amount') this.rejectionReason = rejectionReason;
+    if (['time', 'amount', 'currency'].includes(rejectionReason)) this.rejectionReason = rejectionReason;
   }
 }
 
@@ -100,22 +128,30 @@ function amountPartToMinorUnits(part) {
 }
 
 function eligibleAmountCandidates(clause, clauseIndex) {
+  clause = expenseNumberText(clause, true);
   if (ADMIN_AMOUNT_CLAUSE.test(clause)) return [];
   // Keep original offsets and prevent amount expressions from crossing a time span.
   const amountText = clause
     .replace(EXPENSE_TIME_EXPRESSIONS, (match) => '#'.repeat(match.length))
-    .replace(NUMBERED_CANTEEN, (match) => '#'.repeat(match.length));
+    .replace(NUMBERED_CANTEEN, (match) => '#'.repeat(match.length))
+    .replace(FORMULA_ONE, (match) => '#'.repeat(match.length));
   const candidates = [];
   for (const match of amountText.matchAll(AMOUNT_EXPRESSION)) {
     const matchIndex = match.index ?? 0;
+    // Reject the whole clause: taking absolute values or keeping only the first
+    // term of subtraction would silently change the user's amount. Dates are masked.
+    if (hasNegativeAmountPrefix(amountText.slice(0, matchIndex))) return [];
     const prefix = clause.slice(0, matchIndex);
     const suffix = clause.slice(matchIndex + match[0].length).trimStart();
     const amountMinor = expressionAmountToMinorUnits(match[0]);
     if (amountMinor === undefined
-      || QUANTITY_OR_TIME_UNIT.test(suffix)
+      || /[\d.]$/u.test(prefix)
+      || /^[\d.]/u.test(clause.slice(matchIndex + match[0].length))
+      || (QUANTITY_OR_TIME_UNIT.test(suffix) && !startsWithCurrency(suffix))
       || ADMIN_AMOUNT_CUE.test(prefix)) continue;
     candidates.push({
       amountMinor,
+      currency: (() => { try { return currencyBesideAmount(prefix, suffix); } catch { return undefined; } })(),
       clause,
       clauseIndex,
       matchIndex,
@@ -125,16 +161,20 @@ function eligibleAmountCandidates(clause, clauseIndex) {
   return candidates;
 }
 
-export function messageSupportsExpenseAmount(content, requestedAmountMinor) {
+function expenseAmountCandidates(content) {
   const originalText = String(content ?? '');
   const commentIndex = originalText.indexOf('备注');
   const text = (commentIndex < 0 ? originalText : originalText.slice(0, commentIndex)).trim();
-  if (!text || INSTRUCTION_INJECTION.test(text)) return false;
+  if (!text || INSTRUCTION_INJECTION.test(text)) return [];
 
   const clauses = text.split(/[，,。；;！!\r\n]+/u).filter(Boolean);
-  const candidates = clauses.flatMap((clause, clauseIndex) => eligibleAmountCandidates(clause, clauseIndex));
+  return clauses.flatMap((clause, clauseIndex) => eligibleAmountCandidates(clause, clauseIndex));
+}
+
+export function messageSupportsExpenseAmount(content, requestedAmountMinor, currency = 'SGD') {
+  const candidates = expenseAmountCandidates(content);
   if (candidates.length !== 1) return false;
-  return candidates[0].amountMinor === requestedAmountMinor;
+  return candidates[0].amountMinor === requestedAmountMinor && candidates[0].currency === currency;
 }
 
 export function requiresExpenseConfirmation(content) {
@@ -190,6 +230,7 @@ export function resolveExpenseComment(content, semanticComment = '') {
 export function formatExpenseReceipt({
   ledgerDisplayName,
   amountMinor,
+  currency = 'SGD',
   primaryCategory,
   subcategory,
   comment,
@@ -208,7 +249,7 @@ export function formatExpenseReceipt({
   return [
     '记下来啦！🧾',
     `- 账本：[ ${ledgerDisplayName} ]`,
-    `- 支出：${(Number(amountMinor) / 100).toFixed(2)} SGD`,
+    `- 支出：${(Number(amountMinor) / 100).toFixed(2)} ${normalizeCurrency(currency)}`,
     `- 分类：${primaryCategory} - ${subcategory}`,
     `- 备注：${displayComment || '无'}`,
     `- 时间：${formattedTime}`,
@@ -218,6 +259,7 @@ export function formatExpenseReceipt({
 export function formatExpenseConfirmation({
   ledgerDisplayName,
   amountMinor,
+  currency = 'SGD',
   primaryCategory,
   subcategory,
   comment,
@@ -226,6 +268,7 @@ export function formatExpenseConfirmation({
   const receiptLines = formatExpenseReceipt({
     ledgerDisplayName,
     amountMinor,
+    currency,
     primaryCategory,
     subcategory,
     comment,
@@ -278,17 +321,17 @@ function singaporeTimestamp({ year, month, day, hour, minute }) {
 }
 
 export function hasExplicitExpenseTimeCue(content) {
-  return EXPLICIT_TIME_CUE.test(contentBeforeExplicitComment(content));
+  return EXPLICIT_TIME_CUE.test(expenseNumberText(contentBeforeExplicitComment(content)));
 }
 
 export function resolveExpenseTimestamp({ input, inbound }) {
-  if (input.currency !== 'SGD') throw new Error('expense currency must be SGD');
+  if (normalizeCurrency(input.currency) !== input.currency) throw new Error('expense currency must be canonical');
   const receivedTime = normalizeMessageTimestamp(inbound.timestamp);
   if (input.timeMode === 'received') {
-    // A bare day part supplies no date or exact clock. Keep the trusted send time
-    // instead of inventing noon/midnight; actual dates and clocks still need evidence.
-    const timeCues = contentBeforeExplicitComment(inbound.content).matchAll(EXPENSE_TIME_EXPRESSIONS);
-    if (Array.from(timeCues).some((match) => !VAGUE_DAY_PART.test(match[0]))) {
+    // Today resolves to the trusted message date, including delayed confirmations.
+    // Bare day parts add no exact clock; other dates and clocks still need evidence.
+    const timeCues = expenseNumberText(contentBeforeExplicitComment(inbound.content)).matchAll(EXPENSE_TIME_EXPRESSIONS);
+    if (Array.from(timeCues).some((match) => !RECEIVED_TIME_CUE.test(match[0]))) {
       throw new Error('expense occurrence time requires semantic resolution');
     }
     return receivedTime;
@@ -361,7 +404,14 @@ function validateExpenseInput(input, inbound, resolvedTime) {
   const receiptKey = messageReceiptKey(inbound);
   const sourceAmount = parseAmountToMinorUnits(input.amount);
   const comment = resolveExpenseComment(inbound.content, input.comment);
-  if (input.currency !== 'SGD') throw new ExpenseRecordingError('rejected');
+  try {
+    if (normalizeCurrency(input.currency) !== input.currency) throw new Error('noncanonical currency');
+    const candidates = expenseAmountCandidates(inbound.content);
+    if (candidates.some((candidate) => candidate.amountMinor === sourceAmount)
+      && !candidates.some((candidate) => candidate.amountMinor === sourceAmount && candidate.currency === input.currency)) {
+      throw new Error('currency disagrees with source message');
+    }
+  } catch { throw new ExpenseRecordingError('rejected', { rejectionReason: 'currency' }); }
   let time;
   try {
     time = resolveExpenseTimestamp({ input, inbound });
@@ -377,7 +427,9 @@ function validateExpenseInput(input, inbound, resolvedTime) {
 
 export function prepareExpenseConfirmation({ input, inbound }) {
   const candidate = validateExpenseInput(input, inbound);
-  if (!messageSupportsExpenseAmount(inbound.content, candidate.sourceAmount)) {
+  // A proposal may select one grounded candidate; only user confirmation can
+  // authorize its write. Direct recording still requires a unique amount.
+  if (!expenseAmountCandidates(inbound.content).some(({ amountMinor, currency }) => amountMinor === candidate.sourceAmount && currency === input.currency)) {
     throw new ExpenseRecordingError('rejected', { rejectionReason: 'amount' });
   }
   return {
@@ -414,7 +466,7 @@ async function writeExpense({
   let sourceAccountId;
   let categoryId;
   try {
-    sourceAccountId = await api.resolveAccountId(accountName);
+    sourceAccountId = await api.resolveAccountId(accountName, input.currency);
     categoryId = await api.resolveExpenseCategoryId(input.primaryCategory, input.subcategory);
   } catch {
     const dedupeStatus = persistOutcome(store, 'fail', receiptKey, {
@@ -478,6 +530,7 @@ async function writeExpense({
     transactionId,
     clientSessionId,
     amountMinor: sourceAmount,
+    ...(input.currency === 'SGD' ? {} : { currency: input.currency }),
     primaryCategory: input.primaryCategory,
     subcategory: input.subcategory,
     time,
@@ -493,7 +546,7 @@ async function writeExpense({
 
 export async function recordExpense(options) {
   const sourceAmount = parseAmountToMinorUnits(options.input.amount);
-  if (!messageSupportsExpenseAmount(options.inbound.content, sourceAmount)) {
+  if (!messageSupportsExpenseAmount(options.inbound.content, sourceAmount, options.input.currency)) {
     throw new ExpenseRecordingError('rejected', { rejectionReason: 'amount' });
   }
   if (requiresExpenseConfirmation(options.inbound.content)) {

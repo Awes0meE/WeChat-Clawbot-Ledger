@@ -1,6 +1,6 @@
 # Ledger Cloudflare Tunnel 运维手册
 
-本文的计划任务、目录、PowerShell 安装与重启步骤适用于 Windows 原生部署。2026-09-09 参考部署已迁至 Mac；当前状态见 [正式切换记录](handoffs/2026-09-09-production-cutover.md)，Mac 启停、备份和凭据恢复使用 [Mac 清单](mac-before-windows-checklist.md) 中的入口。下述公网域名、回环端口和 Cloudflare 边界由两条路线共同遵守。
+本文的计划任务、目录、PowerShell 安装与重启步骤适用于 Windows 原生部署。2026-09-09 参考部署已迁至 Mac；当前状态见 [授权修复记录](handoffs/2026-09-13-oauth-expiry-repair.md)，Mac 启停、备份和凭据恢复使用 [Mac 清单](mac-before-windows-checklist.md) 中的入口。下述公网域名、回环端口和 Cloudflare 边界由两条路线共同遵守。
 
 Windows 无窗口启动的当前设置与迁移方法见 [后台启动维护说明](windows-background-startup.md)。新建账本和 Tunnel 任务使用同一账户的 `S4U` 后台会话；已有任务须精确核验后迁移，不通过关闭控制台来停止服务。
 
@@ -318,6 +318,31 @@ http.request.uri.path eq "/api/authorize.json"
 ```
 
 上线前用 `-ValidateFreePlanRateLimitGate -FreeRateLimitEvidencePath <SANITIZED_JSON>` 运行公网脚本；摘要超过 15 分钟即失效。Free 规则的 API payload 固定为 `characteristics: ["cf.colo.id", "ip.src"]`、`period: 10`、`requests_per_period: 5`、`mitigation_timeout: 10`与 block action；不得增加 `counting_expression`、`requests_to_origin` 或自定义 response。任何探针、套餐能力或槽位为未知/false 时必须跳过并记录，不能冒险改变作品集行为。
+
+### 公网流量限速（DDoS 基线防护）
+
+在付费档位的 `http_ratelimit` phase 中新增一条 host 级流量限制，作为全量请求的第一道抗打击边界：
+
+```text
+http.host eq "ledger.66ccff-labs.com"
+```
+
+建议参数：
+
+- `requests_per_period`: `60`
+- `period`: `60`
+- `mitigation_timeout`: `30`
+- `characteristics`: `["cf.colo.id", "ip.src"]`
+
+该规则不是为了拦截合法登录，而是抑制高频并发探测/爬虫/短时洪泛。它与登录限速叠加生效，且优先保持对登录/注册语义规则的独立阈值不变。
+
+同一规则与登录规则建议在 Cloudflare API Readback 后分批核对：
+
+- action = `block`
+- expression 完整一致
+- 规则处于 `http_ratelimit` phase
+- `enabled: true`
+- 规则顺序在可维护窗口内固定
 
 ## 9. DNS cutover last
 

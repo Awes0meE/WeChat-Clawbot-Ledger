@@ -34,6 +34,7 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
   let resolveExpenseConfirmationFactory;
   let recordExpenseDefinition;
   let prepareExpenseDefinition;
+  let summarizeExpensesFactory;
   const logs = [];
   const pluginApi = {
     pluginConfig: {
@@ -48,6 +49,7 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
       hookOptions.set(name, options);
     },
     registerTool(definition, options) {
+      if (typeof definition === 'function' && options?.name === 'summarize_expenses') summarizeExpensesFactory = definition;
       if (typeof definition === 'function' && options?.name === 'record_expense') {
         recordExpenseFactory = definition;
         recordExpenseDefinition = definition;
@@ -99,6 +101,7 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
   return {
     inboundHooks,
     hookOptions,
+    summarizeExpensesFactory: (context) => materializeExpenseTool(summarizeExpensesFactory, 'summarize_expenses', context),
     recordExpenseFactory: (context) => materializeExpenseTool(recordExpenseFactory, 'record_expense', context),
     prepareExpenseFactory: (context) => materializeExpenseTool(prepareExpenseFactory, 'prepare_expense', context),
     resolveExpenseConfirmationFactory: (context) => materializeExpenseTool(
@@ -267,6 +270,8 @@ function successfulExpenseFetch(requests) {
           { id: 'secondary-1', name: '早午晚餐', parentId: 'primary-1' },
         ] }, { id: 'primary-learning', name: '学习进修', parentId: '0', subCategories: [
           { id: 'secondary-equipment', name: '数码装备', parentId: 'primary-learning' },
+        ] }, { id: 'primary-clothing', name: '衣服饰品', parentId: '0', subCategories: [
+          { id: 'secondary-clothes', name: '衣服裤子', parentId: 'primary-clothing' },
         ] }],
       } }), { status: 200 });
     }
@@ -540,7 +545,7 @@ test('declares the fixed ledger display name in the plugin manifest', () => {
   });
 });
 
-test('requires an explicit SGD currency and time decision in both expense tools', () => {
+test('requires a supported currency and time decision in both expense tools', () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   const harness = createPluginHarness(tempDirectory, async () => {
     throw new Error('HTTP must not run while inspecting tool schemas');
@@ -555,7 +560,7 @@ test('requires an explicit SGD currency and time decision in both expense tools'
         ['received', 'explicit'],
       );
       assert.equal(
-        schema.anyOf.every((branch) => branch.properties.currency.const === 'SGD'),
+        schema.anyOf.every((branch) => branch.properties.currency.anyOf.length === 159 && branch.properties.currency.anyOf.some((item) => item.const === 'SGD')),
         true,
       );
       assert.equal(schema.anyOf.every((branch) => branch.required.includes('currency')), true);
@@ -3861,6 +3866,108 @@ test('records a numbered canteen expense once and sends the complete authoritati
   }
 });
 
+for (const entry of ['record', 'prepare']) for (const ending of ['confirm', 'cancel', 'new-message', 'expired']) {
+  test(`${entry} ambiguous expense stays unwritten until confirmation and handles ${ending}`, async () => {
+    const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-ambiguous-'));
+    writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+    const requests = [];
+    let harness = createPluginHarness(tempDirectory, successfulExpenseFetch(requests));
+    const originalNow = Date.now;
+    let now = originalNow();
+    Date.now = () => now;
+    const timestamp = Math.floor(now / 1000);
+    try {
+      const runId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
+        content: '衣服289还是288 赛车联名款1件polo衫一件白衬衫',
+        messageId: 'ambiguous-clothing-source', timestamp,
+      });
+      const params = receivedExpenseParams({ amount: '288', primaryCategory: '衣服饰品',
+        subcategory: '衣服裤子', comment: '赛车联名款1件polo衫一件白衬衫' });
+      const factory = entry === 'record' ? harness.recordExpenseFactory : harness.prepareExpenseFactory;
+      const prepared = await factory(trustedOwnerContext()).execute('ambiguous-clothing-call', params);
+      assert.equal(prepared.details.status, 'pending_confirmation');
+      assert.match(prepared.content[0].text, /- 账本：\[ 日常账本 \]/u);
+      assert.match(prepared.content[0].text, /- 支出：288\.00 SGD/u);
+      assert.match(prepared.content[0].text, /- 分类：衣服饰品 - 衣服裤子/u);
+      assert.match(prepared.content[0].text, /- 备注：赛车联名款1件polo衫一件白衬衫/u);
+      assert.equal(prepared.content[0].text.split('\n').length, 7);
+      const outgoing = harness.inboundHooks.get('reply_payload_sending')({
+        kind: 'final', payload: { text: '模型误称已记账' }, runId,
+      }, { runId });
+      assert.equal(outgoing.payload.text, prepared.content[0].text);
+      assert.equal(requests.length, 0);
+
+      // Persisted proposal survives a new plugin instance; the model cannot
+      // reconstruct or change its amount on the confirmation turn.
+      harness.restore();
+      harness = createPluginHarness(tempDirectory, successfulExpenseFetch(requests));
+      if (ending === 'new-message') {
+        await receiveTrustedOwnerMessage(harness.inboundHooks, {
+          content: '今天花了多少钱', messageId: 'unrelated-query', timestamp,
+        });
+      }
+      if (ending === 'expired') now += 11 * 60 * 1000;
+      await receiveTrustedOwnerMessage(harness.inboundHooks, {
+        content: ending === 'cancel' ? '不是' : '是', messageId: 'ambiguous-clothing-answer',
+        timestamp: Math.floor(now / 1000),
+      });
+      const resolved = await harness.resolveExpenseConfirmationFactory(trustedOwnerContext()).execute(
+        'ambiguous-clothing-resolve', { decision: ending === 'cancel' ? 'cancel' : 'confirm' },
+      );
+      assert.equal(resolved.details.status, {
+        confirm: 'created', cancel: 'cancelled', 'new-message': 'missing', expired: 'expired',
+      }[ending]);
+      const posts = requests.filter(({ url }) => url.endsWith('/transactions/add.json'));
+      assert.equal(posts.length, ending === 'confirm' ? 1 : 0);
+      if (ending === 'confirm') {
+        const body = JSON.parse(posts[0].options.body);
+        assert.equal(body.sourceAmount, 28800);
+        assert.equal(body.categoryId, 'secondary-clothes');
+        assert.equal(body.comment, params.comment);
+        assert.equal(body.time, timestamp);
+        await receiveTrustedOwnerMessage(harness.inboundHooks, {
+          content: '是', messageId: 'ambiguous-clothing-answer-again', timestamp,
+        });
+        await harness.resolveExpenseConfirmationFactory(trustedOwnerContext()).execute(
+          'ambiguous-clothing-repeat', { decision: 'confirm' },
+        );
+        assert.equal(requests.filter(({ url }) => url.endsWith('/transactions/add.json')).length, 1);
+      } else assert.equal(requests.length, 0);
+    } finally {
+      Date.now = originalNow;
+      harness.restore();
+      rmSync(tempDirectory, { recursive: true, force: true });
+    }
+  });
+}
+
+test('recognizes a clothing payment beside F1 and offers its complete confirmation when requested', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-clothing-'));
+  writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const harness = createPluginHarness(tempDirectory, successfulExpenseFetch(requests));
+  try {
+    const content = '买衣服 288 赛车F1联名款1件polo衫一件白衬衫';
+    const params = receivedExpenseParams({ amount: '288', primaryCategory: '衣服饰品',
+      subcategory: '衣服裤子', comment: '赛车F1联名款1件polo衫一件白衬衫' });
+    await receiveTrustedOwnerMessage(harness.inboundHooks, { content, messageId: 'f1-direct' });
+    const direct = await harness.recordExpenseFactory(trustedOwnerContext()).execute('f1-direct-call', params);
+    assert.equal(direct.details.status, 'created');
+    assert.equal(requests.filter(({ url }) => url.endsWith('/transactions/add.json')).length, 1);
+    requests.length = 0;
+    await receiveTrustedOwnerMessage(harness.inboundHooks, { content, messageId: 'f1-proposal' });
+    const proposed = await harness.prepareExpenseFactory(trustedOwnerContext()).execute('f1-prepare-call', params);
+    assert.equal(proposed.details.status, 'pending_confirmation');
+    assert.match(proposed.content[0].text, /- 支出：288\.00 SGD/u);
+    assert.match(proposed.content[0].text, /- 分类：衣服饰品 - 衣服裤子/u);
+    assert.match(proposed.content[0].text, /- 备注：赛车F1联名款1件polo衫一件白衬衫/u);
+    assert.equal(requests.length, 0);
+  } finally {
+    harness.restore();
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
 test('returns a terminal no-write result when current-message authorization rejects a query', async () => {
   const tempDirectory = mkdtempSync(join(tmpdir(), 'clawbot-bookkeeping-'));
   writeFileSync(join(tempDirectory, 'token.txt'), 'test-token', 'utf8');
@@ -4120,4 +4227,59 @@ test('does not translate validation or receipt-store claim errors into a no-writ
     harness.restore();
     rmSync(tempDirectory, { recursive: true, force: true });
   }
+});
+
+test('foreign currency proposal survives a plugin restart and confirmation writes only its original subaccount', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'clawbot-foreign-'));
+  writeFileSync(join(directory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const baseFetch = successfulExpenseFetch(requests);
+  const fetchImpl = async (url, options) => {
+    if (url.endsWith('/accounts/list.json')) return new Response(JSON.stringify({ success: true, result: [
+      { id: 'old', name: '日常支出', currency: 'SGD', type: 1 },
+      { id: 'parent', name: '多币种支出', currency: '---', type: 2, subAccounts: [
+        { id: 'cny', parentId: 'parent', type: 1, name: 'CNY', currency: 'CNY' },
+      ] },
+    ] }));
+    return baseFetch(url, options);
+  };
+  let h = createPluginHarness(directory, fetchImpl);
+  try {
+    await receiveTrustedOwnerMessage(h.inboundHooks, { content: '午饭35人民币吗', messageId: 'foreign-proposal' });
+    const proposal = await h.prepareExpenseFactory(trustedOwnerContext()).execute('foreign-prepare', receivedExpenseParams({ amount: '35', currency: 'CNY' }));
+    assert.equal(proposal.details.status, 'pending_confirmation');
+    assert.match(proposal.content[0].text, /35\.00 CNY/u);
+    assert.equal(requests.length, 0);
+    h.restore(); h = createPluginHarness(directory, fetchImpl);
+    await receiveTrustedOwnerMessage(h.inboundHooks, { content: '是', messageId: 'foreign-confirmation' });
+    const confirmed = await h.resolveExpenseConfirmationFactory(trustedOwnerContext()).execute('foreign-confirm', { decision: 'confirm' });
+    assert.equal(confirmed.details.status, 'created');
+    assert.match(confirmed.content[0].text, /35\.00 CNY/u);
+    const writes = requests.filter((r) => r.url.endsWith('/transactions/add.json'));
+    assert.equal(writes.length, 1);
+    assert.equal(JSON.parse(writes[0].options.body).sourceAccountId, 'cny');
+    assert.equal(JSON.parse(writes[0].options.body).sourceAmount, 3500);
+  } finally { h.restore(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('batch read authoritative reply preserves every answer after a restart and cannot serve a newer message', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'clawbot-batch-'));
+  let h = createPluginHarness(directory, async () => assert.fail('same-currency conversion needs no HTTP'));
+  try {
+    const runId = await receiveTrustedOwnerMessage(h.inboundHooks, { content: '35人民币是多少人民币，42新币是多少新币', messageId: 'batch-query' });
+    const result = await h.summarizeExpensesFactory(trustedOwnerContext()).execute('batch-call', { questions: [
+      { kind: 'exchange', amount: '35', fromCurrency: 'CNY', toCurrency: 'CNY' },
+      { kind: 'exchange', amount: '42', fromCurrency: 'SGD', toCurrency: 'SGD' },
+    ] });
+    assert.equal(result.details.answers.length, 2);
+    h.restore(); h = createPluginHarness(directory, async () => assert.fail('reply recovery needs no HTTP'));
+    const event = { to: 'owner-user', content: '只回答了第一问', metadata: { channel: 'openclaw-weixin', accountId: 'bot-account', runId } };
+    const context = { channelId: 'openclaw-weixin', accountId: 'bot-account' };
+    const outgoing = await h.inboundHooks.get('message_sending')(event, context);
+    assert.equal(outgoing.content, result.content[0].text);
+    assert.match(outgoing.content, /35\.00 CNY/u); assert.match(outgoing.content, /42\.00 SGD/u);
+    await receiveTrustedOwnerMessage(h.inboundHooks, { content: '今天花了多少钱', messageId: 'new-query-after-batch' });
+    const stale = await h.inboundHooks.get('message_sending')({ ...event, content: result.content[0].text }, context);
+    assert.equal(stale, undefined, 'old authoritative text must not be recovered for the newer source');
+  } finally { h.restore(); rmSync(directory, { recursive: true, force: true }); }
 });

@@ -169,6 +169,7 @@ test('rate-limit variants fail closed around Cloudflare plan capabilities', () =
   const manifest = JSON.parse(readRequired(configPath));
   const paid = manifest.rules.loginRateLimit.paidPlan;
   const free = manifest.rules.loginRateLimit.freePlanFallback;
+  const traffic = manifest.rules.publicTrafficRateLimit?.paidPlan;
 
   assert.match(paid.expression, new RegExp(`http\\.host eq "${ledgerHost.replaceAll('.', '\\.')}"`, 'u'));
   assert.match(paid.expression, /http\.request\.uri\.path eq "\/api\/authorize\.json"/u);
@@ -190,6 +191,13 @@ test('rate-limit variants fail closed around Cloudflare plan capabilities', () =
   assert.equal('countingExpression' in free, false);
   assert.equal('requestsToOrigin' in free, false);
   assert.equal('customResponse' in free, false);
+
+  assert.equal(traffic?.action, 'block');
+  assert.match(traffic.expression, new RegExp(`http\\.host eq "${ledgerHost.replaceAll('.', '\\.')}"`, 'u'));
+  assert.deepEqual(traffic.ratelimit.characteristics, ['cf.colo.id', 'ip.src']);
+  assert.equal(traffic.ratelimit.requests_per_period, 60);
+  assert.equal(traffic.ratelimit.period, 60);
+  assert.equal(traffic.ratelimit.mitigation_timeout, 30);
 });
 
 test('free-plan activation gate requires fresh sanitized API evidence and probes both methods without a boolean bypass', () => {
@@ -200,6 +208,7 @@ test('free-plan activation gate requires fresh sanitized API evidence and probes
   assert.doesNotMatch(wrapper, /RateLimitSlotAvailable/u);
   assert.match(helper, /--free-rate-limit-evidence/u);
   assert.doesNotMatch(helper, /--rate-limit-slot-available/u);
+  assert.match(helper, /--verify-public-traffic-rate-limit/u);
   assert.match(helper, /source\s*!==\s*'cloudflare-api-readback'/u);
   assert.match(helper, /rulesetPhase\s*!==\s*'http_ratelimit'/u);
   assert.match(helper, /existingRateLimitRuleCount\s*!==\s*0/u);
@@ -226,6 +235,7 @@ test('public acceptance is bounded, response-redacting, credential-redacting, an
   assert.match(source, /66ccff-labs\.com/u);
   assert.match(source, /www\.66ccff-labs\.com/u);
   assert.match(source, /TimeoutSec/u);
+  assert.match(wrapper, /VerifyPublicTrafficRateLimit/u);
   assert.match(helper, /transport\.request/u);
   assert.match(helper, /rejectUnauthorized:\s*true/u);
   assert.match(helper, /agent:\s*false/u);
@@ -236,6 +246,8 @@ test('public acceptance is bounded, response-redacting, credential-redacting, an
   assert.match(source, /api\/authorize\.json/u);
   assert.match(source, /api\/register\.json/u);
   assert.match(source, /\/mcp/u);
+  assert.match(helper, /assertPublicTrafficRateLimit/u);
+  assert.match(helper, /LEDGER_PUBLIC_PUBLIC_TRAFFIC_RATE_LIMIT_NOT_OBSERVED/u);
   assert.match(source, /X-Content-Type-Options/iu);
   assert.match(source, /X-Frame-Options/iu);
   assert.match(source, /Referrer-Policy/iu);

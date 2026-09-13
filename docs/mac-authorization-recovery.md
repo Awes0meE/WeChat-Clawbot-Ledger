@@ -125,3 +125,14 @@ node scripts/mac/inspect-production-status.mjs '<同一宿主>'
 `inspect-production-status.mjs '<生产宿主>'` 汇总四类诊断；[简洁生产状态页](mac-production-dashboard.md) 使用相同检查，详情默认折叠。执行前后绑定宿主进程、启用记录、运行批次、容器及启动时间，变化即丢弃旧结果；维护、故障或运行边界未知时不访问凭据。
 
 本地凭据存在、微信最近轮询和 Tunnel 最近注册各有范围，不代替新做的云端推理、真实消息或公网验收。当前验收与未执行过的生产恢复操作分别记录在[正式切换记录](handoffs/2026-09-09-production-cutover.md)，组件证据保留在[开发归档](handoffs/2026-09-08-mac-authorization-development.md)。
+
+
+## Runtime-only Codex seed expiry
+
+The 2026-09-13 incident reached WeChat dispatch while the public ledger returned HTTP 200. The selected `openai:default` profile was an external CLI runtime-only overlay, so its expired seed disappeared before the harness could refresh it. A separate reproduction showed that excluding the bundled `openai` plugin also prevents managed OAuth refresh.
+
+Mac deployments must enable the official `openai` provider plugin alongside `codex`; this does not add a model provider, fallback, or business tool. Release staging upgrades only the exact former three-plugin configuration and binds the new configuration hash into the guard policy. Explicit disabled or unknown plugin configurations require separate inspection. Fresh isolated installations include this grant.
+
+For an existing runtime-only seed, use an independent authorization stage to persist the seed via the pinned official writer and verify renewal with a real, tool-free model call. Importing that profile for the first time uses `deploy/docker/bootstrap-model-authorization.mjs`, not the existing-profile renewal helper. The caller must hold maintenance and the operation lock, verify a current nine-volume backup, bind the staged account to the existing seed, and audit all other state. Never replace the entire auth store or copy credentials from an unrelated host. The helper refuses an existing managed OpenAI profile. Subsequent renewals belong to OpenClaw's official persisted OAuth flow.
+
+`verify-model-authorization-bootstrap.mjs` runs with network disabled, writable tmpfs only, `OPENCLAW_STATE_DIR=/tmp/writer`, and `CODEX_HOME=/tmp/unused`. It covers account mismatch, expired/missing refresh material, duplicate bootstrap, SQLite integer/BLOB preservation, and vector-table auditing. The audit loads the pinned runtime's `sqlite-vec` extension to read existing vector tables rather than dropping or skipping them.

@@ -29,7 +29,7 @@ export function validateReleaseUpdateSelection(stage, before, after, currentMani
   releaseUpdateContract(before, after);
   assert.equal(stage.status, 'CLAWBOT_RELEASE_UPDATE_GENERATION_STAGED');
   assert.equal(stage.productionActivated, false); assert.equal(stage.productionInputsVerified, true);
-  assert.equal(stage.filesPreservedExceptSourceBindings, true);
+  assert.ok(stage.filesPreservedExceptReviewedConfig === true || stage.filesPreservedExceptSourceBindings === true);
   assert.equal(stage.previousSourceCommit, before.sourceCommit); assert.equal(stage.previousRuntimeImage, before.services.openclaw.image);
   assert.equal(stage.runtimeImage, after.services.openclaw.image); assert.equal(stage.guardImage, after.services.guard.image);
   assert.equal(after.recoverySourceManifestSha256, currentManifestSha256, 'An update must derive from the current backup, not historical data');

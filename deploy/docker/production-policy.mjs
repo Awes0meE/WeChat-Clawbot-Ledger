@@ -21,9 +21,10 @@ export function assertProductionConfig(config, bootstrapLengths = []) {
     || config.agents.entries.bookkeeper.workspace !== '/opt/clawbot/workspace') fail();
   const paths = ['/opt/clawbot/plugins/clawbot-bookkeeping', '/opt/clawbot/plugins/openclaw-weixin-stable-id'];
   if (JSON.stringify(config.plugins.load?.paths) !== JSON.stringify(paths)
-    || JSON.stringify([...config.plugins.allow].sort()) !== JSON.stringify(['clawbot-bookkeeping', 'codex', 'openclaw-weixin'])
-    || Object.keys(config.plugins.entries).sort().join() !== 'clawbot-bookkeeping,codex,openclaw-weixin'
+    || JSON.stringify([...config.plugins.allow].sort()) !== JSON.stringify(['clawbot-bookkeeping', 'codex', 'openai', 'openclaw-weixin'])
+    || Object.keys(config.plugins.entries).sort().join() !== 'clawbot-bookkeeping,codex,openai,openclaw-weixin'
     || paths.some((_, i) => config.plugins.entries[['clawbot-bookkeeping', 'openclaw-weixin'][i]].enabled !== true)
-    || config.plugins.entries.codex.enabled !== true || config.hooks?.internal?.enabled !== true
+    || config.plugins.entries.codex.enabled !== true || config.plugins.entries.openai.enabled !== true
+    || config.hooks?.internal?.enabled !== true
     || config.hooks.internal.entries?.['session-memory']?.enabled !== true) fail();
 }

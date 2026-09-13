@@ -52,8 +52,8 @@ test('rejects non-string, non-positive, non-decimal, imprecise and excessive amo
   }
 });
 
-test('requires the exact SGD currency', () => {
-  for (const currency of [undefined, null, '', 'sgd', 'SGD ', 'CNY', 1]) {
+test('rejects missing or unsupported currencies', () => {
+  for (const currency of [undefined, null, '', 'ZZZ', 1]) {
     assert.throws(() => resolveSearch(input({ currency })), /currency/u);
   }
 });

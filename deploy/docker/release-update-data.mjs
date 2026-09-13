@@ -1,11 +1,26 @@
 import assert from 'node:assert/strict';
 import { lstatSync, readdirSync, readFileSync, readSync, readlinkSync, realpathSync, writeFileSync, openSync, closeSync, fsyncSync, renameSync, chownSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { MIGRATION_ROLES } from './migration-format.mjs';
 import { generationReceipt } from './generation-receipts.mjs';
 import { validateGuardPolicy } from '../guard/origin-identity.mjs';
 import { validateActivation } from '../guard/tunnel-policy.mjs';
+
+export function enableOfficialOAuthRefresh(config) {
+  const result = structuredClone(config), plugins = result.plugins;
+  const legacy = ['clawbot-bookkeeping', 'codex', 'openclaw-weixin'];
+  const current = [...legacy, 'openai'].sort();
+  assert.ok(Array.isArray(plugins?.allow));
+  if (JSON.stringify([...plugins.allow].sort()) === JSON.stringify(current)) {
+    assert.equal(plugins.entries?.openai?.enabled, true);
+    return result;
+  }
+  assert.deepEqual([...plugins.allow].sort(), legacy, 'Unrecognized plugin scope');
+  assert.equal(Object.hasOwn(plugins.entries, 'openai'), false, 'Explicit OpenAI configuration needs review');
+  plugins.allow.push('openai'); plugins.entries.openai = { enabled: true };
+  return result;
+}
 
 export function releaseUpdateContract(before, after) {
   for (const key of ['project', 'cutoverId', 'sourceSnapshotSha256', 'importManifestSha256']) assert.equal(after[key], before[key]);
@@ -62,10 +77,19 @@ function replacements(source, before, after) {
   const policy = validateGuardPolicy(read('guard-config/policy.json'));
   assert.equal(policy.sourceCommit, before.sourceCommit); assert.equal(policy.sourceSnapshotSha256, before.sourceSnapshotSha256);
   const activation = read('guard-config/activation.json'); validateActivation(activation, policy); assert.equal(activation.cutoverId, before.cutoverId);
+  const configPath = 'runtime-config/openclaw.json';
+  const config = read(configPath), upgraded = enableOfficialOAuthRefresh(config);
+  assert.equal(policy.openclawConfigSha256, fileDigest(join(source, configPath)));
+  if (JSON.stringify(config) !== JSON.stringify(upgraded)) {
+    const bytes = Buffer.from(JSON.stringify(upgraded));
+    result.set(configPath, bytes); policy.openclawConfigSha256 = digest(bytes);
+  }
   // No identity, token, route, model, cursor or database is rewritten.
   for (const [path, value] of [['guard-config/policy.json', policy], ['guard-config/activation.json', activation]]) {
     result.set(path, Buffer.from(JSON.stringify({ ...value, sourceCommit: after.sourceCommit })));
   }
+  // Upgrade the reviewed official OAuth provider grant, keeping the model,
+  // six tools, owners, routes, tokens and every other configuration field.
   return result;
 }
 export function verifyReleaseUpdateData(source, target, before, after, { final = true, unchanged = false } = {}) {
@@ -95,7 +119,7 @@ export function rebindReleaseUpdateData(source, target, before, after) {
     const temporary = `${path}.${randomUUID()}.tmp`, fd = openSync(temporary, 'wx', stat.mode & 0o7777);
     try { writeFileSync(fd, bytes); chownSync(temporary, stat.uid, stat.gid); fsyncSync(fd); } finally { closeSync(fd); }
     renameSync(temporary, path);
-    const dir = openSync(join(target, 'guard-config'), 'r'); try { fsyncSync(dir); } finally { closeSync(dir); }
+    const dir = openSync(dirname(path), 'r'); try { fsyncSync(dir); } finally { closeSync(dir); }
   }
   return verifyReleaseUpdateData(source, target, before, after, { final: false });
 }

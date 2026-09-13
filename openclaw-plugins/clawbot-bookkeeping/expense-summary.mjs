@@ -81,11 +81,11 @@ export function resolveExpenseRange(input, nowMs = Date.now()) {
   };
 }
 
-function formatMinor(value) {
+function formatMinor(value, currency = 'SGD') {
   const amountMinor = BigInt(value);
   const whole = amountMinor / 100n;
   const fractional = (amountMinor % 100n).toString().padStart(2, '0');
-  return `${whole}.${fractional} SGD`;
+  return `${whole}.${fractional} ${currency}`;
 }
 
 function formatMonthDay(unixSeconds) {
@@ -129,13 +129,13 @@ export function aggregateExpenseSummary(transactions, primaryByCategoryId, categ
   return { totalAmountMinor, count: transactions.length, categories, largest: topLargest };
 }
 
-export function formatExpenseSummary(label, summary) {
+export function formatExpenseSummary(label, summary, currency = 'SGD') {
   if (summary.count === 0) return `${label}还没有支出记录哦～`;
   return [
-    `${label}一共花了 ${formatMinor(summary.totalAmountMinor)}，共 ${summary.count} 笔 📊`,
+    `${label}一共花了 ${formatMinor(summary.totalAmountMinor, currency)}，共 ${summary.count} 笔 📊`,
     '- 📂 分类汇总',
-    ...summary.categories.map((item) => `  - ${item.name}：${formatMinor(item.amountMinor)}`),
+    ...summary.categories.map((item) => `  - ${item.name}：${formatMinor(item.amountMinor, currency)}`),
     '- 🏆 最大三笔',
-    ...summary.largest.map((item) => `  - ${formatMonthDay(item.time)} ${item.categoryName}：${formatMinor(item.amountMinor)}`),
+    ...summary.largest.map((item) => `  - ${formatMonthDay(item.time)} ${item.categoryName}：${formatMinor(item.amountMinor, currency)}`),
   ].join('\n');
 }

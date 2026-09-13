@@ -41,7 +41,7 @@ test('changed data after host stop prevents automatic old-release rollback', asy
 test('release selection refuses historical backup, wrong images and database changes', () => {
   const manifest = { audit: { inventorySha256: 'same-source', databases: { ledger: 'ledger-audit', receipts: 'receipt-audit' } } };
   const stage = { status: 'CLAWBOT_RELEASE_UPDATE_GENERATION_STAGED', productionActivated: false, productionInputsVerified: true,
-    filesPreservedExceptSourceBindings: true, previousSourceCommit: before.sourceCommit, previousRuntimeImage: before.services.openclaw.image,
+    filesPreservedExceptReviewedConfig: true, previousSourceCommit: before.sourceCommit, previousRuntimeImage: before.services.openclaw.image,
     runtimeImage: after.services.openclaw.image, guardImage: after.services.guard.image, recoverySourceManifestSha256: after.recoverySourceManifestSha256,
     sourceAudit: manifest.audit, stagedAudit: { inventorySha256: 'new-bindings', databases: manifest.audit.databases } };
   validateReleaseUpdateSelection(stage, before, after, manifest, '1'.repeat(64));

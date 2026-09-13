@@ -16,13 +16,13 @@ Object.assign(agent,{workspace:'/opt/clawbot/workspace',bootstrapMaxChars:8000,b
 const config={agents:{entries:{bookkeeper:agent}},commands:{ownerAllowFrom:['openclaw-weixin:'+identity.userId]},
   bindings:[{type:'route',agentId:'bookkeeper',match:{channel:'openclaw-weixin',accountId:identity.accountId},session:{dmScope:'per-account-channel-peer'}}],
   gateway:{mode:'local',bind:'loopback',port:18789,auth:{mode:'token',token:'synthetic-gateway-'.repeat(4)}},
-  channels:{'openclaw-weixin':{enabled:true}},plugins:{allow:['clawbot-bookkeeping','openclaw-weixin','codex'],
+  channels:{'openclaw-weixin':{enabled:true}},plugins:{allow:['clawbot-bookkeeping','openclaw-weixin','codex','openai'],
     load:{paths:['/opt/clawbot/plugins/clawbot-bookkeeping','/opt/clawbot/plugins/openclaw-weixin-stable-id']},entries:{
       'clawbot-bookkeeping':{enabled:true,hooks:{allowConversationAccess:true,allowPromptInjection:true},config:{
         deploymentProfile:'production',serverBaseUrl:'http://127.0.0.1:8888',tokenPath:'/var/lib/clawbot/secrets/http-token',
         mcpTokenPath:'/var/lib/clawbot/secrets/mcp-token',stateDbPath:'/var/lib/clawbot/receipts/message-receipts.sqlite',
         accountName:'日常支出',ledgerDisplayName:'日常账本'}},'openclaw-weixin':{enabled:true},
-      codex:{enabled:true,config:{codexDynamicToolsLoading:'direct'}}}},hooks:{internal:{enabled:true,entries:{'session-memory':{enabled:true}}}}};
+      openai:{enabled:true},codex:{enabled:true,config:{codexDynamicToolsLoading:'direct'}}}},hooks:{internal:{enabled:true,entries:{'session-memory':{enabled:true}}}}};
 const put=(path,value)=>fs.writeFileSync(path,JSON.stringify(value),{mode:0o600});
 put(configRoot+'/openclaw.json',config);
 fs.mkdirSync(stateRoot+'/openclaw-weixin/accounts',{recursive:true,mode:0o700});

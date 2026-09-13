@@ -1,10 +1,18 @@
 # Windows 运行与交接：微信账本助理
 
+2026-09-13 15:50：Mac 正式业务与看板已更新到 `e9f94c0`。修复授权到期后无法记账的问题；生产自动续期路径、续期后真实模型调用、微信轮询和公网验收通过。见 [授权修复上线记录](docs/handoffs/2026-09-13-oauth-expiry-repair.md)。
+
+2026-09-11 安全收尾：`12879ae` 已提交公网限流模板和可选验收探针；没有本次 Cloudflare 规则启用、生产发布或线上验收的证据。推送代码不会自动更新不可变生产实例。后续步骤见 [安全交接](docs/handoffs/2026-09-11-public-security-checkpoint.md)。
+
 项目继续维护 Windows 与 Mac 两条部署路线。本次停机只退役当前操作者的旧 Windows 实例；Windows 部署脚本、配置契约、测试与恢复接口保留，供公开发行及其他用户部署。
 
-2026-09-09：Mac 正式业务与简洁生产看板均为 `8a9b796`，真实查询、直接记账、确认后入账、取消、公网、最终九卷备份及 Windows 副本恢复均通过。旧 Windows 四项任务已停止并禁用；原安装、最终快照和恢复资料保留。当前事实以 [正式切换记录](docs/handoffs/2026-09-09-production-cutover.md) 为准。
+2026-09-13 较早发布：`d33bc21`，已修复口述小数与钟点混淆，当前健康、微信轮询、公网、首次中行取价和九卷备份恢复校验通过。旧 Windows 四项任务仍停止并禁用；原安装、快照和恢复资料保留。该轮事实以 [午饭修复记录](docs/handoffs/2026-09-13-spoken-decimal-fix.md) 为准；此前 Windows 副本恢复和真实微信写入是历史验收。
 
 本文件保留 Windows 原生部署契约和操作入口；其中带日期的发布章节描述当时状态，不代表 Windows 仍在线。新部署从 [Windows 安装](#windows-安装) 开始，现有部署先检查实际服务身份。Mac 使用 [Docker 入口](deploy/docker/README.md)，不把 Linux wrapper 部署到 Windows。
+
+## 2026-09-13 Mac 上线与消息用例
+
+金额确认、多币种子账户、合并查询与每日中行现汇卖出价已随 `959e8f9` 部署至 Mac；159 种原币账户已创建，原有数据保持。新增 [统一 JSON 用例库](test-cases/wechat-bookkeeping.json)，当前 210 条，维护方法见 [用例说明](test-cases/README.md)。数据格式和静态校验可跨平台使用；当前实际模型批量入口仅在 Mac ARM64 隔离 Docker 上验收，不代表 Windows 原生或真实微信收发已验收。详见 [当日交接](docs/handoffs/2026-09-13-ambiguous-amount-confirmation.md)。
 
 ## 2026-09-07 Windows 历史发布：食堂编号修复已上线
 
@@ -117,7 +125,7 @@ Browser -> HTTPS ledger.66ccff-labs.com -> Cloudflare DNS/TLS/WAF/Rules/Tunnel
 | Tunnel supervisor | 连续核验 `8888` owner、显式 config、health 与页面指纹；异常时只停自己的 cloudflared child |
 | Cloudflare | 只为 Ledger hostname 提供 TLS、redirect、cache bypass、安全头、WAF、限速和 Tunnel 传输；不成为第二登录系统 |
 
-兼容基线为 OpenClaw 2026.8.2、官方 `@openclaw/codex` 2026.8.2、OpenAI `gpt-5.6-sol`（ChatGPT OAuth、thinking low）和 ezBookkeeping 1.6.1。配置账户固定为唯一可见 SGD 账户 `日常支出`，回执账本名固定为 `日常账本`。专用模型以 `agentRuntime.id: codex` fail closed，不配置 Qwen 或其他模型后备。确定性 HTTP 汇总已上线；原生 MCP 的实时启用状态与独立 token 必须在本机探测，不能由代码存在推断。
+兼容基线为 OpenClaw 2026.8.2、官方 `@openclaw/codex` 2026.8.2、OpenAI `gpt-5.6-sol`（ChatGPT OAuth、thinking low）和 ezBookkeeping 1.6.1。旧版配置账户固定为 SGD `日常支出`；2026-09-13 起 Mac 已部署经过验证的 159 种原币子账户，查询覆盖旧账户及新子账户，未声明币种仍默认 SGD。回执账本名固定为 `日常账本`。专用模型以 `agentRuntime.id: codex` fail closed，不配置 Qwen 或其他模型后备。确定性 HTTP 汇总已上线；原生 MCP 的实时启用状态与独立 token 必须在本机探测，不能由代码存在推断。
 
 专用代理的最终 allowlist 恰好是：
 
@@ -165,9 +173,11 @@ Codex 负责判断语义。明确表达已发生消费且包含明确金额时�
 7. 最终消费时间规范为 Unix 秒后提交给 ezBookkeeping；输入若是毫秒则先除以 1000，API `time` 与权威回执必须来自同一个值。
 8. 插件使用 API token 调用本机 HTTP API。只有 API 明确返回交易 ID，才允许成功回执。
 
-明确的非 SGD 金额不换汇、不写入，Codex 必须先询问对应的 SGD 金额。最终消费时间可早于发送时间；若晚于发送时间超过 5 分钟，则在认领消息和调用 API 前拒绝。
+Mac 已部署版本支持全部 159 币种；Windows 原生路线保留同一源码能力，部署前需独立验收，按原币写入对应子账户；未写币种默认 SGD。旧 SGD 账户与历史保留，完整查询同时覆盖旧账户和新子账户。最终消费时间可早于发送时间；若晚于发送时间超过 5 分钟，则在认领消息和调用 API 前拒绝。
 
 ### 对话确认
+
+2026-09-13 已在 Mac 部署：多个可疑金额先由 OpenClaw 的既有 AI 按语义选择最可能的实付金额，再调用 `prepare_expense` 发完整确认单。插件要求候选出自当前可信消息中的完整金额或明确加法合计，但拟单不再要求唯一金额。误调用 `record_expense` 时，若金额有依据却不唯一，也降为确认单，绝不直接写账。`F1` 商品描述与件数不会妨碍正常价格识别。没有候选、虚构金额、把数量／日期／原价／余额当成实付，仍不能拟单。模型与六工具权限未变，原回执数据库结构不变。新增多币种与每日汇率缓存见下文。见 [本次交接](docs/handoffs/2026-09-13-ambiguous-amount-confirmation.md)。
 
 `prepare_expense` 只校验并保存候选支出，不访问 ezBookkeeping。待确认提案按所有者会话哈希存入同一个本地 SQLite 状态库，十分钟过期，每个会话最多一张。确认单包含账本、金额、分类、备注和已解析消费时间；提案同时保存结构化时间字段与最终 Unix 时间戳。
 
@@ -625,3 +635,9 @@ Mac 迁移和 P1–P6 验收已完成，版本及证据见 [当前清单](docs/m
 Windows 原生 MCP、安装与恢复接口继续维护。若将来要恢复为生产主机，必须先停止 Mac 写入并备份最新九卷，核对新增交易、确认、去重、游标和授权，再制定经过验证的反向迁移；不能直接启动保留的旧 Windows 数据库。真实反向切换尚未执行。
 
 [维护与备份](docs/mac-maintenance-backup.md)、[授权恢复](docs/mac-authorization-recovery.md) 和 [生产看板](docs/mac-production-dashboard.md) 给出当前入口。维护不清除存储故障，对账不授权自动恢复；双机副本和第二处密钥已验证，实际地址、凭据与回执保存在 Git 外。
+
+## 2026-09-13 多币种与每日中行取价（源码，未部署）
+
+新增行为、账户准备及验收入口见 [多币种与汇率](docs/multicurrency-and-rates.md)。OpenClaw 插件后台服务每天 00:00 Asia/Singapore 取一次官网当时最新现汇卖出价；SQLite 日领取记录防止不同实例重复取价，缓存放在回执持久化目录的独立文件，不改变原有确认、去重和可信消息表。当天查询复用，失败保留上次成功值并注明；重启错过当天更新则补取一次。服务不调用模型或发送微信通知。Windows 保留同一插件后台服务和既有安装、恢复入口，本次未完成 Windows 原生验收。
+
+微信默认使用中行适配，ezBookkeeping 网页来源仍由原有配置管理。生产切换须按维护流程备份九卷、准备新一代卷并审核账户创建回执，不能直接修改活动容器或移动旧交易。

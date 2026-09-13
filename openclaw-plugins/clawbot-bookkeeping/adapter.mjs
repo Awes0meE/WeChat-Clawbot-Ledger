@@ -3,6 +3,9 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { assertDeploymentOrigin, PRODUCTION_DEPLOYMENT } from './deployment-profile.mjs';
+import { normalizeCurrency, validateExchangeRates } from './currency.mjs';
+import { scopedExpenseAccounts, selectExpenseWriteAccount } from './expense-accounts.mjs';
+import { fetchBankOfChinaSpotSell } from './bank-of-china-rates.mjs';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_REQUEST_TIMEOUT_MS = 60_000;
@@ -72,10 +75,11 @@ function normalizePendingExpenseProposal(value) {
   const sourceInbound = normalizeTrustedInboundPayload(value.sourceInbound);
   const conversationKey = value.sourceInbound?.conversationKey;
   const input = value.input;
-  const receivedTime = input.timeMode === 'received'
-    && input.currency === 'SGD';
+  let currency;
+  try { currency = normalizeCurrency(input.currency); } catch { return undefined; }
+  if (currency !== input.currency) return undefined;
+  const receivedTime = input.timeMode === 'received';
   const explicitTime = input.timeMode === 'explicit'
-    && input.currency === 'SGD'
     && /^\d{4}-\d{2}-\d{2}$/u.test(input.localDate)
     && (input.localTime === undefined || /^\d{2}:\d{2}$/u.test(input.localTime))
     && typeof input.timeEvidence === 'string'
@@ -850,6 +854,7 @@ export class EzBookkeepingApi {
     tokenPath,
     fetchImpl = globalThis.fetch,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+    exchangeRateSource = 'ezbookkeeping',
     deployment = PRODUCTION_DEPLOYMENT,
   }) {
     assertDeploymentOrigin(serverBaseUrl, deployment);
@@ -873,6 +878,8 @@ export class EzBookkeepingApi {
     this.tokenPath = tokenPath;
     this.fetch = fetchImpl;
     this.requestTimeoutMs = requestTimeoutMs;
+    if (!['ezbookkeeping', 'bank_of_china_spot_sell'].includes(exchangeRateSource)) throw new Error('unsupported rate source');
+    this.exchangeRateSource = exchangeRateSource;
   }
 
   async #request(path, { method = 'GET', body, query } = {}) {
@@ -949,15 +956,23 @@ export class EzBookkeepingApi {
     };
   }
 
-  async resolveAccountId(name) {
-    const accounts = await this.#request('accounts/list.json');
-    const matches = (Array.isArray(accounts) ? accounts : []).filter(
-      (account) => account.name === name && account.currency === 'SGD' && account.hidden !== true,
-    );
-    if (matches.length !== 1) {
-      throw new Error(`expected exactly one visible SGD account named ${name}; found ${matches.length}`);
+  async listExpenseAccounts(name = '日常支出') {
+    return scopedExpenseAccounts(await this.#request('accounts/list.json'), name);
+  }
+
+  async resolveAccountId(name, currency = 'SGD') {
+    return selectExpenseWriteAccount(await this.listExpenseAccounts(name), currency).id;
+  }
+
+  async getExchangeRates() {
+    return this.exchangeRateCache ? this.exchangeRateCache.get() : this.getUncachedExchangeRates();
+  }
+
+  async getUncachedExchangeRates() {
+    if (this.exchangeRateSource === 'bank_of_china_spot_sell') {
+      return fetchBankOfChinaSpotSell({ fetchImpl: this.fetch, timeoutMs: this.requestTimeoutMs });
     }
-    return matches[0].id;
+    return validateExchangeRates(await this.#request('exchange_rates/latest.json'));
   }
 
   async resolveExpenseCategoryId(primaryName, subcategoryName) {
@@ -1024,18 +1039,58 @@ export class EzBookkeepingApi {
     if (!Array.isArray(transactions)) {
       throw new Error('expense transaction list response is invalid');
     }
-    return transactions.map(sanitizeExpenseTransaction);
+    return transactions.map((transaction) => {
+      const sanitized = sanitizeExpenseTransaction(transaction);
+      if (transaction.sourceAccountId !== undefined && transaction.sourceAccountId !== accountId) {
+        throw new Error('expense transaction is outside the requested account');
+      }
+      if (sanitized.time < startTime || sanitized.time > endTime) throw new Error('expense transaction is outside the requested time range');
+      return sanitized;
+    });
   }
 
   async findExpenseTransactions({ accountId, amountMinor, startTime, endTime, limit = 3 } = {}) {
+    if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) throw new Error('expense search parameters are invalid');
+    return this.#listExpensePage({ accountId, amountMinor, startTime, endTime, limit });
+  }
+
+  async listScopedExpenseTransactions({ accounts, startTime, endTime, categoryId, keyword }) {
+    if (!Array.isArray(accounts) || !accounts.length || accounts.length > 160
+      || accounts.some((a) => typeof a?.id !== 'string' || !a.id || a.id === '0' || /[,\s]/u.test(a.id) || normalizeCurrency(a.currency) !== a.currency)
+      || new Set(accounts.map((a) => a.id)).size !== accounts.length) throw new Error('invalid account scope');
+    if (accounts.length === 1) {
+      return (await this.listExpenseTransactions({ accountId: accounts[0].id, startTime, endTime, categoryId, keyword }))
+        .map((row) => ({ ...row, currency: accounts[0].currency }));
+    }
+    const scope = new Map(accounts.map((a) => [a.id, a.currency]));
+    const rows = await this.#request('transactions/list/all.json', { query: {
+      type: 3, account_ids: accounts.map((a) => a.id).join(','), start_time: startTime, end_time: endTime,
+      category_ids: categoryId, keyword, trim_account: true, trim_tag: true,
+    } });
+    if (!Array.isArray(rows)) throw new Error('invalid scoped expense response');
+    return rows.map((row) => {
+      const value = sanitizeExpenseTransaction(row);
+      if (!scope.has(row.sourceAccountId) || value.time < startTime || value.time > endTime) throw new Error('expense outside account or time scope');
+      return { ...value, currency: scope.get(row.sourceAccountId) };
+    });
+  }
+
+  async listExpenseHistory({ accounts, startTime, endTime, limit = 3, keyword } = {}) {
+    return this.#listExpensePage({ accounts, startTime, endTime, limit, keyword });
+  }
+
+  async #listExpensePage({ accountId, accounts, amountMinor, startTime, endTime, limit = 3, keyword } = {}) {
     const validBound = (value) => value === undefined || (
       Number.isSafeInteger(value) && value >= 0
       && Number.isSafeInteger(value * 1000 + 999)
       && Number.isFinite(new Date(value * 1000).getTime())
     );
-    if (typeof accountId !== 'string' || !accountId || accountId.trim() !== accountId
-      || accountId === '0' || /[,\s]/u.test(accountId)
-      || !Number.isSafeInteger(amountMinor) || amountMinor <= 0
+    const scope = accounts ?? [{ id: accountId }];
+    if (!Array.isArray(scope) || !scope.length || scope.length > 160
+      || scope.some((a) => typeof a?.id !== 'string' || !a.id || a.id === '0' || /[,\s]/u.test(a.id))
+      || new Set(scope.map((a) => a.id)).size !== scope.length
+      || (amountMinor !== undefined && (!Number.isSafeInteger(amountMinor) || amountMinor <= 0))
+      || (keyword !== undefined && (typeof keyword !== 'string' || !keyword.trim() || keyword.length > 100))
       || !Number.isInteger(limit) || limit < 1 || limit > 10
       || !validBound(startTime) || !validBound(endTime)
       || (startTime !== undefined && endTime !== undefined && startTime > endTime)) {
@@ -1049,8 +1104,9 @@ export class EzBookkeepingApi {
     const result = await this.#request('transactions/list.json', {
       query: {
         type: 3,
-        account_ids: accountId,
-        amount_filter: `eq:${amountMinor}`,
+        account_ids: scope.map((a) => a.id).join(','),
+        amount_filter: amountMinor === undefined ? undefined : `eq:${amountMinor}`,
+        keyword,
         max_time: maxSequence,
         min_time: minSequence,
         page: 1,
@@ -1075,8 +1131,8 @@ export class EzBookkeepingApi {
       if (!transaction || typeof transaction !== 'object' || Array.isArray(transaction)
         || typeof transaction.id !== 'string' || !transaction.id
         || transaction.id.trim() !== transaction.id || seenIds.has(transaction.id)
-        || transaction.sourceAccountId !== accountId
-        || transaction.sourceAmount !== amountMinor
+        || !scope.some((a) => a.id === transaction.sourceAccountId)
+        || (amountMinor !== undefined && transaction.sourceAmount !== amountMinor)
         || typeof transaction.categoryId !== 'string' || !transaction.categoryId.trim()
         || typeof transaction.comment !== 'string' || Array.from(transaction.comment).length > 255) {
         throw new Error('expense search response is invalid');
@@ -1094,7 +1150,8 @@ export class EzBookkeepingApi {
         || (endTime !== undefined && sanitized.time > endTime)) {
         throw new Error('expense search response is outside the requested time range');
       }
-      return { sequence, transaction: { ...sanitized, comment: transaction.comment } };
+      return { sequence, transaction: { ...sanitized, comment: transaction.comment,
+        ...(accounts ? { currency: scope.find((a) => a.id === transaction.sourceAccountId).currency } : {}) } };
     });
     rows.sort((left, right) => left.sequence === right.sequence ? 0 : left.sequence > right.sequence ? -1 : 1);
     if (nextSequence !== undefined && (

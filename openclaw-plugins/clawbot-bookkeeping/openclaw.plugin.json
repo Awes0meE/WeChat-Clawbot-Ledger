@@ -49,6 +49,11 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "exchangeRateSource": {
+        "type": "string",
+        "enum": ["bank_of_china_spot_sell", "ezbookkeeping"],
+        "default": "bank_of_china_spot_sell"
+      },
       "deploymentProfile": {
         "type": "string",
         "const": "production",

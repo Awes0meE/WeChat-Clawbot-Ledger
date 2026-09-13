@@ -22,6 +22,7 @@
 !openclaw-plugins/clawbot-bookkeeping/package.json
 !openclaw-plugins/clawbot-bookkeeping/package-lock.json
 !openclaw-plugins/clawbot-bookkeeping/openclaw.plugin.json
+!openclaw-plugins/clawbot-bookkeeping/currency-catalog.json
 !openclaw-plugins/openclaw-weixin-stable-id/
 !openclaw-plugins/openclaw-weixin-stable-id/dist/
 !openclaw-plugins/openclaw-weixin-stable-id/dist/**

@@ -11,12 +11,12 @@ function fixture() {
     bindings: [{ type: 'route', agentId: 'bookkeeper', match: { channel: 'openclaw-weixin', accountId: 'fixture-account' }, session: { dmScope: 'per-account-channel-peer' } }],
     gateway: { mode: 'local', bind: 'loopback', port: 18789, auth: { mode: 'token', token: 'synthetic-'.repeat(8) } },
     channels: { 'openclaw-weixin': { enabled: true } },
-    plugins: { allow: ['clawbot-bookkeeping', 'openclaw-weixin', 'codex'],
+    plugins: { allow: ['clawbot-bookkeeping', 'openclaw-weixin', 'codex', 'openai'],
       load: { paths: ['/opt/clawbot/plugins/clawbot-bookkeeping', '/opt/clawbot/plugins/openclaw-weixin-stable-id'] },
       entries: { 'clawbot-bookkeeping': { enabled: true, hooks: { allowConversationAccess: true, allowPromptInjection: true },
         config: { deploymentProfile: 'production', serverBaseUrl: 'http://127.0.0.1:8888', tokenPath: '/var/lib/clawbot/secrets/http-token',
           mcpTokenPath: '/var/lib/clawbot/secrets/mcp-token', stateDbPath: '/var/lib/clawbot/receipts/message-receipts.sqlite', accountName: '日常支出', ledgerDisplayName: '日常账本' } },
-        'openclaw-weixin': { enabled: true }, codex: { enabled: true, config: { codexDynamicToolsLoading: 'direct' } } } },
+        'openclaw-weixin': { enabled: true }, openai: { enabled: true }, codex: { enabled: true, config: { codexDynamicToolsLoading: 'direct' } } } },
     hooks: { internal: { enabled: true, entries: { 'session-memory': { enabled: true } } } } };
 }
 test('Production startup rejects test identities, extra tools/routes and non-loopback or mutable paths', () => {
@@ -27,6 +27,8 @@ test('Production startup rejects test identities, extra tools/routes and non-loo
     (c) => c.bindings.push(c.bindings[0]),
     (c) => c.agents.entries.bookkeeper.tools.allow.push('exec'),
     (c) => c.gateway.bind = 'lan',
+    (c) => c.plugins.entries.openai.enabled = false,
+    (c) => c.plugins.allow = c.plugins.allow.filter(p => p !== 'openai'),
     (c) => c.plugins.entries['clawbot-bookkeeping'].config.tokenPath = '/tmp/token',
     (c) => c.plugins.load.paths.push('/tmp/plugin'),
     (c) => c.plugins.entries['clawbot-bookkeeping'].config.deploymentProfile = 'isolated-test',

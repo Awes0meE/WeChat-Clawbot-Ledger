@@ -118,8 +118,8 @@ test('uses separate strict schemas for natural and custom summary periods', () =
 
   try {
     const schema = harness.summarizeExpensesDefinition({}).parameters;
-    assert.equal(schema.anyOf.length, 2);
-    const natural = schema.anyOf.find((branch) => branch.properties.startDate === undefined);
+    assert.equal(schema.anyOf.length, 3);
+    const natural = schema.anyOf.find((branch) => branch.properties.period && branch.properties.startDate === undefined);
     const custom = schema.anyOf.find((branch) => branch.properties.startDate !== undefined);
     assert.equal(natural.additionalProperties, false);
     assert.equal(natural.properties.keyword.maxLength, 100);
@@ -306,7 +306,7 @@ test('uses hidden categories for truthful historical mapping and keeps unknown i
   });
 
   try {
-    const result = await harness.summarizeExpensesFactory(ownerContext()).execute('tool-call-history', { period: 'this_month' });
+    const result = await harness.summarizeExpensesFactory(ownerContext()).execute('tool-call-history', { period: 'custom', startDate: '2026-08-30', endDate: '2026-09-03' });
     assert.deepEqual(result.details.categories, [
       { name: '未识别分类', amountMinor: 400 },
       { name: '其他杂项', amountMinor: 300 },
