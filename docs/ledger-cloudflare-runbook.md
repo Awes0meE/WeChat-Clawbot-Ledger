@@ -1,6 +1,6 @@
 # Ledger Cloudflare Tunnel 运维手册
 
-本文的计划任务、目录、PowerShell 安装与重启步骤适用于 Windows 原生部署。2026-09-09 参考部署已迁至 Mac；当前状态见 [授权修复记录](handoffs/2026-09-13-oauth-expiry-repair.md)，Mac 启停、备份和凭据恢复使用 [Mac 清单](mac-before-windows-checklist.md) 中的入口。下述公网域名、回环端口和 Cloudflare 边界由两条路线共同遵守。
+本文的计划任务、目录、PowerShell 安装与重启步骤适用于 Windows 原生部署。2026-09-09 参考部署已迁至 Mac；当前状态及启停、备份和凭据恢复使用 [Mac 清单](mac-before-windows-checklist.md) 中的入口，最新操作见 [2026-09-16 微信换绑恢复](handoffs/2026-09-16-weixin-rebind-recovery.md)。下述公网域名、回环端口和 Cloudflare 边界由两条路线共同遵守。
 
 Windows 无窗口启动的当前设置与迁移方法见 [后台启动维护说明](windows-background-startup.md)。新建账本和 Tunnel 任务使用同一账户的 `S4U` 后台会话；已有任务须精确核验后迁移，不通过关闭控制台来停止服务。
 

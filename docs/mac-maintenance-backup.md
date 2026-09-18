@@ -1,6 +1,6 @@
 # Mac 维护与九卷备份
 
-Mac 已接管生产。正式维护、九卷加密备份、Windows 异机副本及使用第二处密钥的独立恢复均已执行；当前版本和切换备份覆盖范围见 [授权修复记录](handoffs/2026-09-13-oauth-expiry-repair.md)，Windows 异机恢复范围见历史 [正式切换记录](handoffs/2026-09-09-production-cutover.md)。本页区分实际生产操作与准备期的合成故障演练。
+Mac 已接管生产。正式维护、九卷加密备份、Windows 异机副本及使用第二处密钥的独立恢复均已执行；当前代码版本见 [授权修复记录](handoffs/2026-09-13-oauth-expiry-repair.md)。2026-09-16 [微信换绑恢复](handoffs/2026-09-16-weixin-rebind-recovery.md)前另完成 11,724 项的当前九卷备份及独立恢复校验；这份备份保存换绑前授权，不代表旧微信连接仍有效，也没有新增异机副本验收。Windows 异机恢复范围见历史 [正式切换记录](handoffs/2026-09-09-production-cutover.md)。本页区分实际生产操作与准备期的合成故障演练。
 
 ## 维护
 
@@ -65,7 +65,7 @@ node scripts/mac/copy-verified-backup.mjs <已验证备份目录> <现有私有�
 
 ## 故障恢复与历史数据选择
 
-[只读回执/账本核对](mac-storage-reconciliation.md) 和另行审核的存储故障解除入口已实现。前者不写库、不解除故障；后者绑定当前九卷备份、人工对账和精确宿主，解除后继续维护。生产 CLI 尚未实际执行。
+[只读回执/账本核对](mac-storage-reconciliation.md) 和另行审核的存储故障解除入口已实现。前者不写库、不解除故障；后者绑定当前九卷备份、对账和精确宿主，解除后继续维护。2026-09-18 合盖休眠后的故障中，生产 prepare/clear 已实际执行，并在确认新宿主无故障且仍在维护后单独 resume；当前数据和网页编辑全部保留。见 [实际恢复记录](handoffs/2026-09-18-lid-sleep-recovery.md)。
 
 [独立恢复批次](mac-recovery-generations.md) 已支持验证候选、复制九个新卷、逐卷完成凭证、两次备份恢复往返、同版本宿主选择及失败回退。实际合成 Docker 使用不同的新旧数据核验两边原样保留；真实 macOS LaunchAgent 生命周期另行实测。真实生产恢复尚未执行，成功选择也不会自动恢复收发。
 

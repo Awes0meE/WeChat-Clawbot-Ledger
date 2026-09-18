@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { readManagedHostRelease } from './managed-host-release.mjs';
 export const PRODUCTION_DASHBOARD_FILES = Object.freeze([
   'scripts/mac/production-dashboard-release.mjs', 'scripts/mac/production-status-server.mjs', 'scripts/mac/status-http.mjs',
+  'scripts/mac/notification-relay-status.mjs',
   'scripts/mac/production-status.mjs', 'scripts/mac/production-status-adapter.mjs', 'scripts/mac/background-authorization-checks.mjs',
   'scripts/mac/managed-host-release.mjs', 'scripts/mac/managed-runtime-spec.mjs', 'scripts/mac/managed-docker-driver.mjs',
   'scripts/mac/runtime-controller.mjs', 'scripts/mac/operation-lock.mjs', 'scripts/mac/managed-host-job.mjs',

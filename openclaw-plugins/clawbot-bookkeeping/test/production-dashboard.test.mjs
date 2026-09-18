@@ -48,3 +48,20 @@ test('a background operation distinguishes observed running services from a stop
   assert.match((await render(base)).get('host-state').textContent, /服务仍在运行/);
   assert.doesNotMatch((await render({ ...base, services: base.services.map(s => ({ ...s, running: false })) })).get('host-state').textContent, /服务仍在运行/);
 });
+
+test('notification row separates current relay health from historical phone acceptance', async () => {
+  const notificationRelay = { state: 'online', checkedAt: new Date().toISOString(), phoneVerifiedAt: '2026-01-01T00:00:00Z' };
+  const nodes = await render({ notificationRelay });
+  assert.equal(nodes.get('notification-status').textContent, '中转在线');
+  assert.match(nodes.get('notification-detail').textContent, /手机接收已验收.*在线仅表示中转可达/);
+  const failed = await render({ notificationRelay: { ...notificationRelay, state: 'unavailable' } });
+  assert.equal(failed.get('notification-status').textContent, '中转暂不可达');
+  for (const checkedAt of [new Date(Date.now() - 16000).toISOString(), new Date(Date.now() + 16000).toISOString(), 'invalid']) {
+    const stale = await render({ notificationRelay: { ...notificationRelay, checkedAt } });
+    assert.match(stale.get('notification-status').textContent, /无法确认/);
+  }
+  const offline = await render({ notificationRelay, offline: true });
+  assert.match(offline.get('notification-status').textContent, /无法确认/);
+  const missing = await render({ notificationRelay: { ...notificationRelay, phoneVerifiedAt: null } });
+  assert.doesNotMatch(missing.get('notification-detail').textContent, /已验收/);
+});

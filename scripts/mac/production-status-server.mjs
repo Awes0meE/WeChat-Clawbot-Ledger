@@ -10,12 +10,14 @@ import { readProductionDashboardRelease } from './production-dashboard-release.m
 import { productionStatusAdapter } from './production-status-adapter.mjs';
 import { operationsRoot } from './operation-lock.mjs';
 import { statusHttpServer } from './status-http.mjs';
+import { notificationRelayMonitor } from './notification-relay-status.mjs';
 const root = fileURLToPath(new URL('../../', import.meta.url)).replace(/\/$/, '');
 const { release } = readProductionDashboardRelease(root);
 const verify = process.argv[2] === '--verify-inactive';
 assert.ok(process.argv.length === 2 || (process.argv.length === 3 && verify));
 if (verify) assert.ok(!existsSync(join(operationsRoot, 'production-enabled.json')));
 const adapter = productionStatusAdapter(release.hostDirectory, { backgroundChecks: true }), exec = promisify(execFile);
+const notifications = notificationRelayMonitor(verify ? { loadConfig: () => null } : {});
 const assets = new Map([
   ['/', { type: 'text/html; charset=utf-8', body: readFileSync(join(root, 'deploy/dashboard/production.html')) }],
   ['/production.js', { type: 'text/javascript; charset=utf-8', body: readFileSync(join(root, 'deploy/dashboard/production.js')) }],
@@ -35,16 +37,16 @@ async function refresh() {
   } catch { snapshot = { version: 1, profile: 'production', state: 'inspection-unavailable', updatedAt: new Date().toISOString(), boundaryHealthy: false, services: [] }; }
   finally { refreshing = false; }
 }
-const server = statusHttpServer({ assets, snapshot: () => snapshot });
+const server = statusHttpServer({ assets, snapshot: () => ({ ...snapshot, notificationRelay: notifications.snapshot() }) });
 await new Promise((resolve, reject) => { server.once('error', reject); server.listen(verify ? 0 : 18990, '127.0.0.1', resolve); });
 server.on('error', () => { console.error('CLAWBOT_PRODUCTION_DASHBOARD_UNAVAILABLE'); process.exitCode = 1; shutdown(); });
-let timer;
+let timer, notificationTimer;
 async function shutdown() {
-  if (closing) return; closing = true; clearInterval(timer); server.close(); server.closeAllConnections();
+  if (closing) return; closing = true; clearInterval(timer); clearInterval(notificationTimer); server.close(); server.closeAllConnections();
   const wait = setInterval(() => { if (!refreshing && !adapter.checksPending) { clearInterval(wait); process.exit(process.exitCode ?? 0); } }, 100);
 }
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, shutdown);
-await refresh();
+void notifications.refresh(); await refresh();
 if (verify) {
   let step = 'status';
   try {
@@ -73,4 +75,5 @@ if (verify) {
   finally { shutdown(); }
 } else {
   console.log('CLAWBOT_PRODUCTION_DASHBOARD_READY'); timer = setInterval(refresh, 5000);
+  notificationTimer = setInterval(() => { void notifications.refresh(); }, 5000);
 }

@@ -1,6 +1,6 @@
 # 微信账本助理部署方案
 
-更新时间：2026-09-09。参考部署已迁至 Apple Silicon Mac Docker；Windows 原生部署接口继续维护。家庭网页复用 ezBookkeeping UI，通过专用 Cloudflare Tunnel 发布，SQLite 留在选定本地主机，不部署账本 Vercel。当前 release 与实际验收范围见 [授权修复记录](handoffs/2026-09-13-oauth-expiry-repair.md)。
+更新时间：2026-09-16。参考部署已迁至 Apple Silicon Mac Docker；Windows 原生部署接口继续维护。家庭网页复用 ezBookkeeping UI，通过专用 Cloudflare Tunnel 发布，SQLite 留在选定本地主机，不部署账本 Vercel。当前代码 release 见 [授权修复记录](handoffs/2026-09-13-oauth-expiry-repair.md)，运行状态与最新验收见 [Mac 工作清单](mac-before-windows-checklist.md)。
 
 ## 已定方案
 
@@ -185,7 +185,7 @@ openclaw channels status --probe
 openclaw plugins info clawbot-bookkeeping
 ```
 
-本机、公网与重启验收使用 [运维手册](ledger-cloudflare-runbook.md) 的完整参数和顺序；恢复当前部署时先看 [正式切换记录](handoffs/2026-09-09-production-cutover.md)，再按手册验证，不重复早期已完成的部署步骤。
+本机、公网与重启验收使用 [运维手册](ledger-cloudflare-runbook.md) 的完整参数和顺序；恢复当前部署时先看 [Mac 工作清单](mac-before-windows-checklist.md) 和 [2026-09-16 微信换绑恢复](handoffs/2026-09-16-weixin-rebind-recovery.md)，再按手册验证，不重复早期已完成的部署步骤。
 
 动态 MCP 只由插件 manifest 和 requester-scoped resolver 声明，不得为诊断方便新增顶层 `mcp.servers` 静态连接。任何运行时配置或部署变更前，必须先执行 `WINDOWS-HANDOFF.md` 的只读属性名断言；若顶层 `mcp.servers` 下存在 `ezbookkeeping`，停止部署并另行审核移除，不能自动删除或显示其内容。该断言与账本插件自动化测试共同证明没有静态后备项，且 manifest、resolver 和代理 allowlist 只允许 `query_transactions`、源码和测试明确排除 `add_transaction`；stable-ID 插件另有独立测试。由所有者在微信核对写入、确认及支持的 HTTP 汇总不会越权；仅在 MCP 已激活后，再以真实历史查询闭合该动态连接的端到端证据。未激活时记录为未启用，不为完成网页验收而生成 MCP token。
 

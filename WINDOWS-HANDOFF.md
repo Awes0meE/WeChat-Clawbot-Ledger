@@ -1,5 +1,11 @@
 # Windows 运行与交接：微信账本助理
 
+2026-09-18：Mac 合盖休眠后触发存储保护停机；当前九卷备份、两库核对及受审恢复完成，服务、模型与公网检查通过，全部交易及网页编辑保持原样。专用插电服务器已启用全局禁止睡眠，约六分钟合盖采样及独立公网检查通过，用户确认合盖正常且手机已收到回复；尚未验收整夜运行。Windows 未重新启用，本次 SSH 不可达。见 [故障恢复与合盖策略](docs/handoffs/2026-09-18-lid-sleep-recovery.md)。
+
+2026-09-17：本机看板新增 iPhone 通知中转在线状态与历史手机验收日期；只读健康检查不等于实时手机送达。业务继续使用 `e9f94c0`，看板独立发布。见 [看板说明](docs/mac-production-dashboard.md)。
+
+2026-09-16：Mac 微信试连第二个 ClawBot 实际替换了原绑定；已重新扫码并恢复账本授权与路由，全部既有数据保留，运行版本仍为 `e9f94c0`。服务、微信轮询、只读接口及公网检查通过；用户已确认手机查询正常返回历史记录。旧 Windows 接收器继续停用。见 [微信重连恢复记录](docs/handoffs/2026-09-16-weixin-rebind-recovery.md)。
+
 2026-09-13 15:50：Mac 正式业务与看板已更新到 `e9f94c0`。修复授权到期后无法记账的问题；生产自动续期路径、续期后真实模型调用、微信轮询和公网验收通过。见 [授权修复上线记录](docs/handoffs/2026-09-13-oauth-expiry-repair.md)。
 
 2026-09-11 安全收尾：`12879ae` 已提交公网限流模板和可选验收探针；没有本次 Cloudflare 规则启用、生产发布或线上验收的证据。推送代码不会自动更新不可变生产实例。后续步骤见 [安全交接](docs/handoffs/2026-09-11-public-security-checkpoint.md)。
@@ -600,7 +606,9 @@ try {
 | --- | --- |
 | `README.md` | 发布架构、行为与快速验证 |
 | `WINDOWS-HANDOFF.md` | 本文件；部署、运行、恢复与微信验收 |
-| `docs/handoffs/2026-09-07-bookkeeping-system-audit.md` | 当前发布、跨实例修复与真实微信交叉验收 |
+| `docs/mac-before-windows-checklist.md` | 当前 Mac 版本、运行状态与验收边界 |
+| `docs/handoffs/2026-09-16-weixin-rebind-recovery.md` | 微信换绑恢复、数据保留与手机查询确认 |
+| `docs/handoffs/2026-09-07-bookkeeping-system-audit.md` | 历史 Windows 发布、跨实例修复与真实微信交叉验收 |
 | `docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md` | 早期 Tunnel 部署检查与历史暂停点 |
 | `docs/bookkeeping-deployment-brief.md` | 方案与安全权衡摘要 |
 | `docs/expense-categories.md` | 11/45 分类可读表 |
@@ -629,6 +637,8 @@ try {
 家庭网页固定复用 ezBookkeeping UI，通过专用 Cloudflare Tunnel 发布 `ledger.66ccff-labs.com`。Cloudflare 只承担 TLS、流量规则和传输；SQLite、API/MCP token 与 OpenClaw 留在选定的本地主机；本次参考部署已迁至 Mac。不得增加 Vercel/云数据库同步、Cloudflare Access 双重登录、共享账户或开放 origin 端口，除非获得新的明确设计批准。
 
 ## Mac 接续与 Windows 恢复边界
+
+2026-09-16：本机 Docker 虚拟机内存从 4096 调至 2048 MiB，CPU 仍为 2；按维护流程停止业务、重启 Docker 后恢复，原生产版本与数据卷保留。三服务健康、微信轮询、HTTP/MCP 只读检查及公网账本 HTTP 200 通过；采样容器合计约 670 MiB，未出现 OOM kill。此前 OpenClaw cgroup 峰值约 1.45 GiB，因此只确认本次启动与当前负载，未验证持续高负载或真实消息的模型调用/写账。该限制不包含 Mac 上 Docker 界面等进程；若内存不足，按同一维护流程恢复 4096 MiB。
 
 Mac 迁移和 P1–P6 验收已完成，版本及证据见 [当前清单](docs/mac-before-windows-checklist.md)。[远程接入](docs/windows-mac-remote-access.md) 已用于 Windows 侧测试、快照和备份副本传输；Git 同步不会切换不可变服务。
 

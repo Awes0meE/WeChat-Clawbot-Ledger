@@ -15,7 +15,7 @@
 1. [项目 AGENTS.md](AGENTS.md)：当前生产合同和操作边界。
 2. [README](README.md)：系统功能、架构、测试入口。
 3. [Windows 交接](WINDOWS-HANDOFF.md)：现有模型、工具和运行契约。
-4. [当前发布记录](docs/handoffs/2026-09-13-oauth-expiry-repair.md)。
+4. [当前代码发布记录](docs/handoffs/2026-09-13-oauth-expiry-repair.md)及[最新微信换绑恢复](docs/handoffs/2026-09-16-weixin-rebind-recovery.md)。
 5. [Ledger 运维手册](docs/ledger-cloudflare-runbook.md)：发布、隔离、备份、公网和回滚要求。
 6. 本文件：Mac 目标架构、开发顺序和完成判据。
 

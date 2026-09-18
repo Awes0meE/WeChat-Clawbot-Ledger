@@ -2,7 +2,7 @@
 
 Mac 正式服务已经启用。当前版本见 [Mac 工作清单](mac-before-windows-checklist.md)；本页提供现有账户的诊断与维护入口。组件设计、错误注入及隔离演练保留在[历史验证记录](handoffs/2026-09-08-mac-authorization-development.md)。
 
-迁移已验证官方模型实际调用、原微信身份接收、HTTP/MCP 只读访问和 Tunnel 公网访问。未在生产执行过的令牌轮换、微信重新扫码及 Tunnel 密钥替换，不因迁移成功而自动计为验收通过。
+迁移已验证官方模型实际调用、原微信身份接收、HTTP/MCP 只读访问和 Tunnel 公网访问。2026-09-13 已验证生产 OAuth 续期；2026-09-16 已完成同一用户扫码后机器人编号改变的[微信换绑恢复](handoffs/2026-09-16-weixin-rebind-recovery.md)，用户确认手机历史查询正常。后者不是下面同身份令牌更新器的生产验收；HTTP/MCP 令牌轮换和 Tunnel 密钥替换也不能据此视为已执行。
 
 ## 先做只读诊断
 
@@ -85,7 +85,9 @@ node scripts/mac/weixin-authorization-stage.mjs inspect '<同一宿主>' '<同�
 node scripts/mac/weixin-authorization-stage.mjs login '<同一宿主>' '<同一备份>' '<同一暂存回执>'
 ```
 
-扫码仅在本机可见交互终端进行，候选保存在独立私有卷。不要对运行卷直接执行普通扫码保存：上游可能清理同一用户的其他账户并重载配置。同一用户但机器人账户或 API 地址改变时，保留候选并单独核对身份，不自动导入。
+扫码仅在本机可见交互终端进行，候选保存在独立私有卷。不要对运行卷直接执行普通扫码保存：上游可能清理同一用户的其他账户并重载配置。独立卷只能隔离本地文件；手机确认建立新连接仍可能撤销微信服务端的原连接，不能用生产微信用户试连第二个机器人来验证并存能力。同一用户但机器人账户或 API 地址改变时，保留候选并单独核对身份，不自动导入。
+
+2026-09-16 的新机器人编号恢复经过当前九卷备份、离线演练及精确四文件审核，单独更新账号、索引、bookkeeper 路由及 guard 配置哈希。普通同身份更新器正确拒绝该候选，未被绕过或放宽。私有回执用于审计，已完成的操作不能重放；未来类似事件必须重新核对当时身份、数据与变更范围。
 
 ## 微信暂存导入的宿主维护入口
 
@@ -124,7 +126,7 @@ node scripts/mac/inspect-production-status.mjs '<同一宿主>'
 
 `inspect-production-status.mjs '<生产宿主>'` 汇总四类诊断；[简洁生产状态页](mac-production-dashboard.md) 使用相同检查，详情默认折叠。执行前后绑定宿主进程、启用记录、运行批次、容器及启动时间，变化即丢弃旧结果；维护、故障或运行边界未知时不访问凭据。
 
-本地凭据存在、微信最近轮询和 Tunnel 最近注册各有范围，不代替新做的云端推理、真实消息或公网验收。当前验收与未执行过的生产恢复操作分别记录在[正式切换记录](handoffs/2026-09-09-production-cutover.md)，组件证据保留在[开发归档](handoffs/2026-09-08-mac-authorization-development.md)。
+本地凭据存在、微信最近轮询和 Tunnel 最近注册各有范围，不代替新做的云端推理、真实消息或公网验收。当前状态见 [Mac 工作清单](mac-before-windows-checklist.md) 和[微信换绑恢复](handoffs/2026-09-16-weixin-rebind-recovery.md)；[正式切换记录](handoffs/2026-09-09-production-cutover.md)及[开发归档](handoffs/2026-09-08-mac-authorization-development.md)保留历史证据。
 
 
 ## Runtime-only Codex seed expiry

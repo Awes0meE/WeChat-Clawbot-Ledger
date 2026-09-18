@@ -31,6 +31,7 @@ function unavailable(message) {
   for (const id of ['overall', 'host-state', 'model', 'ledger-http', 'ledger-mcp', 'weixin', 'weixin-time', 'tunnel']) $(id).textContent = message;
   for (const id of ['power', 'disk', 'uptime']) $(id).textContent = '—';
   $('services').replaceChildren();
+  $('notification-status').textContent = '当前状态无法确认'; $('notification-detail').textContent = '等待中转状态重新检查';
   $('updated').textContent = '暂无当前采样'; $('authorization-updated').textContent = '授权状态等待重新核验';
 }
 function node(tag, value, className) { const n = document.createElement(tag); n.textContent = value; if (className) n.className = className; return n; }
@@ -66,6 +67,14 @@ async function poll() {
     $('power').textContent = state.acPower === true ? '已插电' : state.acPower === false ? '使用电池' : '暂不可用';
     $('disk').textContent = Number.isFinite(state.immediatelyFreeBytes) ? `${(state.immediatelyFreeBytes / 2 ** 30).toFixed(1)} GiB` : '—';
     $('uptime').textContent = Number.isFinite(state.uptimeSeconds) ? `${Math.floor(state.uptimeSeconds / 3600)} 小时` : '—';
+    const notification = state.notificationRelay, notificationAge = Date.now() - Date.parse(notification?.checkedAt);
+    const notificationFresh = Number.isFinite(notificationAge) && notificationAge >= 0 && notificationAge < 15000;
+    $('notification-status').textContent = !notificationFresh ? '当前状态无法确认'
+      : ({ online: '中转在线', unavailable: '中转暂不可达', 'not-configured': '尚未配置' }[notification?.state] ?? '当前状态无法确认');
+    const verifiedAt = Date.parse(notification?.phoneVerifiedAt);
+    $('notification-detail').textContent = notificationFresh && Number.isFinite(verifiedAt) && verifiedAt <= Date.now()
+      ? `手机接收已验收（${new Date(verifiedAt).toLocaleDateString('zh-CN')}）；在线仅表示中转可达`
+      : '在线仅表示中转可达，不代表手机此刻已收到通知';
     const names = { origin: '账本', openclaw: '微信记账', guard: '公网访问' };
     $('services').replaceChildren(...(state.services ?? []).map(service => {
       let label = service.health === 'healthy' && service.running ? '运行中' : service.running ? '正在启动' : '已停止';
