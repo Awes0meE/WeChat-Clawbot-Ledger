@@ -2,8 +2,9 @@ import { readFileSync, lstatSync, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { managedRuntimeSpec, managedCompose } from './managed-runtime-spec.mjs';
-export const HOST_FILES = Object.freeze(['production-host.mjs', 'managed-host-release.mjs', 'managed-runtime-spec.mjs',
+export const LEGACY_HOST_FILES = Object.freeze(['production-host.mjs', 'managed-host-release.mjs', 'managed-runtime-spec.mjs',
   'managed-docker-driver.mjs', 'runtime-controller.mjs', 'operation-lock.mjs']);
+export const HOST_FILES = Object.freeze([...LEGACY_HOST_FILES, 'host-diagnostics.mjs']);
 export function readManagedHostRelease(directory) {
   if (realpathSync(directory) !== directory) throw new Error('CLAWBOT_HOST_RELEASE_PATH');
   function read(name) {
@@ -12,9 +13,12 @@ export function readManagedHostRelease(directory) {
     return readFileSync(path);
   }
   const release = JSON.parse(read('host-release.json'));
-  if (release.version !== 1 || release.target?.profile !== 'production') throw new Error('CLAWBOT_HOST_RELEASE_PROFILE');
+  if (![1, 2].includes(release.version) || release.target?.profile !== 'production') throw new Error('CLAWBOT_HOST_RELEASE_PROFILE');
+  if (release.sourceMode !== undefined && (!['git-commit', 'working-tree-snapshot'].includes(release.sourceMode)
+    || !/^[a-f0-9]{40}$/.test(release.hostSourceCommit ?? ''))) throw new Error('CLAWBOT_HOST_SOURCE_PROVENANCE');
   const spec = managedRuntimeSpec(release.target);
-  if (JSON.stringify(Object.keys(release.files ?? {}).sort()) !== JSON.stringify([...HOST_FILES, 'compose.json'].sort())) throw new Error('CLAWBOT_HOST_RELEASE_INCOMPLETE');
+  const expectedFiles = release.version === 1 ? LEGACY_HOST_FILES : HOST_FILES;
+  if (JSON.stringify(Object.keys(release.files ?? {}).sort()) !== JSON.stringify([...expectedFiles, 'compose.json'].sort())) throw new Error('CLAWBOT_HOST_RELEASE_INCOMPLETE');
   for (const [path, expected] of Object.entries(release.files)) {
     if (createHash('sha256').update(read(path)).digest('hex') !== expected) throw new Error('CLAWBOT_HOST_RELEASE_HASH');
   }

@@ -33,7 +33,7 @@ async function refresh() {
     result.immediatelyFreeBytes = disk.bavail * disk.bsize; result.uptimeSeconds = Math.floor(os.uptime());
     result.acPower = null;
     try { result.acPower = (await exec('/usr/bin/pmset', ['-g', 'batt'], { encoding: 'utf8', timeout: 5000, maxBuffer: 8192 })).stdout.includes("'AC Power'"); } catch {}
-    snapshot = { ...result, dashboardSourceCommit: release.sourceCommit, dashboardTaskSha256: release.taskSha256 };
+    snapshot = { ...result, dashboardSourceCommit: release.sourceCommit, dashboardSourceMode: release.sourceMode ?? 'git-commit', dashboardTaskSha256: release.taskSha256 };
   } catch { snapshot = { version: 1, profile: 'production', state: 'inspection-unavailable', updatedAt: new Date().toISOString(), boundaryHealthy: false, services: [] }; }
   finally { refreshing = false; }
 }

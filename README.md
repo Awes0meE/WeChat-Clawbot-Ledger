@@ -55,6 +55,7 @@ Mac 的全新生产安装向导尚未验收，测试初始化不会自动启用�
 - **清晰展示历史明细**：校验 MCP 查询结果，按编号展示时间、原币金额、分类和备注；专用代理只查询已核验的旧账户与多币种子账户，每次最多十笔，不发送原始 JSON。
 - **网页查看同一本账**：通过带健康检查的 Cloudflare Tunnel 访问 ezBookkeeping 原生网页界面。
 - **常驻与状态页**：Windows 使用[后台任务](docs/windows-background-startup.md)，Mac 使用登录服务及[简洁生产看板](docs/mac-production-dashboard.md)，在本机查看账本、微信和公网状态。
+- **Mac 运行记录**：约每 15 秒采样，保存错误阶段、超时和故障前最多约 30 分钟的状态；约 38 MiB 自动轮转，不记录聊天、账目和令牌。
 - **固定发布与备份恢复**：正式服务加载仓库外的已验证发布。Mac 提供九卷加密备份、独立恢复及保留旧卷的版本更新，测试和生产数据分离。
 
 ### 对话示例
@@ -99,6 +100,8 @@ Tunnel supervisor 在开放网页入口前，会核对正式进程、显式配�
 | OpenClaw Gateway | `127.0.0.1:18789`，运行绑定所有者的专用记账助手。 |
 | 网页访问 | 经 Cloudflare Tunnel 访问受保护的正式实例，使用 ezBookkeeping 原生登录。 |
 
+Mac Docker 的正式账本和 Gateway 回环地址位于共享容器网络空间，未映射为 Mac 宿主端口；本机看板单独使用 `127.0.0.1:18990`。
+
 ### 工具与当前状态
 
 | 工具 | 用途 | 状态 |
@@ -114,16 +117,16 @@ MCP 集成需要独立启用本地服务并配置专用 token。Windows 保留�
 
 ## 项目状态
 
-以下状态更新于 **2026-09-18**，描述参考部署，源码同步不会自动部署到其他用户的机器：
+以下状态更新于 **2026-09-21**，描述参考部署，源码同步不会自动部署到其他用户的机器：
 
-- Mac 生产 runtime、guard、宿主为 `e9f94c0`；独立看板为 `97f0135`，新增 iPhone 通知中转只读状态。多币种原币账户、金额确认、合并查询、每日中行报价及口述小数修复已上线。
+- Mac 业务 runtime、guard 仍为 `e9f94c0`；宿主与看板已独立更新[运行诊断](docs/mac-runtime-diagnostics.md)，保存有容量上限的状态采样、失败步骤和故障前快照；看板同时保留通知中转只读状态。多币种原币账户、金额确认、合并查询、每日中行报价及口述小数修复已上线。
 - 授权到期故障已修复：同一账户保存为持久 OAuth profile，启用官方 OpenAI 续期组件；生产强制续期及随后真实模型调用通过。用户确认修复后可用，该反馈不等于逐币种、逐条消息都做过手机端核验。
-- 本次公开镜像可移植回归 933 通过、0 失败、1 跳过，微信适配器构建及 25 项测试通过；[200 条隔离模型实测](test-cases/results/2026-09-13.md)与[16 条口述小数定向复验](test-cases/results/2026-09-13-spoken-decimal.md)分别留证。[统一用例库](test-cases/README.md)现有 210 条可继续积累的合成输入。
-- 2026-09-18 合盖休眠后的存储保护恢复，先对当前九卷进行备份及独立恢复核验，共 11738 项、账本 16 表／回执 12 表；完成账本/回执审核后恢复服务，全部交易和网页编辑保持原样。Windows 副本和第二份密钥的恢复验证对应历史版本，不能冒称新版本已在异机验收。
-- 2026-09-16 微信重新绑定后，手机历史查询恢复。2026-09-18 专用插电 Mac 启用系统级禁止睡眠，约六分钟合盖采样通过，用户确认合盖运行及手机回复正常；不代表整夜或断电恢复验收。
+- 本次公开镜像可移植回归 942 通过、0 失败、1 跳过，微信适配器构建及 25 项测试通过；[200 条隔离模型实测](test-cases/results/2026-09-13.md)与[16 条口述小数定向复验](test-cases/results/2026-09-13-spoken-decimal.md)分别留证。[统一用例库](test-cases/README.md)现有 210 条可继续积累的合成输入。
+- 2026-09-21 存储采样失败触发保护停机，当前九卷备份及独立恢复核验通过，共 11751 项、账本 16 表／回执 12 表；审核后恢复服务，184 条既有交易及网页编辑保持原样，随后一条真实微信入站对应唯一新增交易及成功回执。原始错误未留存，根因仍未知；后续已补运行记录，保护策略不变。Windows 副本和第二份密钥的恢复验证对应历史版本，不能冒称新版本已在异机验收。
+- 2026-09-16 微信重新绑定后，手机历史查询恢复。2026-09-18 专用插电 Mac 启用系统级禁止睡眠，约六分钟合盖采样通过，用户确认合盖运行及手机回复正常；不代表整夜或断电恢复验收。独立[合盖息屏辅助任务](docs/mac-lid-display-sleep.md)已安装，手动息屏时服务继续运行通过；自动合盖触发和温度改善仍未完成实测。
 - 初次迁移的真实历史查询、直接记账、确认后入账、取消及公网访问已通过。无人登录启动、家庭路由器断网补收和腾讯同消息 ID 重放仍未实测。
 
-当前运维证据见 [合盖恢复与电源策略](docs/handoffs/2026-09-18-lid-sleep-recovery.md)；模型授权修复见 [授权修复上线记录](docs/handoffs/2026-09-13-oauth-expiry-repair.md)，多币种及汇率契约见 [使用与运维说明](docs/multicurrency-and-rates.md)。模型仍使用官方 Codex harness 和 GPT-5.6 Sol，没有新增云模型后备或扩大六项业务工具权限。
+当前运维证据见 [存储恢复记录](docs/handoffs/2026-09-21-storage-check-recovery.md)及[运行诊断](docs/mac-runtime-diagnostics.md)；模型授权修复见 [授权修复上线记录](docs/handoffs/2026-09-13-oauth-expiry-repair.md)，多币种及汇率契约见 [使用与运维说明](docs/multicurrency-and-rates.md)。模型仍使用官方 Codex harness 和 GPT-5.6 Sol，没有新增云模型后备或扩大六项业务工具权限。
 
 ## 本地开发
 
@@ -198,6 +201,8 @@ Windows 安装和运维脚本按文档使用 `-WhatIf` 预演；Mac 生产入口
 - [Windows 部署与恢复](WINDOWS-HANDOFF.md)
 - [Mac Docker 配置](deploy/docker/README.md)与[运维清单](docs/mac-before-windows-checklist.md)
 - [Mac 备份与恢复](docs/mac-maintenance-backup.md)
+- [运行诊断与排查](docs/mac-runtime-diagnostics.md)
+- [专用插电服务器合盖息屏](docs/mac-lid-display-sleep.md)
 - [模型、微信和账本授权恢复](docs/mac-authorization-recovery.md)
 - [Cloudflare Tunnel 部署与验收](docs/ledger-cloudflare-runbook.md)
 - [多币种、合并查询和每日中行汇率](docs/multicurrency-and-rates.md)

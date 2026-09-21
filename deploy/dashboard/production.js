@@ -28,7 +28,7 @@ const tunnelStates = { 'not-started': '公网连接尚未启动', 'awaiting-regi
   'transport-unavailable': '公网连接网络暂不可用' };
 function unavailable(message) {
   $('overall-dot').classList.remove('good');
-  for (const id of ['overall', 'host-state', 'model', 'ledger-http', 'ledger-mcp', 'weixin', 'weixin-time', 'tunnel']) $(id).textContent = message;
+  for (const id of ['overall', 'host-state', 'model', 'ledger-http', 'ledger-mcp', 'weixin', 'weixin-time', 'tunnel', 'runtime-diagnostics']) $(id).textContent = message;
   for (const id of ['power', 'disk', 'uptime']) $(id).textContent = '—';
   $('services').replaceChildren();
   $('notification-status').textContent = '当前状态无法确认'; $('notification-detail').textContent = '等待中转状态重新检查';
@@ -36,6 +36,7 @@ function unavailable(message) {
 }
 function node(tag, value, className) { const n = document.createElement(tag); n.textContent = value; if (className) n.className = className; return n; }
 function attentionReason(state) {
+  if (state.runtimeDiagnostics?.state === 'unavailable') return '运行记录保存失败，需要检查';
   if (['login-required', 'reauthorization-required'].includes(state.weixinAuthorization?.state)) return '微信需要重新登录';
   if (state.modelAuthorization?.state === 'login-required'
     || state.modelAuthorization?.warnings?.includes('reauthorization-required')) return '模型需要重新授权';
@@ -67,6 +68,7 @@ async function poll() {
     $('power').textContent = state.acPower === true ? '已插电' : state.acPower === false ? '使用电池' : '暂不可用';
     $('disk').textContent = Number.isFinite(state.immediatelyFreeBytes) ? `${(state.immediatelyFreeBytes / 2 ** 30).toFixed(1)} GiB` : '—';
     $('uptime').textContent = Number.isFinite(state.uptimeSeconds) ? `${Math.floor(state.uptimeSeconds / 3600)} 小时` : '—';
+    $('runtime-diagnostics').textContent = ({ recording: '正在记录', unavailable: '记录保存失败，需要检查', 'not-enabled': '尚未启用' }[state.runtimeDiagnostics?.state] ?? '当前状态无法确认');
     const notification = state.notificationRelay, notificationAge = Date.now() - Date.parse(notification?.checkedAt);
     const notificationFresh = Number.isFinite(notificationAge) && notificationAge >= 0 && notificationAge < 15000;
     $('notification-status').textContent = !notificationFresh ? '当前状态无法确认'

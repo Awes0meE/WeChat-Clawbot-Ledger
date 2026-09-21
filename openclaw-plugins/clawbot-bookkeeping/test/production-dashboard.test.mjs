@@ -27,6 +27,15 @@ test('production page distinguishes local health from each authorization and ret
   assert.match(nodes.get('weixin').textContent, /重新授权/);
   assert.match(nodes.get('tunnel').textContent, /网络暂不可用.*凭据拒绝/);
 });
+test('Log-write failure is visible even when business services are healthy, and stale pages clear it', async () => {
+  const options = { runtimeDiagnostics: { state: 'unavailable' }, weixinAuthorization: {}, tunnelAuthorization: {}, ledgerAuthorization: {} };
+  const nodes = await render(options);
+  assert.match(nodes.get('overall').textContent, /需要处理/);
+  assert.match(nodes.get('host-state').textContent, /运行记录保存失败/);
+  assert.match(nodes.get('runtime-diagnostics').textContent, /保存失败/);
+  assert.equal((await render({ ...options, runtimeDiagnostics: { state: 'recording' } })).get('runtime-diagnostics').textContent, '正在记录');
+  assert.match((await render({ ...options, age: 30000 })).get('runtime-diagnostics').textContent, /无法确认/);
+});
 test('stale, future, test-profile and disconnected pages remove all current service and authorization claims', async () => {
   for (const options of [{ age: 30000 }, { age: -30000 }, { profile: 'isolated-test' }, { offline: true }]) {
     const nodes = await render(options);

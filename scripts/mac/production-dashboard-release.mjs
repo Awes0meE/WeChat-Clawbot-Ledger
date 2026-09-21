@@ -10,6 +10,7 @@ export const PRODUCTION_DASHBOARD_FILES = Object.freeze([
   'scripts/mac/notification-relay-status.mjs',
   'scripts/mac/production-status.mjs', 'scripts/mac/production-status-adapter.mjs', 'scripts/mac/background-authorization-checks.mjs',
   'scripts/mac/managed-host-release.mjs', 'scripts/mac/managed-runtime-spec.mjs', 'scripts/mac/managed-docker-driver.mjs',
+  'scripts/mac/host-diagnostics.mjs',
   'scripts/mac/runtime-controller.mjs', 'scripts/mac/operation-lock.mjs', 'scripts/mac/managed-host-job.mjs',
   'scripts/mac/model-authorization.mjs', 'scripts/mac/model-authorization-inspection.mjs',
   'scripts/mac/ledger-authorization-inspection.mjs', 'scripts/mac/weixin-authorization-inspection.mjs',
@@ -26,10 +27,12 @@ export function readProductionDashboardRelease(directory) {
     return readFileSync(path);
   }
   const release = JSON.parse(read('dashboard-release.json'));
-  assert.deepEqual(Object.keys(release).sort(), ['version', 'purpose', 'sourceCommit', 'hostDirectory', 'target', 'files', 'taskSha256'].sort());
-  assert.equal(release.version, 1); assert.equal(release.purpose, 'production-dashboard');
+  assert.deepEqual(Object.keys(release).sort(), ['version', 'purpose', 'sourceCommit', 'hostDirectory', 'target', 'files', 'taskSha256', ...(release.version === 2 ? ['sourceMode'] : [])].sort());
+  assert.ok([1, 2].includes(release.version)); assert.equal(release.purpose, 'production-dashboard');
+  if (release.version === 2) assert.ok(['git-commit', 'working-tree-snapshot'].includes(release.sourceMode));
   assert.match(release.sourceCommit, /^[a-f0-9]{40}$/);
-  assert.deepEqual(Object.keys(release.files ?? {}).sort(), [...PRODUCTION_DASHBOARD_FILES].sort());
+  const expectedFiles = release.version === 1 ? PRODUCTION_DASHBOARD_FILES.filter(name => name !== 'scripts/mac/host-diagnostics.mjs') : PRODUCTION_DASHBOARD_FILES;
+  assert.deepEqual(Object.keys(release.files ?? {}).sort(), [...expectedFiles].sort());
   for (const [name, hash] of Object.entries(release.files)) assert.equal(createHash('sha256').update(read(name)).digest('hex'), hash);
   assert.equal(createHash('sha256').update(read('dashboard.plist')).digest('hex'), release.taskSha256);
   const base = join(homedir(), 'Library/Application Support/Clawbot/production-host-releases');
@@ -38,7 +41,7 @@ export function readProductionDashboardRelease(directory) {
   return { release, spec };
 }
 
-export function writeProductionDashboardRelease(directory, hostDirectory, sourceCommit) {
+export function writeProductionDashboardRelease(directory, hostDirectory, sourceCommit, { sourceMode = 'git-commit' } = {}) {
   assert.match(sourceCommit, /^[a-f0-9]{40}$/); assert.ok(!existsSync(directory));
   const { spec } = readManagedHostRelease(hostDirectory);
   mkdirSync(directory, { mode: 0o700 }); assert.equal(realpathSync(directory), directory);
@@ -53,7 +56,7 @@ export function writeProductionDashboardRelease(directory, hostDirectory, source
   const xml = value => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
   const task = `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>Label</key><string>com.clawbot.mac-production-dashboard</string><key>ProgramArguments</key><array><string>${xml(process.execPath)}</string><string>${xml(join(directory, 'scripts/mac/production-status-server.mjs'))}</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>30</integer><key>StandardOutPath</key><string>/dev/null</string><key>StandardErrorPath</key><string>/dev/null</string></dict></plist>`;
   writeFileSync(join(directory, 'dashboard.plist'), task, { flag: 'wx', mode: 0o400 });
-  writeFileSync(join(directory, 'dashboard-release.json'), JSON.stringify({ version: 1, purpose: 'production-dashboard', sourceCommit,
+  writeFileSync(join(directory, 'dashboard-release.json'), JSON.stringify({ version: 2, purpose: 'production-dashboard', sourceCommit, sourceMode,
     hostDirectory, target: spec, files, taskSha256: createHash('sha256').update(task).digest('hex') }), { flag: 'wx', mode: 0o400 });
   return readProductionDashboardRelease(directory);
 }

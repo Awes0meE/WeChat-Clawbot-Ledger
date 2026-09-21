@@ -33,7 +33,7 @@ try {
     writeFileSync(join(directory, name), contents, { flag: 'wx', mode: 0o400 });
     files[name] = createHash('sha256').update(contents).digest('hex');
   }
-  writeFileSync(join(directory, 'host-release.json'), JSON.stringify({ version: 1, target, files }), { flag: 'wx', mode: 0o400 });
+  writeFileSync(join(directory, 'host-release.json'), JSON.stringify({ version: 2, sourceMode: 'git-commit', hostSourceCommit: sourceCommit, target, files }), { flag: 'wx', mode: 0o400 });
   readManagedHostRelease(directory);
   const xml = (s) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
   const plist = `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>Label</key><string>com.clawbot.mac-production-host</string><key>ProgramArguments</key><array><string>${xml(process.execPath)}</string><string>${xml(join(directory, 'production-host.mjs'))}</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>30</integer><key>StandardOutPath</key><string>/dev/null</string><key>StandardErrorPath</key><string>/dev/null</string></dict></plist>`;

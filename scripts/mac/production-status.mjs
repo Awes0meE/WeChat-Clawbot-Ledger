@@ -50,7 +50,9 @@ export async function collectProductionStatus({ spec, readContext, inspect, prob
     const services = ['origin', 'openclaw', 'guard'].map(name => ({ name, running: view.running[name],
       health: view.ready[name] ? 'healthy' : view.running[name] ? 'not-ready' : 'stopped' }));
     const result = { ...base, state, services, boundaryHealthy: state === 'healthy' && view.healthy === true
-      && services.every(s => s.running && s.health === 'healthy') };
+      && services.every(s => s.running && s.health === 'healthy'),
+      runtimeDiagnostics: { state: context.host?.diagnostics?.healthy === true && context.host.diagnostics.failures === 0 ? 'recording'
+        : context.host?.diagnostics ? 'unavailable' : 'not-enabled' } };
     if (!result.boundaryHealthy) return result;
     const expected = { profile: 'production', sourceCommit: spec.sourceCommit, runtimeImage: before.openclaw.image,
       containerId: before.openclaw.id, containerStartedAt: before.openclaw.startedAt,

@@ -32,7 +32,7 @@ try {
     const data = name === 'compose.json' ? Buffer.from(JSON.stringify(managedCompose(managedRuntimeSpec(target)))) : readFileSync(new URL(name, import.meta.url));
     writeFileSync(join(directory, name), data, { mode: 0o400 }); files[name] = createHash('sha256').update(data).digest('hex');
   }
-  writeFileSync(join(directory, 'host-release.json'), JSON.stringify({ version: 1, target, files }), { mode: 0o400 });
+  writeFileSync(join(directory, 'host-release.json'), JSON.stringify({ version: 2, target, files }), { mode: 0o400 });
   const result = spawnSync(process.execPath, [join(directory, 'production-host.mjs'), '--once'], { encoding: 'utf8', timeout: 60000 });
   assert.equal(result.status, 0, 'Inactive host entry failed');
   const state = JSON.parse(readFileSync(join(operationsRoot, 'production-host-status.json')));

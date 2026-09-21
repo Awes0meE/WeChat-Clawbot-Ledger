@@ -28,7 +28,7 @@ try {
     const data = name === 'compose.json' ? Buffer.from(JSON.stringify(managedCompose(managedRuntimeSpec(target)))) : readFileSync(new URL(name, import.meta.url));
     writeFileSync(join(host, name), data, { flag: 'wx', mode: 0o400 }); files[name] = createHash('sha256').update(data).digest('hex');
   }
-  writeFileSync(join(host, 'host-release.json'), JSON.stringify({ version: 1, target, files }), { flag: 'wx', mode: 0o400 });
+  writeFileSync(join(host, 'host-release.json'), JSON.stringify({ version: 2, target, files }), { flag: 'wx', mode: 0o400 });
   const directory = join(packageFixture, 'dashboard');
   writeProductionDashboardRelease(directory, host, 'f'.repeat(40));
   const oldTask = join(homedir(), 'Library/LaunchAgents/com.clawbot.mac-test-host.plist');

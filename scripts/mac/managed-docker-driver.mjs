@@ -5,16 +5,33 @@ import { homedir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { checkManagedContainer, managedVolumeName } from './managed-runtime-spec.mjs';
 import { storageDecision } from './runtime-controller.mjs';
+import { diagnosticError, containerDiagnostics } from './host-diagnostics.mjs';
 const exec = promisify(execFile), docker = '/Applications/Docker.app/Contents/Resources/bin/docker';
-export function managedDockerDriver(spec, composePath, { latchStorageFault, validateRehearsalInputs } = {}) {
+export function managedDockerDriver(spec, composePath, { latchStorageFault, validateRehearsalInputs, onDiagnostic,
+  execute = exec, clock = Date.now } = {}) {
   const env = { ...process.env, PATH: `/Applications/Docker.app/Contents/Resources/bin:${process.env.PATH}` };
   const compose = ['compose', '-f', composePath];
   let lastView;
-  async function run(args, timeout = 20000) {
-    try { return (await exec(docker, args, { env, encoding: 'utf8', timeout, maxBuffer: 4 * 1024 * 1024 })).stdout.trim(); }
-    catch { throw new Error('CLAWBOT_DOCKER_OPERATION_FAILED'); }
+  const observe = event => { try { onDiagnostic?.(event); } catch {} };
+  function commandPhase(args) {
+    const commands = new Set(['info', 'ps', 'inspect', 'image', 'volume', 'network', 'exec', 'run', 'stop', 'rm', 'compose', 'stats']);
+    const subcommands = new Set(['inspect', 'ls', 'create', 'rm']);
+    return `docker.${commands.has(args[0]) ? args[0] : 'other'}${subcommands.has(args[1]) ? `.${args[1]}` : ''}`;
   }
-  const json = async (args) => JSON.parse(await run(args));
+  async function run(args, timeout = 20000, phase = commandPhase(args)) {
+    const started = clock(); observe({ event: 'command-start', phase });
+    try {
+      const result = await execute(docker, args, { env, encoding: 'utf8', timeout, maxBuffer: 4 * 1024 * 1024 });
+      const elapsedMs = clock() - started;
+      if (elapsedMs >= 2500) observe({ event: 'command-slow', phase, elapsedMs });
+      return result.stdout.trim();
+    } catch (cause) {
+      const diagnostic = diagnosticError(cause, { elapsedMs: clock() - started, timeoutMs: timeout });
+      observe({ event: 'command-failed', phase, error: diagnostic });
+      throw Object.assign(new Error('CLAWBOT_DOCKER_OPERATION_FAILED'), { diagnostic });
+    }
+  }
+  const json = async (args, phase) => JSON.parse(await run(args, 20000, phase));
   const helper = (mounts, script, args = []) => ['run', '--rm', '--network', 'none', '--read-only', '--user', '1000:1000',
     '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true', ...mounts.flatMap(([name, target]) =>
       ['--mount', `type=volume,src=${managedVolumeName(spec, name)},dst=${target},readonly`]),
@@ -37,23 +54,23 @@ export function managedDockerDriver(spec, composePath, { latchStorageFault, vali
       if (!view.identityValid || !view.namespaceValid || Object.values(view.running).some(Boolean)) throw new Error('CLAWBOT_INITIAL_BOUNDARY');
       return view;
     },
-    async validateVolumes() {
+    async validateVolumes(phase = 'volumes.identity') {
       try {
         const roles = new Set(Object.values(spec.services).flatMap((service) => service.mounts.map(([name]) => name)));
         for (const role of roles) {
-          const name = managedVolumeName(spec, role), v = (await json(['volume', 'inspect', name]))[0];
+          const name = managedVolumeName(spec, role), v = (await json(['volume', 'inspect', name], phase))[0];
           if (v.Name !== name || v.Driver !== 'local' || Object.keys(v.Options ?? {}).length
             || v.Labels?.['clawbot.project'] !== spec.project || v.Labels['clawbot.volume'] !== role
             || (v.Labels['clawbot.generation'] ?? null) !== spec.volumeGeneration
             || (spec.profile === 'production' && v.Labels['clawbot.cutover'] !== spec.cutoverId)) return false;
         }
         return true;
-      } catch { return false; }
+      } catch (error) { observe({ event: 'volume-inspection-failed', phase, error: error.diagnostic ?? diagnosticError(error) }); return false; }
     },
     async inspect() {
       try { await run(['info', '--format', '{{.ServerVersion}}']); }
       catch { return { available: false, trusted: {} }; }
-      const view = { available: true, identityValid: true, namespaceValid: false, healthy: false, trusted: {}, ready: {}, running: {} };
+      const view = { available: true, identityValid: true, namespaceValid: false, healthy: false, trusted: {}, ready: {}, running: {}, diagnostics: {} };
       try {
         const ids = (await run(['ps', '-a', '-q', '--filter', `label=com.docker.compose.project=${spec.project}`])).split('\n').filter(Boolean);
         const containers = ids.length ? await json(['inspect', ...ids]) : [];
@@ -69,6 +86,7 @@ export function managedDockerDriver(spec, composePath, { latchStorageFault, vali
           const matches = containers.filter((c) => c.Config.Labels['com.docker.compose.service'] === role);
           if (matches.length !== 1) { view.identityValid = false; continue; }
           const c = matches[0]; members[role] = c;
+          view.diagnostics[role] = containerDiagnostics(c);
           if (checkManagedContainer(spec, role, c, images[spec.services[role].image], volumes)) view.trusted[role] = c.Id;
           else view.identityValid = false;
           view.running[role] = c.State.Running;
@@ -82,7 +100,7 @@ export function managedDockerDriver(spec, composePath, { latchStorageFault, vali
         view.namespaceValid = members.openclaw?.HostConfig.NetworkMode === ns && members.guard?.HostConfig.NetworkMode === ns
           && members.guard?.HostConfig.PidMode === ns;
         view.healthy = ['origin', 'openclaw', 'guard'].every((role) => view.ready[role]);
-      } catch { view.identityValid = false; }
+      } catch (error) { view.identityValid = false; observe({ event: 'inspection-failed', phase: 'runtime.identity', error: error.diagnostic ?? diagnosticError(error) }); }
       lastView = view; return view;
     },
     async validateInputs() {
@@ -108,7 +126,7 @@ export function managedDockerDriver(spec, composePath, { latchStorageFault, vali
       if (!/^[a-f0-9]{64}$/.test(id)) throw new Error('Invalid container identity');
       const view = await this.inspect();
       if (view.trusted[role] !== id) throw new Error('Container identity changed before stop');
-      if (view.running[role]) await run(['stop', '--time', '20', id], 25000);
+      if (view.running[role]) await run(['stop', '--time', '20', id], 25000, `lifecycle.stop.${role}`);
     },
     async retireStopped({ allowPartial = false } = {}) {
       const view = await this.inspect();
@@ -134,7 +152,7 @@ export function managedDockerDriver(spec, composePath, { latchStorageFault, vali
     },
     async start(role, recreate) {
       if (!['origin', 'openclaw', 'guard'].includes(role) || !lastView?.identityValid) throw new Error('Unverified managed start');
-      await run([...compose, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', ...(recreate ? ['--force-recreate'] : []), role], 45000);
+      await run([...compose, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', ...(recreate ? ['--force-recreate'] : []), role], 45000, `lifecycle.start.${role}`);
     },
     async requireReady(role) {
       const deadline = Date.now() + 90000;
@@ -148,12 +166,28 @@ export function managedDockerDriver(spec, composePath, { latchStorageFault, vali
     },
     async storage() {
       try {
-        if (!await this.validateVolumes()) return { error: 'STORAGE_IDENTITY_INVALID' };
+        if (!await this.validateVolumes('storage.volume-identity')) return { error: 'STORAGE_IDENTITY_INVALID' };
+        observe({ event: 'command-start', phase: 'storage.host-free' });
         const host = statfsSync(homedir());
         const free = await run(helper([['ledger-data', `${spec.root}/ledger`]], ['--input-type=module', '-e',
-          'import{statfsSync}from"node:fs";const s=statfsSync(process.argv[1]);console.log(s.bavail*s.bsize)', `${spec.root}/ledger`]));
+          'import{statfsSync}from"node:fs";const s=statfsSync(process.argv[1]);console.log(s.bavail*s.bsize)', `${spec.root}/ledger`]), 20000, 'storage.volume-free');
         return { hostFreeBytes: host.bavail * host.bsize, volumeFreeBytes: Number(free) };
-      } catch { return { error: 'STORAGE_UNAVAILABLE' }; }
+      } catch (error) {
+        const diagnostic = error.diagnostic ?? diagnosticError(error);
+        observe({ event: 'storage-failed', phase: 'storage.sample', error: diagnostic });
+        return { error: 'STORAGE_UNAVAILABLE', diagnostic };
+      }
+    },
+    async diagnosticStats() {
+      if (!lastView?.identityValid) return undefined;
+      const roles = ['origin', 'openclaw', 'guard'], ids = roles.map(role => lastView.trusted[role]);
+      const rows = (await run(['stats', '--no-stream', '--format', '{{json .}}', ...ids], 5000, 'resources.docker-stats')).split('\n').filter(Boolean).map(JSON.parse);
+      const result = {};
+      for (const [index, role] of roles.entries()) {
+        const row = rows.find(r => r.ID === ids[index] || (typeof r.ID === 'string' && r.ID.length >= 12 && ids[index].startsWith(r.ID)));
+        if (row) result[role] = { cpuPercent: parseFloat(row.CPUPerc), memoryPercent: parseFloat(row.MemPerc), pids: Number(row.PIDs), memoryUsage: row.MemUsage };
+      }
+      return result;
     },
     async latchStorageFault() { if (!latchStorageFault) throw new Error('Missing storage latch'); await latchStorageFault(); },
   };

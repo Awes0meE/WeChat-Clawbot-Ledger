@@ -1,6 +1,6 @@
 # 微信账本助理部署方案
 
-更新时间：2026-09-16。参考部署已迁至 Apple Silicon Mac Docker；Windows 原生部署接口继续维护。家庭网页复用 ezBookkeeping UI，通过专用 Cloudflare Tunnel 发布，SQLite 留在选定本地主机，不部署账本 Vercel。当前代码 release 见 [授权修复记录](handoffs/2026-09-13-oauth-expiry-repair.md)，运行状态与最新验收见 [Mac 工作清单](mac-before-windows-checklist.md)。
+更新时间：2026-09-21。参考部署已迁至 Apple Silicon Mac Docker；Windows 原生部署接口继续维护。家庭网页复用 ezBookkeeping UI，通过专用 Cloudflare Tunnel 发布，SQLite 留在选定本地主机，不部署账本 Vercel。当前代码 release 见 [授权修复记录](handoffs/2026-09-13-oauth-expiry-repair.md)，运行状态与最新验收见 [Mac 工作清单](mac-before-windows-checklist.md)。
 
 ## 已定方案
 
@@ -21,6 +21,8 @@ Browser -> https://ledger.66ccff-labs.com -> Cloudflare Tunnel
 HTTP 写入、对话确认和确定性汇总已经建立。ezBookkeeping 原生 MCP 是否启用、独立 MCP token 是否存在以及 Ledger 公网入口是否完成，必须以本机/公网实时验收为准；代码或文档存在不能替代端到端证据。
 
 正式写入按币种路由至“多币种支出”的 159 个子账户；旧 SGD 账户 `日常支出` 及历史保留，查询覆盖这组经过核验的账户，微信回执显示账本名 `日常账本`。运行时以 `openclaw-plugins/clawbot-bookkeeping/categories.mjs` 中不可变的 `CATEGORY_DEFINITIONS` 为权威分类契约，固定为 11 个一级分类、45 个二级分类；`config/expense-categories.json` 只是脱敏的导入与部署目录快照。
+
+Mac 宿主约每 15 秒将容器、存储和资源状态写入本机私有轮转日志，命令失败和故障前样本单独保留；看板只显示记录器健康，不开放日志下载。源码提交与不可变运行包分别标识，诊断不改变故障停写和人工审核恢复策略。检查入口、容量与当前发布见 [运行诊断](mac-runtime-diagnostics.md)。专用插电主机的系统禁睡眠与 [合盖息屏辅助任务](mac-lid-display-sleep.md) 分别配置和验收。
 
 ## 为什么采用混合接入
 
