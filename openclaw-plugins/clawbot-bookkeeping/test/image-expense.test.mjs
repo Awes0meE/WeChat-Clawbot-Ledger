@@ -39,10 +39,9 @@ for (const [name, totalEvidence, currencyEvidence, timeEvidence] of [
   assert.equal(prepareExpenseConfirmation({ input: selected, inbound }).time, Date.parse('2026-09-01T13:20:00+08:00') / 1000);
 });
 
-test('semantic images require date and purpose; typed math, calendar, source and version guards remain enforced', () => {
+test('semantic images require date; typed math, calendar, source and version guards remain enforced', () => {
   for (const [change, reason] of [
     [{ totalEvidence: '' }, 'image-total'], [{ currencyEvidence: '' }, 'image-currency'],
-    [{ purposeEvidence: '' }, 'image-purpose'], [{ purposeAmbiguous: true }, 'image-purpose'],
     [{ dateAmbiguous: true }, 'image-date'], [{ timeKind: 'logistics' }, 'image-date'],
     [{ timeKind: 'unknown' }, 'image-date'], [{ orderCount: 2 }, 'image-order'],
     [{ expenseStatus: 'not_expense' }, 'image-payment'], [{ expenseStatus: 'paid' }, 'image-payment'],
@@ -50,13 +49,29 @@ test('semantic images require date and purpose; typed math, calendar, source and
     [{ semanticVersion: 3 }, 'image-evidence'],
   ]) assert.throws(() => validateImageExpense(semanticInput(change), inbound), new RegExp(reason));
   for (const change of [{ timeMode: 'received' }, { timeEvidence: '' }, { localDate: undefined },
-    { localDate: '2026-02-30' }, { localTime: '24:00' }, { comment: '' }, { amount: '-2' },
+    { localDate: '2026-02-30' }, { localTime: '24:00' }, { amount: '-2' },
     { amount: '0' }, { amount: '12.501' }, { currency: 'ZZZ' }]) {
     assert.throws(() => prepareExpenseConfirmation({ input: { ...semanticInput(), ...change }, inbound }));
   }
   assert.throws(() => validateImageExpense(semanticInput(), { ...inbound, image: undefined }), /image-source/u);
   assert.throws(() => prepareExpenseConfirmation({ input: semanticInput(), inbound: {
     ...inbound, timestamp: Date.parse('2026-09-01T12:00:00+08:00') } }));
+});
+
+test('missing image purpose records 无 without requiring confirmation or inventing a description', () => {
+  for (const [evidence, comment] of [
+    [{ purposeAmbiguous: true, purposeEvidence: 'No transaction description shown' }, 'Transfer to a person'],
+    [{ purposeAmbiguous: false, purposeEvidence: '' }, undefined],
+    [{ purposeAmbiguous: false, purposeEvidence: '' }, ''],
+  ]) {
+    const selected = { ...semanticInput(evidence), comment };
+    assert.equal(validateImageExpense(selected, inbound).needsConfirmation, false);
+    assert.equal(prepareExpenseConfirmation({ input: selected, inbound }).comment, '无');
+  }
+  const described = semanticInput();
+  assert.equal(prepareExpenseConfirmation({ input: described, inbound }).comment, 'Cafe lunch');
+  assert.throws(() => validateImageExpense(semanticInput({ purposeAmbiguous: true, dateAmbiguous: true }), inbound), /image-date/u);
+  assert.throws(() => validateImageExpense(semanticInput({ purposeAmbiguous: true, expenseStatus: 'not_expense' }), inbound), /image-payment/u);
 });
 
 test('semantic ambiguity requires confirmation without requiring a literal paid label', () => {

@@ -1,8 +1,18 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
 
 const prompt = readFileSync(new URL('../../../openclaw-workspace/AGENTS.md', import.meta.url), 'utf8');
+
+test('native template budgets include every shipped workspace rule without truncation', () => {
+  const config = JSON.parse(readFileSync(new URL('../../../config/weixin-bookkeeper-agent.example.json', import.meta.url), 'utf8'));
+  const agent = config.find(entry => entry.path === 'agents.entries.bookkeeper').value;
+  const directory = new URL('../../../openclaw-workspace/', import.meta.url);
+  const lengths = readdirSync(directory).filter(name => name.endsWith('.md'))
+    .map(name => ({ name, length: readFileSync(new URL(name, directory), 'utf8').length }));
+  for (const file of lengths) assert.ok(file.length <= agent.bootstrapMaxChars, `${file.name} would be truncated`);
+  assert.ok(lengths.reduce((sum, file) => sum + file.length, 0) <= agent.bootstrapTotalMaxChars);
+});
 
 test('makes the model responsible for conversational intent and grounded notes', () => {
   assert.match(prompt, /负责理解语义、选择分类、提炼有依据的备注/u);

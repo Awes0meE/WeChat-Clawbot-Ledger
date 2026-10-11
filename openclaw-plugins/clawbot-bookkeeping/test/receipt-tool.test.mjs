@@ -6,9 +6,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
+import { PhotonImage } from '@silvia-odwyer/photon-node';
+import { Check } from 'typebox/value';
 
 import plugin from '../index.ts';
 import { SqliteReceiptStore } from '../adapter.mjs';
+
+const reviewPixel = new PhotonImage(Uint8Array.of(255, 255, 255, 255), 1, 1);
+const REVIEW_PIXEL = Buffer.from(reviewPixel.get_bytes_jpeg(95)); reviewPixel.free();
 
 function receivedExpenseParams(overrides = {}) {
   return {
@@ -30,13 +35,14 @@ function imageParams(overrides = {}) {
       orderCount: 1, amountAmbiguous: false, currencyAmbiguous: false, ...overrides } });
 }
 
-async function beginImageTurn(h, directory, id, { wrongIdentity = false, sameBytes = false } = {}) {
+async function beginImageTurn(h, directory, id, { wrongIdentity = false, sameBytes = false, beforeLlm } = {}) {
   const path = join(directory, 'media', 'inbound', `${id}.jpg`);
   mkdirSync(join(directory, 'media', 'inbound'), { recursive: true });
   writeFileSync(path, Buffer.concat([Buffer.from([255, 216, 255]), Buffer.from(sameBytes ? 'image-0' : id)]));
   const ctx = { channelId: 'openclaw-weixin', accountId: 'bot-account', messageId: id,
     senderId: 'owner-user', sessionKey: 'agent:main:main' };
   await h.inboundHooks.get('message_received')({ content: '', timestamp: Date.now(), media: [{ path, messageId: id }] }, ctx);
+  beforeLlm?.();
   const prompt = 'Conversation info: ⟦openclaw:ctx⟧\n```json\n'
     + JSON.stringify({ message_id: wrongIdentity ? 'wrong-message' : id, sender: { id: 'owner-user' }, source_modality: 'image' })
     + `\n\`\`\`\n\n[media attached: media://inbound/${id}.jpg (image/*)]\n[Image]`;
@@ -50,7 +56,65 @@ async function beginImageTurn(h, directory, id, { wrongIdentity = false, sameByt
   h.inboundHooks.latestRunId = id;
 }
 
-test('four image-only turns write independently; exact image resend does not write twice', async () => {
+for (const { name, elapsed, wrongIdentity, ended, succeeds } of [
+  { name: 'survives slow media preprocessing', elapsed: 61_000, succeeds: true },
+  { name: 'retains exact dispatch within the inbound lifetime', elapsed: 599_999, succeeds: true },
+  { name: 'rejects expired media dispatch', elapsed: 600_001, succeeds: false },
+  { name: 'rejects another image identity after a delay', elapsed: 61_000, wrongIdentity: true, succeeds: false },
+  { name: 'rejects an ended run after preprocessing', elapsed: 61_000, ended: true, succeeds: false },
+]) {
+  test(`image correlation ${name}`, async () => {
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), 'clawbot-image-correlation-')));
+    const previous = process.env.OPENCLAW_STATE_DIR, originalNow = Date.now;
+    const startedAt = originalNow();
+    process.env.OPENCLAW_STATE_DIR = directory;
+    writeFileSync(join(directory, 'token.txt'), 'synthetic-token');
+    const requests = [], h = createPluginHarness(directory, successfulExpenseFetch(requests));
+    try {
+      Date.now = () => startedAt;
+      await beginImageTurn(h, directory, 'delayed-image', { wrongIdentity, beforeLlm() {
+        Date.now = () => startedAt + elapsed;
+        if (ended) h.inboundHooks.get('agent_end')({}, { runId: 'delayed-image' });
+      } });
+      const execution = h.recordExpenseFactory(trustedOwnerContext()).execute('delayed-image-call', imageParams());
+      if (succeeds) {
+        assert.equal((await execution).details.status, 'created');
+        assert.equal(requests.filter(r => r.url.endsWith('/transactions/add.json')).length, 1);
+      } else {
+        await assert.rejects(execution, /可信元数据/u);
+        assert.equal(requests.length, 0);
+      }
+    } finally {
+      Date.now = originalNow; h.restore();
+      previous === undefined ? delete process.env.OPENCLAW_STATE_DIR : process.env.OPENCLAW_STATE_DIR = previous;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+test('image-count metadata cannot extend text prompt correlation after one minute', async () => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'clawbot-text-correlation-')));
+  writeFileSync(join(directory, 'token.txt'), 'synthetic-token');
+  const requests = [], h = createPluginHarness(directory, successfulExpenseFetch(requests));
+  const originalNow = Date.now, startedAt = originalNow();
+  const ctx = { channelId: 'openclaw-weixin', accountId: 'bot-account', messageId: 'delayed-text',
+    senderId: 'owner-user', sessionKey: 'agent:main:main' };
+  try {
+    Date.now = () => startedAt;
+    await h.inboundHooks.get('message_received')({ content: '午饭7.2', timestamp: startedAt }, ctx);
+    Date.now = () => startedAt + 61_000;
+    h.inboundHooks.get('llm_input')({ runId: 'delayed-text', prompt: 'Current user request:\n午饭7.2', imagesCount: 1 }, {
+      ...ctx, channel: 'openclaw-weixin', trigger: 'user',
+    });
+    h.inboundHooks.latestRunId = 'delayed-text';
+    await assert.rejects(h.recordExpenseFactory(trustedOwnerContext()).execute('delayed-text-call', receivedExpenseParams()), /可信元数据/u);
+    assert.equal(requests.length, 0);
+  } finally {
+    Date.now = originalNow; h.restore(); rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('four image-only turns write independently after review, including resolved ambiguity; exact resend does not write twice', async () => {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'clawbot-image-')));
   const previous = process.env.OPENCLAW_STATE_DIR;
   process.env.OPENCLAW_STATE_DIR = directory;
@@ -59,7 +123,7 @@ test('four image-only turns write independently; exact image resend does not wri
   try {
     for (let n = 0; n < 4; n++) {
       await beginImageTurn(h, directory, `image-${n}`);
-      const result = await h.recordExpenseFactory(trustedOwnerContext()).execute(`image-call-${n}`, imageParams());
+      const result = await h.recordExpenseFactory(trustedOwnerContext()).execute(`image-call-${n}`, imageParams({ amountAmbiguous: n === 2 }));
       assert.equal(result.details.status, 'created');
       assert.match(result.content[0].text, /具体时分采用收到图片的时间/u);
     }
@@ -180,7 +244,7 @@ test('numbered image proposals survive new requests and plugin restart and consu
     const ids = [];
     for (let n = 0; n < 2; n++) {
       await beginImageTurn(h, directory, `pending-${n}`);
-      const result = await h.recordExpenseFactory(trustedOwnerContext()).execute(`pending-call-${n}`, imageParams({ amountAmbiguous: true }));
+      const result = await h.prepareExpenseFactory(trustedOwnerContext()).execute(`pending-call-${n}`, imageParams({ amountAmbiguous: true }));
       assert.equal(result.details.status, 'pending_confirmation');
       ids.push(result.details.proposalId);
     }
@@ -218,7 +282,54 @@ test('missing image currency defaults to SGD with an authoritative receipt and o
   }
 });
 
-test('fresh image tools require semantic assessment and refuse date or purpose gaps before writing', async () => {
+test('successful outgoing image without purpose writes literal default comment once', async () => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'clawbot-image-no-purpose-')));
+  const previous = process.env.OPENCLAW_STATE_DIR; process.env.OPENCLAW_STATE_DIR = directory;
+  writeFileSync(join(directory, 'token.txt'), 'synthetic-token');
+  const requests = [], h = createPluginHarness(directory, successfulExpenseFetch(requests));
+  try {
+    await beginImageTurn(h, directory, 'image-0');
+    const params = { ...imageParams({ purposeEvidence: '', purposeAmbiguous: true,
+      statusEvidence: 'Outgoing transfer successful; recipient received payment' }), comment: '' };
+    for (const definition of [h.recordExpenseDefinition({}), h.prepareExpenseDefinition({})]) {
+      assert.equal(Check(definition.parameters, params), true, 'Empty purpose must pass the model-facing schema too');
+    }
+    const result = await h.recordExpenseFactory(trustedOwnerContext()).execute('no-purpose-write', params);
+    assert.equal(result.details.status, 'created');
+    assert.match(result.content[0].text, /备注：无/u);
+    const posts = requests.filter(r => r.url.endsWith('/transactions/add.json'));
+    assert.equal(posts.length, 1);
+    assert.equal(JSON.parse(posts[0].options.body).comment, '无');
+    assert.equal(JSON.parse(posts[0].options.body).categoryId, 'secondary-other');
+    await beginImageTurn(h, directory, 'resend-no-purpose', { sameBytes: true });
+    assert.equal((await h.recordExpenseFactory(trustedOwnerContext()).execute('no-purpose-resend', params)).details.status, 'duplicate');
+    assert.equal(requests.filter(r => r.url.endsWith('/transactions/add.json')).length, 1);
+  } finally {
+    h.restore(); previous === undefined ? delete process.env.OPENCLAW_STATE_DIR : process.env.OPENCLAW_STATE_DIR = previous;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('unavailable original-pixel review returns a known no-write reply without a proposal', async () => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'clawbot-image-review-failed-')));
+  const previous = process.env.OPENCLAW_STATE_DIR; process.env.OPENCLAW_STATE_DIR = directory;
+  writeFileSync(join(directory, 'token.txt'), 'synthetic-token');
+  const requests = [], h = createPluginHarness(directory, successfulExpenseFetch(requests));
+  try {
+    h.imageReviewRuntime.mediaUnderstanding.extractStructuredWithModel = async () => { throw new Error('unavailable'); };
+    await beginImageTurn(h, directory, 'image-0');
+    const response = await h.recordExpenseFactory(trustedOwnerContext()).execute('review-failed', imageParams());
+    assert.equal(response.details.imageIssue, 'image-review');
+    assert.match(response.content[0].text, /没有入账/u);
+    assert.equal(requests.filter(r => r.url.endsWith('/transactions/add.json')).length, 0);
+    assert.equal(response.details.proposalId, undefined);
+  } finally {
+    h.restore(); previous === undefined ? delete process.env.OPENCLAW_STATE_DIR : process.env.OPENCLAW_STATE_DIR = previous;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('fresh image tools require semantic assessment and refuse date gaps before writing', async () => {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'clawbot-semantic-image-')));
   const previous = process.env.OPENCLAW_STATE_DIR; process.env.OPENCLAW_STATE_DIR = directory;
   writeFileSync(join(directory, 'token.txt'), 'synthetic-token');
@@ -227,7 +338,6 @@ test('fresh image tools require semantic assessment and refuse date or purpose g
     for (const [n, params, reason] of [
       [0, { ...imageParams(), timeMode: 'received' }, 'image-date'],
       [1, imageParams({ dateAmbiguous: true }), 'image-date'],
-      [2, imageParams({ purposeEvidence: '' }), 'image-purpose'],
       [3, imageParams({ semanticVersion: undefined, paymentStatus: 'paid' }), 'image-evidence'],
     ]) {
       await beginImageTurn(h, directory, `semantic-missing-${n}`);
@@ -257,7 +367,24 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
   let prepareExpenseDefinition;
   let summarizeExpensesFactory;
   const logs = [];
+  let reviewInput;
   const pluginApi = {
+    // Deterministic model fixture. Pixel/source/authority failure tests live in image-review.test.mjs.
+    runtime: {
+      media: { async getImageMetadata() { return { width: 100, height: 200 }; },
+        async resizeToJpeg() { return REVIEW_PIXEL; } },
+      mediaUnderstanding: { async extractStructuredWithModel() {
+        const p = reviewInput, e = p.imageEvidence;
+        return { parsed: { decision: 'record', issue: 'none', amountBasis: 'transaction_amount', amount: p.amount, currency: p.currency,
+          currencyDefaulted: e.currencyDefaulted ?? false, localDate: p.localDate,
+          dateCandidates: [p.localDate], dateBasis: 'visible_format',
+          localTime: p.localTime ?? null, localSecond: e.localSecond ?? null,
+          timeKind: e.timeKind, rawDate: p.timeEvidence, totalEvidence: e.totalEvidence,
+          currencyEvidence: e.currencyEvidence, statusEvidence: e.statusEvidence,
+          purposeEvidence: e.purposeEvidence ?? '', hasPurpose: !e.purposeAmbiguous,
+          comment: p.comment ?? '', primaryCategory: p.primaryCategory, subcategory: p.subcategory } };
+      } },
+    },
     pluginConfig: {
       serverBaseUrl: 'http://127.0.0.1:8888',
       tokenPath: join(tempDirectory, 'token.txt'),
@@ -299,6 +426,7 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
     return {
       ...tool,
       async execute(toolCallId, params) {
+        reviewInput = params;
         return executeForTurn(inboundHooks, tool, {
           runId: inboundHooks.latestRunId,
           toolCallId,
@@ -314,6 +442,7 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
     return {
       ...tool,
       execute(toolCallId, params) {
+        reviewInput = params;
         return tool.execute(toolCallId, normalizeExpenseTestParams(toolName, params));
       },
     };
@@ -322,6 +451,7 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
   return {
     inboundHooks,
     hookOptions,
+    imageReviewRuntime: pluginApi.runtime,
     summarizeExpensesFactory: (context) => materializeExpenseTool(summarizeExpensesFactory, 'summarize_expenses', context),
     rawSummarizeExpensesFactory: summarizeExpensesFactory,
     recordExpenseFactory: (context) => materializeExpenseTool(recordExpenseFactory, 'record_expense', context),
@@ -574,6 +704,8 @@ function successfulExpenseFetch(requests) {
           { id: 'secondary-equipment', name: '数码装备', parentId: 'primary-learning' },
         ] }, { id: 'primary-clothing', name: '衣服饰品', parentId: '0', subCategories: [
           { id: 'secondary-clothes', name: '衣服裤子', parentId: 'primary-clothing' },
+        ] }, { id: 'primary-other', name: '其他杂项', parentId: '0', subCategories: [
+          { id: 'secondary-other', name: '其他支出', parentId: 'primary-other' },
         ] }],
       } }), { status: 200 });
     }

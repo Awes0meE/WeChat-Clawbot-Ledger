@@ -1,6 +1,6 @@
 # 微信记账回归用例
 
-合成文字消息统一保存在 [`wechat-bookkeeping.json`](wechat-bookkeeping.json)。当前 238 条覆盖日常支出、型号与数量、显式币种、消费时间、拟单与确认／取消、普通聊天、单条多问题、汇率查询、无效输入、转聊失效和消息重投。图片使用下述独立私有用例入口，不计入这 238 条。2026-10-11 的 [100 组图片场景集](image-semantic/README.md) 单独维护，包含公开图、合成边界图和两张私有故障原图。
+合成文字消息统一保存在 [`wechat-bookkeeping.json`](wechat-bookkeeping.json)。当前 238 条覆盖日常支出、型号与数量、显式币种、消费时间、拟单与确认／取消、普通聊天、单条多问题、汇率查询、无效输入、转聊失效和消息重投。图片使用下述独立私有用例入口，不计入这 238 条。2026-10-11 的 [100 组图片场景集](image-semantic/README.md) 单独维护，已替换为 100 张网上真实原图，不含合成图；旧混合集仅保留历史报告。
 
 200 条批量结果见 [2026-09-13 实测报告](results/2026-09-13.md)，口述小数修复的 16 条定向复验见 [补充报告](results/2026-09-13-spoken-decimal.md)。用户随后确认恢复可用，不等于全部 210 条完成手机端验收。
 
@@ -23,6 +23,7 @@
 | `expected.amount` / `currency` | 应入账或拟单的原币金额及 ISO 币种 |
 | `expected.amountOneOf` | 确实有多个合理候选时，限定候选金额范围，仍须用户确认 |
 | `expected.category` / `commentEquals` | 可选的一级、二级分类数组和完整备注核对 |
+| `expected.commentContains` | 备注必须保留的详情数组，不区分英文字母大小写；避免有内容却被写成“无” |
 | `expected.localDate` / `localTime` | 明确日期与钟点的精确核对，格式为 YYYY-MM-DD / HH:mm |
 | `expected.dayOffset` | 相对本条可信发送日期的天数；昨天为 `-1` |
 | `expected.replyContains` | 回复必须同时包含的答案要素，避免只回答多个问题中的一个 |

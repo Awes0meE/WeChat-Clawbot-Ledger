@@ -69,7 +69,7 @@ export class ExpenseRecordingError extends Error {
     this.outcome = outcome;
     if (dedupeStatus) this.dedupeStatus = dedupeStatus;
     if (['time', 'amount', 'currency', 'image', 'image_lookup'].includes(rejectionReason)) this.rejectionReason = rejectionReason;
-    if (rejectionReason === 'image' && ['image-source', 'image-payment', 'image-evidence', 'image-total', 'image-currency', 'image-order', 'image-date', 'image-purpose'].includes(imageIssue)) this.imageIssue = imageIssue;
+    if (rejectionReason === 'image' && ['image-source', 'image-payment', 'image-evidence', 'image-total', 'image-currency', 'image-order', 'image-date', 'image-purpose', 'image-review'].includes(imageIssue)) this.imageIssue = imageIssue;
   }
 }
 
@@ -466,7 +466,10 @@ function validateExpenseInput(input, inbound, resolvedTime) {
   }
   const receiptKey = messageReceiptKey(inbound);
   const sourceAmount = parseAmountToMinorUnits(input.amount);
-  const comment = resolveExpenseComment(inbound.content, input.comment);
+  const imageComment = input.imageEvidence?.semanticVersion === 2
+    && (input.imageEvidence.purposeAmbiguous || !input.comment?.trim()) ? '无' : input.comment;
+  const resolvedComment = resolveExpenseComment(inbound.content, imageComment);
+  const comment = input.imageEvidence?.semanticVersion === 2 && !resolvedComment ? '无' : resolvedComment;
   try {
     if (normalizeCurrency(input.currency) !== input.currency) throw new Error('noncanonical currency');
     const candidates = inbound.image ? [] : expenseAmountCandidates(inbound.content);

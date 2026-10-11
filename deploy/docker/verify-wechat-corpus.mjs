@@ -139,6 +139,7 @@ try {
    const local=new Date(expense[0].time*1000+8*3600000).toISOString();
    if(e.category&&JSON.stringify([expense[0].category?.primary,expense[0].category?.name])!==JSON.stringify(e.category))issues.push('wrong-category');
    if(e.commentEquals!==undefined&&expense[0].comment!==e.commentEquals)issues.push('wrong-comment');
+   for(const piece of e.commentContains??[])if(!String(expense[0].comment??'').toLowerCase().includes(piece.toLowerCase()))issues.push(`missing-comment-detail:${piece}`);
    if(e.localDate&&local.slice(0,10)!==e.localDate)issues.push('wrong-explicit-date');
    if(e.localTime&&local.slice(11,16)!==e.localTime)issues.push('wrong-explicit-clock');
    if(e.localSecond!==undefined&&Number(local.slice(17,19))!==e.localSecond)issues.push('wrong-explicit-second');

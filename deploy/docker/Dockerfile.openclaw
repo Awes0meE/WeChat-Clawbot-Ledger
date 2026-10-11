@@ -17,6 +17,8 @@ RUN for p in clawbot-bookkeeping openclaw-weixin-stable-id; do \
       ln -s /app/node_modules/zod /opt/clawbot/plugins/$p/node_modules/zod; \
       ln -s /opt/clawbot/runtime-dependencies/node_modules/qrcode-terminal /opt/clawbot/plugins/$p/node_modules/qrcode-terminal; \
     done && \
+    mkdir -p /opt/clawbot/plugins/clawbot-bookkeeping/node_modules/@silvia-odwyer && \
+    ln -s /opt/clawbot/runtime-dependencies/node_modules/@silvia-odwyer/photon-node /opt/clawbot/plugins/clawbot-bookkeeping/node_modules/@silvia-odwyer/photon-node && \
     cp /opt/clawbot/hooks/session-memory/handler-linux.js /opt/clawbot/hooks/session-memory/handler.js && \
     mv /opt/clawbot/plugins/clawbot-bookkeeping/index.ts /opt/clawbot/plugins/clawbot-bookkeeping/index-core.ts && \
     cp /opt/clawbot/docker/bookkeeping-linux.ts /opt/clawbot/plugins/clawbot-bookkeeping/index.ts

@@ -1,51 +1,50 @@
-# 图片语义校验：100 组场景
+# 100 张真实世界图片测试集
 
-2026-10-11 建立。Mac 已发布 `0f4114f`；[上线与补账记录](../../docs/handoffs/2026-10-11-image-semantic.md)单独记载生产操作。预期在模型执行前人工确定；发现失败保留原结果，修正后另记复验，不按模型输出修改答案。
+2026-10-11 按用户要求重建，当前主集 **100 张网上公开原图，0 张合成图**：80 张网页上的付款截图或小票照片，20 张 SROIE 真实扫描小票。图片不重画、不生成、不为测试补字。已知模板、占位演示、伪造图教程和同一交易的重复照片不纳入主集。
 
-## 样本组成与规则
+来源、原始文件 SHA-256、人工预期和判断理由见 [public-sources.json](public-sources.json)。原图保存在 Git 外，不随公共代码重新分发。网上公开不等于经过银行鉴真；这是识别与记账测试集，不是票据真伪数据集。
 
-- `SEM-01`–`SEM-88`：88 组可复现的合成图，定义在 [cases.json](cases.json)。覆盖中英德法日及地区写法、商户与商品用途、商品数量、原价/优惠/运费/税费/找零/余额、混合支付、不同消费场景、日期/秒/时区、缺字段、矛盾信息、未付款/退款/预授权、多笔交易、图内指令等。
-- `PUB-01`–`PUB-10`：10 张通过网上图片检索选取的公开原图，包含倾斜、折痕、裁切、多小票、支付宝与电商截图。来源链接、检索日、SHA-256、人工预期及理由在 [public-sources.json](public-sources.json)。先选图再跑模型；缺日期等反例照样保留。不是随机抽样，也不能推导一般识图准确率。
-- `CARD-1` / `CARD-2`：用户报告失败的两张私有原图。图片、金额、具体交易信息与完整参数留在 Git 外；公共仓库不打包这两图。
+## 覆盖与判断
 
-当前预期为 56 组直接入账、44 组追问/拒绝；用户提供候选后的拟单/确认/取消作为额外对话验证。
+平台包括淘宝/天猫订单界面、京东、拼多多、Shopee、Lazada、Amazon、支付宝、微信、X、Facebook/Meta、YouTube、GCash、PayPal，以及 SeaBank、BCA、BRI 银行转账或 ATM 小票。另含新加坡、马来西亚、日本、韩国、美国和欧洲等地的真实购物、餐饮、燃油、五金和文具小票。
 
-100 是独立图片场景数；额外确认与重复发送的对话轮次不凑入这 100 组。合成图用于控制变量，不能代替复杂自然照片。公开图可供个人本地验证，仓库仅记录链接及摘要，不重新分发原图。
+| 来源组 | 张数 |
+| --- | ---: |
+| 支付宝 / 微信 / 京东 / 拼多多 / 淘宝或天猫 | 4 / 4 / 3 / 4 / 2 |
+| Shopee / Lazada / Amazon | 4 / 8 / 2 |
+| Meta / YouTube / X | 2 / 8 / 3 |
+| GCash / PayPal | 3 / 1 |
+| SeaBank、BCA、BRI 银行转账和 ATM 凭证 | 4 |
+| 其他网页上的真实小票照片 | 28 |
+| SROIE 真实扫描小票 | 20 |
 
-判断基准：实际金额与币种、消费日期、商户/商品/服务/用途齐全，且是单笔已发生支出，即可直接记账。日期或用途缺失先追问，不能用网页发布日期、手机状态栏或收图日期补齐。只有日期而没有可用钟点，允许披露使用收图钟点。未付、退款、转账、收入和预授权不记新增支出。没有币种信息按用户指定默认 SGD（含没有其他线索的孤立 `$`），回执披露默认；有明确币种按原币，明确冲突或不能按 SGD 解释的符号才澄清。金额/币种有合理候选但仍不明确时拟单，确认前零写入。多笔图先拆分或指定目标。
+正例覆盖 13 种币种；银行样本目前集中于印尼，不能代表所有银行界面。
 
-## 复现
+61 张预期直接入账，39 张预期零写入。拒绝样本保留缺日期、年份不全、金额裁切、退款、待付款、收入和多笔交易；不是只挑容易通过的图片。正例包含折痕、倾斜、手写标注、优惠、税费、现金找零、多种货币与日期格式，以及缺用途的成功付款。
 
-需 Python 3 + Pillow，以及已有 Mac ARM64 Docker 隔离验收环境和有效官方 Codex 测试授权。自定义字体可直接传给 `render.py` 的第二个参数；默认查找 Mac/Windows 中文字体。
+- 单笔已发生支出，能确认实际金额与交易日期，即可入账。有商户、商品、服务或备注时保留相关详情；用途缺失或看不清时备注写“无”，不询问用途。
+- 成功转出的银行或平台转账默认按支出处理，不要求额外证明收款人不是自己。收入、退款、明确本人账户间划转、未付款和预授权不新增支出。
+- 缺日期或日期有歧义先询问；不能借网页发布日期、手机状态栏、订单编号或收图日期补齐。日期清楚但没有钟点，可披露采用收到图片时的钟点。
+- 没有币种信息默认 SGD，包括没有其他线索的孤立 `$`；明确原币保留，明确冲突另行澄清。
+- 一张图出现多笔不同交易时先指定目标；同一订单的多张界面不应误算成多笔。
+
+预期由人工看图确定，不以模型输出生成答案。金额、币种、日期、时分秒、备注“无”、新增行数和当前消息权威回执均核对；零写入还需要人工检查其解释是否合理。100 张不是所有平台、语言或拍摄条件的穷尽，也不能当作总体准确率。
+
+## 复现与查看
+
+使用 Python 3 和现有 Mac ARM64 Docker 隔离验收环境。生成器已移除，组装器只下载原始字节并校验哈希。输出目录必须在 Git 外。
 
 ```sh
-# 输出目录必须在 Git 外；只生成合成图：
-python3 test-cases/image-semantic/render.py /operator/private/image-suite
-
-# 下载并校验公开图，合并 88 + 10 = 98 组：
-python3 test-cases/image-semantic/assemble.py /operator/private/image-suite
-
-# 操作者持有两张故障原图时，额外合并为 100 组。
-# 私有目录的 cases.json 包含 CARD-1/CARD-2 定义和原图文件。
-python3 test-cases/image-semantic/assemble.py /operator/private/image-suite \
-  --originals-directory /operator/private/original-cases
-
+python3 test-cases/image-semantic/assemble.py /operator/private/image-real-100
+# 打开该目录的 index.html，可筛选预期入账/不入账，点图看原图及来源。
 docker build --platform linux/arm64 --target isolated-test \
   -f deploy/docker/Dockerfile.openclaw \
-  -t clawbot-message-acceptance:image-semantic .
-export CLAWBOT_CORPUS_IMAGE=clawbot-message-acceptance:image-semantic
-export CLAWBOT_IMAGE_CASES_DIR=/operator/private/image-suite
+  -t clawbot-message-acceptance:image-real-20261011 .
+export CLAWBOT_CORPUS_IMAGE=clawbot-message-acceptance:image-real-20261011
+export CLAWBOT_IMAGE_CASES_DIR=/operator/private/image-real-100
 node scripts/mac/run-wechat-corpus.mjs run
 ```
 
-下载失败或来源哈希改变即停止，由操作者重新核对图片及预期；不能静默替换。完整入口与授权说明见 [测试说明](../README.md#图片与时间的实际模型测试)。运行独占隔离状态；不要并发启动两个模型 CLI。合成图字体、排版与来源图均应目视检查后再用于验收。
+来源失效或哈希变化即停止，不能静默换图。模型使用官方 Codex harness；独占隔离测试状态，账本为 `18888`，微信发送被截获。不能把隔离测试当作手机、腾讯传输或生产发布验收。详见[运行说明](../README.md#图片与时间的实际模型测试)。
 
-## 验收与报告
-
-完整链路为图片 → 官方前置识图 → 记账模型 → 可信微信消息上下文 → 正式工具 → 18888 隔离账本 → 当前消息权威回执。微信发送被截获，不能把本测试当作手机或腾讯传输验收。
-
-每组比较真实新增交易数量、原币金额、币种、日期、可读时分秒及回复；直接入账与拟单必须有当前消息权威回执。拒绝/追问必须零写入且无候选；歧义候选必须零写入、金额有依据。另人工审核回复理由和用途，不能把“不写”一律算对。
-
-本轮执行记录在 [结果报告](../results/2026-10-11-image-semantic.md) 中逐组列出；原始日志、图片和账本保存在私有验收目录。历史失败、修复原因、复验、未执行边界分别记录。上述 100 组测试没有生产写入；后续用户明确授权的两笔原图补录见发布记录。
-
-用户追加默认 SGD 规则后的补充合成图见 [followup-cases.json](followup-cases.json)，可用 `render.py OUTPUT_DIRECTORY --cases test-cases/image-semantic/followup-cases.json` 生成到单独目录；它们不计入主集的 100 组。另复验币种冲突确认/取消、补日期后重发与原图防重。
+[上一轮报告](../results/2026-10-11-image-semantic.md)属于历史的 88 合成 + 10 公开 + 2 私有图测试，不能当作当前真实 100 张的结果。旧合成定义和生成器已从当前工作树移除，历史提交与报告保留可追溯性。上一版补录及历史测试见[旧发布记录](../../docs/handoffs/2026-10-11-image-semantic.md)。当前真实图片及缺用途规则已在 Mac `9d89ed2` 发布，见[本轮发布](../../docs/handoffs/2026-10-11-image-real.md)与[完整实测报告](../results/2026-10-11-image-real.md)。

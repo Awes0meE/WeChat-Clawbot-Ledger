@@ -1,0 +1,173 @@
+{
+  "selection": "Ten varied search results selected before model evaluation; incomplete images retained as missing-field tests. Not a random representative sample.",
+  "cases": [
+    {
+      "id": "PUB-01",
+      "sourcePage": "https://mothership.sg/2021/05/family-meal-under-15-giant/",
+      "imageUrl": "https://static.mothership.sg/1/2021/05/ezgif.com-gif-maker-1.jpg",
+      "file": "PUB-01.jpg",
+      "bytes": 1537000,
+      "sha256": "a4ac70056e1a7b3f61d3f01a0afb03b468c918c142d83b18d6bf6a836410abf5",
+      "retrievedDate": "2026-10-11",
+      "expected": {
+        "action": "record",
+        "amount": "14.73",
+        "currency": "SGD",
+        "localDate": "2021-04-25",
+        "localTime": "15:12"
+      },
+      "manualReason": "折痕小票：最终含税总额 14.73 SGD，日期 25/04/21 15:12；优惠总额和税额不再扣减。",
+      "sourceKind": "public-web-image"
+    },
+    {
+      "id": "PUB-02",
+      "sourcePage": "https://4travel.jp/travelogue/11590373",
+      "imageUrl": "https://cdn.4travel.jp/img/thumbnails/imk/travelogue_pict/64/59/22/650x_64592287.jpg?updated_at=1579657344",
+      "file": "PUB-02.jpg",
+      "bytes": 42927,
+      "sha256": "486d4ce595c9a71dab2f366f456e1b1d4545f0c6a7df44b29070216ebb9c623e",
+      "retrievedDate": "2026-10-11",
+      "expected": {
+        "action": "reject",
+        "replyContains": [
+          "日期"
+        ]
+      },
+      "manualReason": "小票底部被裁切；9.10 SGD 与用途明确，图片无完整日期，必须补日期。",
+      "sourceKind": "public-web-image"
+    },
+    {
+      "id": "PUB-03",
+      "sourcePage": "https://pijitailai.blogspot.com/2013/06/how-come-finest-worth-so-much-at-ntuc.html",
+      "imageUrl": "https://4.bp.blogspot.com/-rfab6kXmugM/UawKx4sYuQI/AAAAAAAAAxs/AhPs-jhw2Rw/s1600/SAM_3589%2BNTUC.JPG",
+      "file": "PUB-03.jpg",
+      "bytes": 290534,
+      "sha256": "59ec1c9221b4900a802ea8b120088643dac5aa66c0828a591ab4e775f071c3aa",
+      "retrievedDate": "2026-10-11",
+      "expected": {
+        "action": "reject",
+        "replyContains": [
+          "日期"
+        ]
+      },
+      "manualReason": "超市小票底部被裁切；8.45 SGD 与用途明确，但无日期，必须补日期。",
+      "sourceKind": "public-web-image"
+    },
+    {
+      "id": "PUB-04",
+      "sourcePage": "https://amylamsg.com/2025/08/02/hello-august-2025/",
+      "imageUrl": "https://i0.wp.com/amylamsg.com/wp-content/uploads/2025/07/IMG_4089.jpg?ssl=1",
+      "file": "PUB-04.jpg",
+      "bytes": 2245349,
+      "sha256": "b53bda295360744f57f5c076b9f0878d72d7653dec08cc514a3fd64beae077ae",
+      "retrievedDate": "2026-10-11",
+      "expected": {
+        "action": "reject",
+        "replyContains": [
+          "日期"
+        ]
+      },
+      "manualReason": "购物券与现金混合付款，图片底部被裁切、无日期；先补日期，不能用网页发布日期。",
+      "sourceKind": "public-web-image"
+    },
+    {
+      "id": "PUB-05",
+      "sourcePage": "https://opendocs.alipay.com/open/140/104600?pathHash=dc743561",
+      "imageUrl": "https://cdn.nlark.com/yuque/0/2022/png/179989/1652776024473-d3ced605-81fe-4a1e-bd2d-ffffad808b36.png",
+      "file": "PUB-05.png",
+      "bytes": 223235,
+      "sha256": "df53764a2c5b07df1a0ee84e606fef243931b1698b9e46538f14820d4b8a59d9",
+      "retrievedDate": "2026-10-11",
+      "expected": {
+        "action": "reject",
+        "replyContains": [
+          "日期"
+        ]
+      },
+      "manualReason": "支付成功 145 CNY，砂锅店；只有手机 14:27，无消费日期，先补日期。",
+      "sourceKind": "public-web-image"
+    },
+    {
+      "id": "PUB-06",
+      "sourcePage": "https://jlog.app/posts/list/4464.page?isRedirect=true",
+      "imageUrl": "https://jlog.app/upload/images/2020-10/1602608742979_%E9%9B%86%E8%AF%9A%E4%BF%A1_c0bb6a62122c987d1b09dfb425285c6.jpg",
+      "file": "PUB-06.jpg",
+      "bytes": 84125,
+      "sha256": "2f3e3c2412e7dda5c09351d04868efacec52ccc35ca5e0eccd11f6e0f8ce28db",
+      "retrievedDate": "2026-10-11",
+      "expected": {
+        "action": "record",
+        "amount": "18.80",
+        "currency": "CNY",
+        "localDate": "2019-10-29",
+        "localTime": "11:02",
+        "localSecond": 3
+      },
+      "manualReason": "电商实付 18.80 CNY；付款时间优先创建、发货与成交时间，保留秒。售后按钮并非退款成功。",
+      "sourceKind": "public-web-image"
+    },
+    {
+      "id": "PUB-07",
+      "sourcePage": "https://developer.alibaba.com/docs/doc.htm?articleId=109397&docType=1&treeId=571",
+      "imageUrl": "https://img.alicdn.com/top/i1/LB1B3.KASzqK1RjSZFLXXcn2XXa",
+      "file": "PUB-07.jpg",
+      "bytes": 655158,
+      "sha256": "2c3a368f38338ddbee01262b88513247e38d690f4f4f7f1e2e9b0cf9393f56c3",
+      "retrievedDate": "2026-10-11",
+      "expected": {
+        "action": "reject"
+      },
+      "manualReason": "虽有“实付款”标签，明确等待预付款且尾款未开始，不能记成已消费。",
+      "sourceKind": "public-web-image"
+    },
+    {
+      "id": "PUB-08",
+      "sourcePage": "https://ameblo.jp/yuiyui1010yuiyui1010/entry-12866505914.html",
+      "imageUrl": "https://stat.ameba.jp/user_images/20240907/21/yuiyui1010yuiyui1010/0c/b9/j/o1080108015483672555.jpg",
+      "file": "PUB-08.jpg",
+      "bytes": 145282,
+      "sha256": "d29982100bb991b2f6d476e64344afceb28c496220637c5870cc209ed7b9a4fc",
+      "retrievedDate": "2026-10-11",
+      "expected": {
+        "action": "reject",
+        "replyContains": [
+          "日期"
+        ]
+      },
+      "manualReason": "日文小票 2628 JPY；现金交付 2630 和找零 2；图片无日期，不能使用博客日期。",
+      "sourceKind": "public-web-image"
+    },
+    {
+      "id": "PUB-09",
+      "sourcePage": "https://www.telepolis.pl/tech/aplikacje/eparagony-rzad-aplikacja-zmiany",
+      "imageUrl": "https://pliki.telepolis.pl/images/2023/06/eparagony-zmiana-rzad.jpg",
+      "file": "PUB-09.jpg",
+      "bytes": 438909,
+      "sha256": "06f09458e8d38f0452fe1ec8ce7b40a0ebd8392e887971cd8e4692977feec289",
+      "retrievedDate": "2026-10-11",
+      "expected": {
+        "action": "record",
+        "amount": "24.58",
+        "currency": "EUR",
+        "localDate": "2021-11-18",
+        "localTime": "14:29"
+      },
+      "manualReason": "倾斜法文小票：含税 24.58 EUR，税前 23.30 和税额 1.23 不作最终支出；18.11.21 14:29。",
+      "sourceKind": "public-web-image"
+    },
+    {
+      "id": "PUB-10",
+      "sourcePage": "https://funanit.com/shop/gong-yuan-ma-la-tang-gong-yuan-ma-la-tang-funan-mall",
+      "imageUrl": "https://assets.shopy.page/funan/shop_images/gong-yuan-ma-la-tang-gong-yuan-ma-la-tang-funan-mall_gong-yuan-ma-la-tang-gong-yuan-ma-la-tang-funan-mall_a617732e_processed.jpg",
+      "file": "PUB-10.jpg",
+      "bytes": 182591,
+      "sha256": "c2f81f7402b75bd56aa2fb675c4a5432da57c1d4ba556b353e816ff9615929ed",
+      "retrievedDate": "2026-10-11",
+      "expected": {
+        "action": "reject"
+      },
+      "manualReason": "同图两张独立小票 17.35 和 25.70 SGD，先请用户指定或拆图，不能合并或任选。",
+      "sourceKind": "public-web-image"
+    }
+  ]
+}

@@ -162,8 +162,10 @@ function validateSemanticImageExpense(input, { confirmed }) {
   if (!boundedEvidence(evidence.currencyEvidence) || typeof evidence.currencyAmbiguous !== 'boolean') throw new Error('image-currency');
   if (evidence.currencyDefaulted !== undefined && typeof evidence.currencyDefaulted !== 'boolean') throw new Error('image-currency');
   if (evidence.currencyDefaulted && (input.currency !== 'SGD' || evidence.currencyAmbiguous)) throw new Error('image-currency');
-  if (!boundedEvidence(evidence.purposeEvidence) || !boundedEvidence(input.comment, 255)
-    || evidence.purposeAmbiguous !== false) throw new Error('image-purpose');
+  // Missing purpose is informational; the core supplies the user's default comment.
+  if (typeof evidence.purposeAmbiguous !== 'boolean'
+    || (evidence.purposeEvidence && !boundedEvidence(evidence.purposeEvidence))
+    || (input.comment && !boundedEvidence(input.comment, 255))) throw new Error('image-evidence');
   imageExpenseTimeParts(input);
   if (evidence.orderReference !== undefined && (typeof evidence.orderReference !== 'string'
     || evidence.orderReference.length > 160)) throw new Error('image-order');

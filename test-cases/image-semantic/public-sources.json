@@ -1,173 +1,1758 @@
 {
-  "selection": "Ten varied search results selected before model evaluation; incomplete images retained as missing-field tests. Not a random representative sample.",
+  "reviewedOn": "2026-10-11",
   "cases": [
     {
-      "id": "PUB-01",
-      "sourcePage": "https://mothership.sg/2021/05/family-meal-under-15-giant/",
-      "imageUrl": "https://static.mothership.sg/1/2021/05/ezgif.com-gif-maker-1.jpg",
-      "file": "PUB-01.jpg",
-      "bytes": 1537000,
-      "sha256": "a4ac70056e1a7b3f61d3f01a0afb03b468c918c142d83b18d6bf6a836410abf5",
-      "retrievedDate": "2026-10-11",
+      "id": "C001",
+      "file": "C001.jpg",
+      "sourcePage": "https://jingyan.baidu.com/article/72ee561a4f6941a06138dffb.html",
+      "imageUrl": "https://exp-picture.cdn.bcebos.com/b57fb6db574afa321e5ddf4154b2dc19cf2c1418.jpg?x-bce-process=image%2Fresize%2Cm_lfit%2Cw_640%2Climit_1%2Fformat%2Cf_auto%2Fquality%2Cq_80",
+      "sha256": "b1d65d82c46032a3d278de87610b4df6b3904a4adedad365a395fd1b314eeb2e",
+      "bytes": 23841,
+      "kind": "web-original",
+      "scenario": "支付宝｜转入收入与模糊日期",
+      "reason": "支付宝转入收入，不能记成支出。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C003",
+      "file": "C003.png",
+      "sourcePage": "https://www.daetool.com/question/7520.html",
+      "imageUrl": "https://res.daetool.com/wm/image/2026-02/819ff9072ebd7306.png",
+      "sha256": "80b82bab539c2a086754500d2b6fe7f6d5690295dfb8481bdc9b41097a7912c8",
+      "bytes": 187637,
+      "kind": "web-original",
+      "scenario": "支付宝｜软件会员，同一账单两幅界面",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "69",
+        "currency": "CNY",
+        "localDate": "2025-12-22",
+        "localTime": "15:52",
+        "localSecond": 1,
+        "action": "record"
+      }
+    },
+    {
+      "id": "C004",
+      "file": "C004.jpg",
+      "sourcePage": "https://stage1st.com/2b/thread-2206666-7-1.html",
+      "imageUrl": "https://p.sda1.dev/20/012f58e807f9e412c96f4bb00f5294ce/image.jpg",
+      "sha256": "900a18fdb30a8e7d563eb7f1bd41594739edd537aab41a63941725c688fe4e36",
+      "bytes": 259527,
+      "kind": "web-original",
+      "scenario": "支付宝｜商户收款码，附付款备注",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "10",
+        "currency": "CNY",
+        "localDate": "2024-12-05",
+        "localTime": "19:24",
+        "localSecond": 21,
+        "action": "record"
+      }
+    },
+    {
+      "id": "C005",
+      "file": "C005.jpg",
+      "sourcePage": "https://k.sina.cn/article_7857201856_1d45362c001902uup6.html",
+      "imageUrl": "https://k.sinaimg.cn/n/sinakd20260304s/558/w425h933/20260304/dd19-47fcfcfdad8ffd92eb1885eb06c2c227.jpg/w700d1q75cms.jpg",
+      "sha256": "78a8233e978c655e0e3d1962d6340c062f92021f24e5486a54627f9ee15e9314",
+      "bytes": 62483,
+      "kind": "web-original",
+      "scenario": "微信｜聊天内两笔不同付款",
+      "reason": "同图含多笔不同微信付款，未指定目标。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C008",
+      "file": "C008.jpg",
+      "sourcePage": "https://www.scribd.com/document/698001517",
+      "imageUrl": "https://imgv2-1-f.scribdassets.com/img/document/698001517/original/8db0ade18e/1712371843?v=1",
+      "sha256": "14c76de35baa3375ecfdff27faabb81b09ef6d7bae00812e3631d357ae88500a",
+      "bytes": 94102,
+      "kind": "web-original",
+      "scenario": "Amazon｜英国已付购物发票",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "27.94",
+        "currency": "GBP",
+        "localDate": "2022-02-10",
+        "action": "record"
+      }
+    },
+    {
+      "id": "C012",
+      "file": "C012.jpg",
+      "sourcePage": "https://pt.scribd.com/document/854868668",
+      "imageUrl": "https://imgv2-2-f.scribdassets.com/img/document/854868668/original/2e88f623bf/1?v=1",
+      "sha256": "a97ccbae991b24d961b56bef331876eaadf5ebac27a40202cc93fbed2713992e",
+      "bytes": 36977,
+      "kind": "web-original",
+      "scenario": "Meta｜巴西广告付款收据",
+      "reason": "已付 Meta 广告费用；目录无广告类别，归其他支出，不归培训进修。月份按图中原文读取。",
+      "expected": {
+        "amount": "21",
+        "currency": "BRL",
+        "localDate": "2025-01-16",
+        "localTime": "23:45",
+        "action": "record",
+        "category": [
+          "其他杂项",
+          "其他支出"
+        ]
+      }
+    },
+    {
+      "id": "C013",
+      "file": "C013.jpg",
+      "sourcePage": "https://www.scribd.com/document/854001719",
+      "imageUrl": "https://imgv2-1-f.scribdassets.com/img/document/854001719/original/5843796536/1?v=1",
+      "sha256": "fdddb472c368c59ca919c1f0a99f6ef90e24fc598e2d14a7b78c0a496bed4486",
+      "bytes": 50308,
+      "kind": "web-original",
+      "scenario": "Meta｜欧元广告付款，含投放期间",
+      "reason": "已付 Meta 广告费用；目录无广告类别，归其他支出，不归培训进修。月份按图中原文读取。",
+      "expected": {
+        "amount": "2",
+        "currency": "EUR",
+        "localDate": "2025-04-05",
+        "localTime": "19:30",
+        "action": "record",
+        "category": [
+          "其他杂项",
+          "其他支出"
+        ]
+      }
+    },
+    {
+      "id": "C015",
+      "file": "C015.jpg",
+      "sourcePage": "https://ecywang.com/pic/aj1%E4%BB%98%E6%AC%BE%E8%AE%A2%E5%8D%95%E6%88%AA%E5%9B%BE/",
+      "imageUrl": "https://y.zdmimg.com/202005/31/5ed283e751a861697.jpg",
+      "sha256": "da1116ff04caa6e6df931645bbc646b9540946f90434d33b4365d3cef3d95305",
+      "bytes": 128708,
+      "kind": "web-original",
+      "scenario": "京东｜优惠后待付款",
+      "reason": "京东待付款订单。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C018",
+      "file": "C018.jpg",
+      "sourcePage": "https://min.news/en/tech/1f1c4c4fa1bf977e9d38fd5159edf906.html",
+      "imageUrl": "https://p1-tt.byteimg.com/origin/tos-cn-i-qvj2lq49k0/1706ed66fa0d47e5b75217e4711eef17.jpg",
+      "sha256": "7706e52d028e7fe468caab37779b590dc93bd3706c39982caf5225da94a1dd6e",
+      "bytes": 102055,
+      "kind": "web-original",
+      "scenario": "拼多多｜先用后付、部分退款与剩余扣款",
+      "reason": "拼多多退款页面，缺原付款日期。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C019",
+      "file": "C019.jpg",
+      "sourcePage": "https://ecywang.com/pic/iphone12%E8%AE%A2%E5%8D%95%E6%88%AA%E5%9B%BE/",
+      "imageUrl": "https://y.zdmimg.com/202103/20/6055326d333ae3748.jpg",
+      "sha256": "068837b02695977f49f534bf9038b55dea642c1859cae002134b14f373564f1c",
+      "bytes": 104057,
+      "kind": "web-original",
+      "scenario": "京东｜手机订单，支付与物流日期并存",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "6283",
+        "currency": "CNY",
+        "localDate": "2021-03-20",
+        "localTime": "07:17",
+        "localSecond": 37,
+        "action": "record"
+      }
+    },
+    {
+      "id": "C020",
+      "file": "C020.jpg",
+      "sourcePage": "https://www.jb51.net/softjc/935019.html",
+      "imageUrl": "https://img.jbzj.com/file_images/article/202404/2024042711081398.jpg",
+      "sha256": "a574e9130a33569bf41646ca6a4140ceb67d22e471614b6b9daf87becb2c5802",
+      "bytes": 56257,
+      "kind": "web-original",
+      "scenario": "拼多多｜待付款订单",
+      "reason": "拼多多待付款，不能按商品价入账。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C022",
+      "file": "C022.jpg",
+      "sourcePage": "https://www.dcard.tw/f/buyonline/p/257142427",
+      "imageUrl": "https://megapx-assets.dcard.tw/images/f415df98-89de-47c4-9d24-b91b5858650d/1280.jpeg",
+      "sha256": "f33f87c935b4aeb41bc12a49390f2597f43039763dfd10d76fa739e0c26088bc",
+      "bytes": 55285,
+      "kind": "web-original",
+      "scenario": "拼多多｜已支付、商品详情遮挡",
+      "reason": "已发生的一笔支出；用途缺失或商品被遮挡，备注写无，不再追问用途。",
+      "expected": {
+        "amount": "9.9",
+        "currency": "CNY",
+        "localDate": "2019-11-04",
+        "localTime": "23:14",
+        "localSecond": 6,
+        "action": "record",
+        "commentEquals": "无"
+      }
+    },
+    {
+      "id": "C024",
+      "file": "C024.jpg",
+      "sourcePage": "https://post.smzdm.com/talk/p/a4xnv85l/",
+      "imageUrl": "https://qna.smzdm.com/202403/02/65e328f56a73e6519.jpg_e680.jpg",
+      "sha256": "a94f4db47987cae1ccdd4323050c2301fa190ccef5f218bef3eefce5fc6853da",
+      "bytes": 67019,
+      "kind": "web-original",
+      "scenario": "京东｜磨豆机购物订单",
+      "reason": "已付磨豆机订单，金额日期明确；家用电器不是数码装备。",
+      "expected": {
+        "amount": "489",
+        "currency": "CNY",
+        "localDate": "2024-01-25",
+        "localTime": "07:17",
+        "localSecond": 6,
+        "action": "record",
+        "category": [
+          "居家物业",
+          "日常用品"
+        ]
+      }
+    },
+    {
+      "id": "C026",
+      "file": "C026.jpg",
+      "sourcePage": "https://www.smzdm.com/p/60539533/",
+      "imageUrl": "https://qny.smzdm.com/202209/15/6322e678269c41341.jpg",
+      "sha256": "26c3281504f119ed310fc8992eac4518106b6991224fe43287eb4a96918b9ae2",
+      "bytes": 55840,
+      "kind": "web-original",
+      "scenario": "拼多多｜优惠后的实付清楚但无日期",
+      "reason": "拼多多已支付，但交易日期未显示。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C027",
+      "file": "C027.jpg",
+      "sourcePage": "https://www.carousell.ph/p/desktop-computer-complete-pc-set-i3-monitor-19-5-inch-1221100149/",
+      "imageUrl": "https://media.karousell.com/media/photos/products/2023/3/17/desktop_computer_complete_pc_s_1679019168_9052fa3a_progressive.jpg",
+      "sha256": "36c8fb0f30c7a497dc29dc826c1ecc75b7cc7c7d251ae72f64eef1acf9f94d3e",
+      "bytes": 71161,
+      "kind": "web-original",
+      "scenario": "Lazada｜两件电脑，实付总额裁切",
+      "reason": "Lazada 长截图裁掉最终金额。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C028",
+      "file": "C028.jpg",
+      "sourcePage": "https://pantip.com/topic/43051113",
+      "imageUrl": "https://f.ptcdn.info/950/085/000/m2sjjfzxiGVEY7eG7yg-o.jpg",
+      "sha256": "1c48bf6543c333f15bffc6398f84887722f48a41933c9f7b0795f2d66463566f",
+      "bytes": 128916,
+      "kind": "web-original",
+      "scenario": "Lazada｜泰语摄影器材，优惠后总额",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "10208",
+        "currency": "THB",
+        "localDate": "2024-07-28",
+        "localTime": "16:25",
+        "localSecond": 5,
+        "action": "record"
+      }
+    },
+    {
+      "id": "C029",
+      "file": "C029.jpg",
+      "sourcePage": "https://pictr.com/image/BeOzWQ",
+      "imageUrl": "https://pictr.com/images/2022/04/18/BeOzWQ.md.jpg",
+      "sha256": "da0245a778fa0db022d57dd6e975a38b72beedf85716c942077e47508aee93c8",
+      "bytes": 79425,
+      "kind": "web-original",
+      "scenario": "Lazada｜马来西亚订单已退款",
+      "reason": "Lazada 退款状态，不能新增支出。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C030",
+      "file": "C030.jpg",
+      "sourcePage": "https://www.scribd.com/document/556061376",
+      "imageUrl": "https://imgv2-2-f.scribdassets.com/img/document/556061376/original/fb6a83220e/1?v=1",
+      "sha256": "7673537d141518abb44ad2c64abdc838f42acf1feba9b7f94fd286a5aa3372f7",
+      "bytes": 80820,
+      "kind": "web-original",
+      "scenario": "Amazon｜印度电费缴费成功",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "545",
+        "currency": "INR",
+        "localDate": "2021-06-26",
+        "action": "record"
+      }
+    },
+    {
+      "id": "C031",
+      "file": "C031.jpg",
+      "sourcePage": "https://www.carousell.com.my/p/toshiba-washing-machine-1251394802/",
+      "imageUrl": "https://media.karousell.com/media/photos/products/2023/8/27/toshiba_washing_machine_1693132975_cfe89301_progressive.jpg",
+      "sha256": "5893312f864f688495d35ce60331acd31f468dc5fb4f11e1ac90ee5a6479dec9",
+      "bytes": 70628,
+      "kind": "web-original",
+      "scenario": "Lazada｜马来西亚洗衣机，只显示单价",
+      "reason": "Lazada 只显示商品单价，未显示订单实付或完整费用。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C032",
+      "file": "C032.jpg",
+      "sourcePage": "https://mediakonsumen.com/2020/01/07/surat-pembaca/barang-pesanan-saya-tidak-dikirim-lazada/amp",
+      "imageUrl": "https://mediakonsumen.com/files/2020/01/Screenshot_20200107-101025_Lazada.jpg",
+      "sha256": "4c183763d2dca8c2cc8dc8be2f31053029432751bc2e85eda882dd22f6e62f48",
+      "bytes": 55907,
+      "kind": "web-original",
+      "scenario": "Lazada｜印尼手机，商品价与总额不同",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "1340800",
+        "currency": "IDR",
+        "localDate": "2019-12-30",
+        "localTime": "23:45",
+        "localSecond": 31,
+        "action": "record"
+      }
+    },
+    {
+      "id": "C033",
+      "file": "C033.png",
+      "sourcePage": "https://mediakonsumen.com/2020/06/06/surat-pembaca/pelayanan-lazada-sangat-tidak-solutif-dan-tidak-memuaskan",
+      "imageUrl": "https://mediakonsumen.com/files/2020/06/Screenshot_20200605-092309-1-576x1024.png",
+      "sha256": "2c53b700794c39e5353a279a4fa4cc8a93f2c29079321529bee84cfae77cb6fb",
+      "bytes": 46437,
+      "kind": "web-original",
+      "scenario": "Lazada｜印尼鞋子，运费及优惠",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "546400",
+        "currency": "IDR",
+        "localDate": "2020-05-28",
+        "localTime": "20:10",
+        "localSecond": 20,
+        "action": "record"
+      }
+    },
+    {
+      "id": "C034",
+      "file": "C034.jpg",
+      "sourcePage": "https://pantip.com/topic/39544475",
+      "imageUrl": "https://f.ptcdn.info/612/067/000/q3qnjz5nenr6c2AjeJVu-o.jpg",
+      "sha256": "0bdacd08a2767157dcc128128c83a061ab17ce982ace3a533a8d1e669fd696ea",
+      "bytes": 83072,
+      "kind": "web-original",
+      "scenario": "Lazada｜泰语家电，费用明细底部裁切",
+      "reason": "人工复核修正：付款时间及商品1260、运费38、总优惠78完整可见，且优惠子项40+38解释总优惠。完整结算唯一为1260+38−78=1220；不应仅因总额标签被裁切拒绝。",
       "expected": {
         "action": "record",
-        "amount": "14.73",
-        "currency": "SGD",
-        "localDate": "2021-04-25",
-        "localTime": "15:12"
-      },
-      "manualReason": "折痕小票：最终含税总额 14.73 SGD，日期 25/04/21 15:12；优惠总额和税额不再扣减。",
-      "sourceKind": "public-web-image"
+        "amount": "1220",
+        "currency": "THB",
+        "localDate": "2019-12-12",
+        "localTime": "11:30",
+        "localSecond": 49
+      }
     },
     {
-      "id": "PUB-02",
-      "sourcePage": "https://4travel.jp/travelogue/11590373",
-      "imageUrl": "https://cdn.4travel.jp/img/thumbnails/imk/travelogue_pict/64/59/22/650x_64592287.jpg?updated_at=1579657344",
-      "file": "PUB-02.jpg",
-      "bytes": 42927,
-      "sha256": "486d4ce595c9a71dab2f366f456e1b1d4545f0c6a7df44b29070216ebb9c623e",
-      "retrievedDate": "2026-10-11",
+      "id": "C035",
+      "file": "C035.jpg",
+      "sourcePage": "https://pantip.com/topic/38505725",
+      "imageUrl": "https://f.ptcdn.info/224/062/000/pm3d8lquoIi2ZkQWlsF-o.jpg",
+      "sha256": "82e8b2f3f640bf3c6d924df001261ca60257246dfada8540597e0388deb7d231",
+      "bytes": 116773,
+      "kind": "web-original",
+      "scenario": "Lazada｜泰语待支付家具",
+      "reason": "Lazada 泰语待付款订单。",
       "expected": {
-        "action": "reject",
-        "replyContains": [
-          "日期"
-        ]
-      },
-      "manualReason": "小票底部被裁切；9.10 SGD 与用途明确，图片无完整日期，必须补日期。",
-      "sourceKind": "public-web-image"
+        "action": "reject"
+      }
     },
     {
-      "id": "PUB-03",
-      "sourcePage": "https://pijitailai.blogspot.com/2013/06/how-come-finest-worth-so-much-at-ntuc.html",
-      "imageUrl": "https://4.bp.blogspot.com/-rfab6kXmugM/UawKx4sYuQI/AAAAAAAAAxs/AhPs-jhw2Rw/s1600/SAM_3589%2BNTUC.JPG",
-      "file": "PUB-03.jpg",
-      "bytes": 290534,
-      "sha256": "59ec1c9221b4900a802ea8b120088643dac5aa66c0828a591ab4e775f071c3aa",
-      "retrievedDate": "2026-10-11",
+      "id": "C036",
+      "file": "C036.jpg",
+      "sourcePage": "https://tabelog.com/kanagawa/A1404/A140401/14035922/dtlrvwlst/",
+      "imageUrl": "https://tblg.k-img.com/restaurant/images/Rvw/322113/640x640_rect_d05182538c75740d6fdaaf753b83ea40.jpg",
+      "sha256": "1d6ef8427930bff8f18347de2524557baa3abb2b79a2ebf06d1446e8cc4f4295",
+      "bytes": 69501,
+      "kind": "web-original",
+      "scenario": "日本小票｜餐厅信用卡付款与拍照时间并存",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
       "expected": {
-        "action": "reject",
-        "replyContains": [
-          "日期"
-        ]
-      },
-      "manualReason": "超市小票底部被裁切；8.45 SGD 与用途明确，但无日期，必须补日期。",
-      "sourceKind": "public-web-image"
+        "amount": "2520",
+        "currency": "JPY",
+        "localDate": "2025-10-04",
+        "localTime": "14:58",
+        "action": "record"
+      }
     },
     {
-      "id": "PUB-04",
-      "sourcePage": "https://amylamsg.com/2025/08/02/hello-august-2025/",
-      "imageUrl": "https://i0.wp.com/amylamsg.com/wp-content/uploads/2025/07/IMG_4089.jpg?ssl=1",
-      "file": "PUB-04.jpg",
-      "bytes": 2245349,
-      "sha256": "b53bda295360744f57f5c076b9f0878d72d7653dec08cc514a3fd64beae077ae",
-      "retrievedDate": "2026-10-11",
+      "id": "C038",
+      "file": "C038.jpg",
+      "sourcePage": "https://maidonanews.jp/article/15227064",
+      "imageUrl": "https://p.potaufeu.asahi.com/097f-p/picture/28399747/6c2477755e23562bb60cb81d76dd728d_640px.jpg",
+      "sha256": "286ee415a6fc3802209769f697cdceb0e3ec9d8712867d094919c575b4bb9b14",
+      "bytes": 124121,
+      "kind": "web-original",
+      "scenario": "日本小票｜便利店小额消费",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
       "expected": {
-        "action": "reject",
-        "replyContains": [
-          "日期"
-        ]
-      },
-      "manualReason": "购物券与现金混合付款，图片底部被裁切、无日期；先补日期，不能用网页发布日期。",
-      "sourceKind": "public-web-image"
+        "amount": "575",
+        "currency": "JPY",
+        "localDate": "2021-02-03",
+        "localTime": "14:33",
+        "action": "record"
+      }
     },
     {
-      "id": "PUB-05",
-      "sourcePage": "https://opendocs.alipay.com/open/140/104600?pathHash=dc743561",
-      "imageUrl": "https://cdn.nlark.com/yuque/0/2022/png/179989/1652776024473-d3ced605-81fe-4a1e-bd2d-ffffad808b36.png",
-      "file": "PUB-05.png",
-      "bytes": 223235,
-      "sha256": "df53764a2c5b07df1a0ee84e606fef243931b1698b9e46538f14820d4b8a59d9",
-      "retrievedDate": "2026-10-11",
+      "id": "C041",
+      "file": "C041.jpg",
+      "sourcePage": "https://www.lemon8-app.com/%40hachi_8882/7549169229959119365?region=jp",
+      "imageUrl": "https://www.lemon8-app.com/seo/image?index=2&item_id=7549169229959119365&sign=054ce446d9125ff12d5a2ee27876c025",
+      "sha256": "4365fddea7019b89f71760240c54cbdef30daccc01e8eb9f6244aa3dc29c4321",
+      "bytes": 121422,
+      "kind": "web-original",
+      "scenario": "日本小票｜超市含税购物",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
       "expected": {
-        "action": "reject",
-        "replyContains": [
-          "日期"
-        ]
-      },
-      "manualReason": "支付成功 145 CNY，砂锅店；只有手机 14:27，无消费日期，先补日期。",
-      "sourceKind": "public-web-image"
+        "amount": "1706",
+        "currency": "JPY",
+        "localDate": "2025-09-11",
+        "localTime": "17:42",
+        "action": "record"
+      }
     },
     {
-      "id": "PUB-06",
+      "id": "C042",
+      "file": "C042.jpg",
+      "sourcePage": "https://ameblo.jp/makurin-walking/entry-12511566159.html",
+      "imageUrl": "https://stat.ameba.jp/user_images/20190827/23/makurin-walking/f3/75/j/o0607108014554587946.jpg",
+      "sha256": "63f742a3f4df37eebb3c7e766d9279c4f7b3042bb3000b154798d6332fd5e544",
+      "bytes": 79117,
+      "kind": "web-original",
+      "scenario": "日本小票｜旧票据与日语日期",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "2387",
+        "currency": "JPY",
+        "localDate": "2019-07-27",
+        "localTime": "17:11",
+        "action": "record"
+      }
+    },
+    {
+      "id": "C044",
+      "file": "C044.jpg",
+      "sourcePage": "https://x.com/naivas_kenya/status/670478877177835520",
+      "imageUrl": "https://pbs.twimg.com/media/CU1eHFvWUAA8wb-.jpg",
+      "sha256": "d3b03550b42438e41febe40ef6588c748c161748f76180f4053c9ea1863fbfc4",
+      "bytes": 108142,
+      "kind": "web-original",
+      "scenario": "肯尼亚小票｜Naivas 超市、交易和打印时间",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "503",
+        "currency": "KES",
+        "localDate": "2015-11-27",
+        "localTime": "16:19",
+        "localSecond": 3,
+        "action": "record"
+      }
+    },
+    {
+      "id": "C048",
+      "file": "C048.jpg",
+      "sourcePage": "https://support.google.com/youtube/thread/419227462/%EC%9C%A0%ED%8A%9C%EB%B8%8C-%ED%94%84%EB%A6%AC%EB%AF%B8%EC%97%84-%EC%9D%B4%EC%A4%91%EA%B2%B0%EC%A0%9C-%ED%99%98%EB%B6%88?hl=ko",
+      "imageUrl": "https://storage.googleapis.com/support-forums-api/attachment/thread-419227462-2919779707356493922.jpg",
+      "sha256": "e5c68a144070b3eb2bce88fc413149377dff8fd04b448704675305c04d8ca220",
+      "bytes": 61224,
+      "kind": "web-original",
+      "scenario": "YouTube｜韩语 Google Play，日期无年份",
+      "reason": "YouTube 付款日期缺年份。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C049",
+      "file": "C049.jpg",
+      "sourcePage": "https://support.google.com/youtube/thread/157135531/sudah-bayar-premium-tapi-gak-di-perpanjang?hl=id",
+      "imageUrl": "https://storage.googleapis.com/support-forums-api/attachment/thread-157135531-8760878296472443497.jpg",
+      "sha256": "8c0ebf3814b37ef61a86fd227f9024edffbc08b89da37aabcfa6c6fd16fdfbb3",
+      "bytes": 153984,
+      "kind": "web-original",
+      "scenario": "YouTube｜印尼 Google Pay，相对日期",
+      "reason": "YouTube 仅显示 Yesterday，缺截图当天日期。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C051",
+      "file": "C051.jpg",
+      "sourcePage": "https://support.google.com/youtube/thread/229067365/%EC%9D%B4%EC%A4%91-%EA%B2%B0%EC%A0%9C-%ED%8E%98%EC%9D%B4%EC%BD%94-%EA%B2%B0%EC%A0%9C%EB%B2%84%ED%8A%BC-%EC%98%A4%EB%A5%98%EB%A1%9C-%EA%B2%B0%EC%A0%9C%EB%90%A8?hl=ko",
+      "imageUrl": "https://storage.googleapis.com/support-forums-api/attachment/thread-229067365-1969650003484576610.jpeg",
+      "sha256": "203e420e86a46bf4f350d269624392d0ad3ae8429f9a485bc59d010cff1a3359",
+      "bytes": 102535,
+      "kind": "web-original",
+      "scenario": "YouTube｜韩语 PAYCO，积分与支付额并存",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "10450",
+        "currency": "KRW",
+        "localDate": "2023-08-06",
+        "localTime": "21:46",
+        "localSecond": 48,
+        "action": "record"
+      }
+    },
+    {
+      "id": "C052",
+      "file": "C052.jpg",
+      "sourcePage": "https://support.google.com/youtube/thread/339861329/youtube%E3%83%97%E3%83%AC%E3%83%9F%E3%82%A2%E3%83%A0-%E7%84%A1%E6%96%99%E3%83%88%E3%83%A9%E3%82%A4%E3%82%A2%E3%83%AB%E3%81%AB%E3%81%A4%E3%81%84%E3%81%A6?hl=ja",
+      "imageUrl": "https://storage.googleapis.com/support-forums-api/attachment/thread-339861329-8700156817709896323.jpeg",
+      "sha256": "0383cdf2ed930cd843189c9be4328341be34f7559aa174d6ddd0bc914696f7de",
+      "bytes": 66103,
+      "kind": "web-original",
+      "scenario": "YouTube｜日本 Apple 续费收据",
+      "reason": "人工复核修正：截取的 Apple 领收书只保留订阅更新日期，实际收据日期在截图外；该字段可能是下一次续费，不能据此确定本次付款日期。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C053",
+      "file": "C053.jpg",
+      "sourcePage": "https://support.google.com/googleplay/thread/176026638/history-pembelian-tidak-tercatat?hl=id",
+      "imageUrl": "https://storage.googleapis.com/support-forums-api/attachment/thread-176026638-2336740886134246004.jpg",
+      "sha256": "fb94ae177c267791d2c78b8d2cab9fc05602dc0cd503f434752988d45d28b00c",
+      "bytes": 77863,
+      "kind": "web-original",
+      "scenario": "YouTube｜印尼 Google Pay，含税且仅昨天",
+      "reason": "YouTube 仅显示 Yesterday，不能用收图时间推算。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C054",
+      "file": "C054.png",
+      "sourcePage": "https://support.google.com/youtube/thread/14275919/youtube%E3%83%97%E3%83%AC%E3%83%9F%E3%82%A2%E3%83%A0%E3%81%AE%E8%AB%8B%E6%B1%82%E3%81%AB%E3%81%A4%E3%81%84%E3%81%A6?hl=ja",
+      "imageUrl": "https://storage.googleapis.com/support-forums-api/attachment/thread-14275919-15119848687124519374.png",
+      "sha256": "943eb9a860b05e3d604756c6cadc319bc086fae500c5315ea50c101bc5bebbf6",
+      "bytes": 281517,
+      "kind": "web-original",
+      "scenario": "YouTube｜日本运营商账单内两笔扣款",
+      "reason": "同图有两笔不同订阅交易，未指定目标。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C055",
+      "file": "C055.jpg",
+      "sourcePage": "https://support.google.com/youtube/thread/160950116/%EC%9C%A0%ED%8A%9C%EB%B8%8C-%ED%94%84%EB%A6%AC%EB%AF%B8%EC%97%84-%EC%B2%AD%EA%B5%AC-%EC%98%A4%EB%A5%98?hl=ko",
+      "imageUrl": "https://storage.googleapis.com/support-forums-api/attachment/thread-160950116-14245180050086255362.jpg",
+      "sha256": "b9ade690b676b3e52dcc751cb3a37fa6e1eac1fa4c45d86964a55649760cedb5",
+      "bytes": 97376,
+      "kind": "web-original",
+      "scenario": "YouTube｜韩国已批准消费与积分",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "10450",
+        "currency": "KRW",
+        "localDate": "2022-04-23",
+        "localTime": "00:17",
+        "action": "record"
+      }
+    },
+    {
+      "id": "C056",
+      "file": "C056.jpg",
+      "sourcePage": "https://support.google.com/youtube/thread/163214322/youtube-premium?hl=id",
+      "imageUrl": "https://storage.googleapis.com/support-forums-api/attachment/thread-163214322-1386719402604410019.jpg",
+      "sha256": "2d8fa9d123b1cc33104a2cdd5521d501859fe4b8eb8c9db3a812cab807bc44bf",
+      "bytes": 176559,
+      "kind": "web-original",
+      "scenario": "YouTube｜印尼 GoPay 完成付款",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "65490",
+        "currency": "IDR",
+        "localDate": "2022-05-10",
+        "localTime": "20:17",
+        "action": "record"
+      }
+    },
+    {
+      "id": "C058",
+      "file": "C058.jpg",
+      "sourcePage": "https://id.carousell.com/p/bukti-transaksi-via-marketplace-1204391120/",
+      "imageUrl": "https://media.karousell.com/media/photos/products/2022/12/20/bukti_transaksi_via_marketplac_1671555114_c7564175_progressive.jpg",
+      "sha256": "216a2d7ce1b85f5422ca133bd5dfd04aa903a901c9745702f372e5983d747bb0",
+      "bytes": 51672,
+      "kind": "web-original",
+      "scenario": "Shopee｜卖家收入、买家付款额不同",
+      "reason": "Shopee 卖家视角的收入，不作为买家支出。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C059",
+      "file": "C059.png",
+      "sourcePage": "https://mediakonsumen.com/2019/11/23/surat-pembaca/transaksi-menggunakan-paylater-di-shopee-barang-tidak-diterima-akun-penjual-sudah-dihapus",
+      "imageUrl": "https://mediakonsumen.com/files/2019/11/5dd7ff4736c2a-576x1024.png",
+      "sha256": "7aea237c784037bbe71aa06c1ca04fabed1ad04b268dfea8d447aebd228ee0b8",
+      "bytes": 111803,
+      "kind": "web-original",
+      "scenario": "Shopee｜先买后付与买家评价入口",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "745962",
+        "currency": "IDR",
+        "localDate": "2019-11-17",
+        "localTime": "20:24",
+        "action": "record"
+      }
+    },
+    {
+      "id": "C060",
+      "file": "C060.jpg",
+      "sourcePage": "https://mediakonsumen.com/2023/12/27/surat-pembaca/saya-harus-menunggu-37-hari-untuk-menerima-paket-atau-pengembalian-dana-dari-shopee",
+      "imageUrl": "https://mediakonsumen.com/files/2023/12/Screenshot_2023-12-26-16-15-17-20_743e33170befb8303cd6da83c10dfea8.jpg",
+      "sha256": "958ee0c200ce4a133278f98a2b6954fcf27ae97ef6505612c5988292fc17bc26",
+      "bytes": 69693,
+      "kind": "web-original",
+      "scenario": "Shopee｜同订单两双鞋，退货按钮",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "105172",
+        "currency": "IDR",
+        "localDate": "2023-12-12",
+        "localTime": "10:38",
+        "action": "record"
+      }
+    },
+    {
+      "id": "C061",
+      "file": "C061.webp",
+      "sourcePage": "https://mediakonsumen.com/2023/09/28/surat-pembaca/masalah-retur-produk-di-shopee-hampir-setahun-tanpa-kejelasan",
+      "imageUrl": "https://mediakonsumen.com/files/2023/09/Screenshot_2023-09-27-11-51-02-635_com.shopee.id_.webp",
+      "sha256": "f5ec88f247390a2c6810e7aaf0c537e797dcff17cfbf03f54d8798c8b330440a",
+      "bytes": 60810,
+      "kind": "web-original",
+      "scenario": "Shopee｜护肤品，付款/发货/完成日期并存",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "213275",
+        "currency": "IDR",
+        "localDate": "2022-10-25",
+        "localTime": "02:33",
+        "action": "record"
+      }
+    },
+    {
+      "id": "C065",
+      "file": "C065.png",
+      "sourcePage": "https://www.woshipm.com/pd/930818.html",
+      "imageUrl": "https://image.woshipm.com/wp-files/2018/02/tdXpzfqB0F19sxWJR3uB.png",
+      "sha256": "747fdd355fb6e8d13a12b6c67bb94ae73d8601566cecafe2c46995cc49f247ce",
+      "bytes": 110606,
+      "kind": "web-original",
+      "scenario": "淘宝/天猫｜同一超市订单跨两屏",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "118.34",
+        "currency": "CNY",
+        "localDate": "2017-09-01",
+        "localTime": "21:41",
+        "localSecond": 22,
+        "action": "record"
+      }
+    },
+    {
+      "id": "C066",
+      "file": "C066.jpg",
       "sourcePage": "https://jlog.app/posts/list/4464.page?isRedirect=true",
       "imageUrl": "https://jlog.app/upload/images/2020-10/1602608742979_%E9%9B%86%E8%AF%9A%E4%BF%A1_c0bb6a62122c987d1b09dfb425285c6.jpg",
-      "file": "PUB-06.jpg",
-      "bytes": 84125,
       "sha256": "2f3e3c2412e7dda5c09351d04868efacec52ccc35ca5e0eccd11f6e0f8ce28db",
-      "retrievedDate": "2026-10-11",
+      "bytes": 84125,
+      "kind": "web-original",
+      "scenario": "淘宝/天猫｜日用品实付款与多个日期",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
       "expected": {
-        "action": "record",
-        "amount": "18.80",
+        "amount": "18.8",
         "currency": "CNY",
         "localDate": "2019-10-29",
         "localTime": "11:02",
-        "localSecond": 3
-      },
-      "manualReason": "电商实付 18.80 CNY；付款时间优先创建、发货与成交时间，保留秒。售后按钮并非退款成功。",
-      "sourceKind": "public-web-image"
+        "localSecond": 3,
+        "action": "record"
+      }
     },
     {
-      "id": "PUB-07",
-      "sourcePage": "https://developer.alibaba.com/docs/doc.htm?articleId=109397&docType=1&treeId=571",
-      "imageUrl": "https://img.alicdn.com/top/i1/LB1B3.KASzqK1RjSZFLXXcn2XXa",
-      "file": "PUB-07.jpg",
-      "bytes": 655158,
-      "sha256": "2c3a368f38338ddbee01262b88513247e38d690f4f4f7f1e2e9b0cf9393f56c3",
-      "retrievedDate": "2026-10-11",
+      "id": "C068",
+      "file": "C068.png",
+      "sourcePage": "https://jingyan.baidu.com/article/ea24bc39cbc98d9b63b3317b.html",
+      "imageUrl": "https://exp-picture.cdn.bcebos.com/cfa9ae04541bd10ff085e02dba0e1799e82aa73e.jpg?x-bce-process=image%2Fresize%2Cm_lfit%2Cw_640%2Climit_1%2Fformat%2Cf_auto%2Fquality%2Cq_80",
+      "sha256": "8867508338836afde64443d037154402aa1c80941c9b059f06f49b0c8b4c1448",
+      "bytes": 34999,
+      "kind": "web-original",
+      "scenario": "微信｜待对方收款且金额遮挡",
+      "reason": "微信待收款；金额及完整日期遮挡。",
       "expected": {
         "action": "reject"
-      },
-      "manualReason": "虽有“实付款”标签，明确等待预付款且尾款未开始，不能记成已消费。",
-      "sourceKind": "public-web-image"
+      }
     },
     {
-      "id": "PUB-08",
-      "sourcePage": "https://ameblo.jp/yuiyui1010yuiyui1010/entry-12866505914.html",
-      "imageUrl": "https://stat.ameba.jp/user_images/20240907/21/yuiyui1010yuiyui1010/0c/b9/j/o1080108015483672555.jpg",
-      "file": "PUB-08.jpg",
-      "bytes": 145282,
-      "sha256": "d29982100bb991b2f6d476e64344afceb28c496220637c5870cc209ed7b9a4fc",
-      "retrievedDate": "2026-10-11",
+      "id": "C069",
+      "file": "C069.jpg",
+      "sourcePage": "https://www.sohu.com/a/408141805_100085510",
+      "imageUrl": "https://p8.itc.cn/images01/20200717/a5ea5c309b544ba182ce9a024ffbbbfd.jpeg",
+      "sha256": "25be29894aedd3993653dc720e6abc76a6f641be7fffca9878b96846155721a5",
+      "bytes": 62664,
+      "kind": "web-original",
+      "scenario": "微信｜两笔已收款收入",
+      "reason": "微信两笔已收款收入。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C072",
+      "file": "C072.png",
+      "sourcePage": "https://soft.china.com/article/1809239.html",
+      "imageUrl": "https://soft-img.appmobile.cn/2025/0818/ndwbp5eqrmk2.png",
+      "sha256": "fd96ed8d33d969afbb5fc544cfcca7c680a68aa0752ffead253f5dccd341f74b",
+      "bytes": 62859,
+      "kind": "web-original",
+      "scenario": "微信｜已转出并收取，通用备注不算用途",
+      "reason": "已发生的一笔支出；用途缺失或商品被遮挡，备注写无，不再追问用途。",
+      "expected": {
+        "amount": "4.9",
+        "currency": "CNY",
+        "localDate": "2025-07-17",
+        "localTime": "20:26",
+        "localSecond": 16,
+        "action": "record",
+        "commentEquals": "无"
+      }
+    },
+    {
+      "id": "C075",
+      "file": "C075.jpg",
+      "sourcePage": "https://x.com/ValueAnalyst1/status/2037234667204591989",
+      "imageUrl": "https://pbs.twimg.com/media/HEWNRXxbYAQvxzz.jpg",
+      "sha256": "0d83893bd97285d208e8d7ba64c2e10e9cb580101eba2c7ca37c60688ddd5420",
+      "bytes": 71991,
+      "kind": "web-original",
+      "scenario": "X｜企业订阅，孤立美元符号默认 SGD",
+      "reason": "X 已付订阅；只有孤立 $，没有其他国家或币种线索，按用户指定默认 SGD。",
+      "expected": {
+        "amount": "10000",
+        "currency": "SGD",
+        "localDate": "2026-03-26",
+        "action": "record",
+        "category": [
+          "其他杂项",
+          "其他支出"
+        ]
+      }
+    },
+    {
+      "id": "C076",
+      "file": "C076.png",
+      "sourcePage": "https://x.com/realjohnnewburg/status/1904236314607919106",
+      "imageUrl": "https://pbs.twimg.com/media/Gm0g_uLXAAA19Rm.png",
+      "sha256": "e0666729ba3cafb3d06e1cbf55be5ef4c7226a7f7a47860dfce0ea7d7a3430ab",
+      "bytes": 14212,
+      "kind": "web-original",
+      "scenario": "X｜只有订阅服务期，没有支付日期",
+      "reason": "X 只显示服务期间，没有实际支付日期。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C077",
+      "file": "C077.jpg",
+      "sourcePage": "https://azuma-cycletour.hatenablog.com/entry/2025/01/01/202315",
+      "imageUrl": "https://cdn-ak.f.st-hatena.com/images/fotolife/A/AzumaHisahi/20250101/20250101200249.jpg",
+      "sha256": "b5eba8eed52ed82354d9ce6e2796f27fce8027b6217294b60ced25f996e8df03",
+      "bytes": 75993,
+      "kind": "web-original",
+      "scenario": "X｜日元订阅，已付历史与下次续费并存",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "10280",
+        "currency": "JPY",
+        "localDate": "2024-06-28",
+        "action": "record"
+      }
+    },
+    {
+      "id": "C079",
+      "file": "C079.png",
+      "sourcePage": "https://blogtrove.wixsite.com/sisidlan/post/how-to-use-gcash-gcredit",
+      "imageUrl": "https://static.wixstatic.com/media/5de796_ead3dc354eeb451689d6c6cbd71e92fe~mv2.png/v1/fill/w_700%2Ch_1244%2Cal_c%2Cq_90%2Cusm_0.66_1.00_0.01%2Cenc_avif%2Cquality_auto/5de796_ead3dc354eeb451689d6c6cbd71e92fe~mv2.png",
+      "sha256": "162424a86e9eb85e1c73c600b2ddfb3f2606b016bdc10072e418457891c942de",
+      "bytes": 142470,
+      "kind": "web-original",
+      "scenario": "GCash｜GCredit 超市付款",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "2833.73",
+        "currency": "PHP",
+        "localDate": "2018-11-13",
+        "localTime": "17:33",
+        "action": "record"
+      }
+    },
+    {
+      "id": "C082",
+      "file": "C082.jpg",
+      "sourcePage": "https://wehumanandtime.wordpress.com/2019/01/15/how-to-use-gcash-and-get-gcredit-from-globe-gcash/",
+      "imageUrl": "https://wehumanandtime.files.wordpress.com/2019/01/gcash-10001-nccc-supermarket-magsaysay-34-receipt-15012019-1134089215033932524806983..jpg",
+      "sha256": "b76c3fb61be4f100c3d68931a3aab74f0fd709367ba0f9115f22258909430f22",
+      "bytes": 87132,
+      "kind": "web-original",
+      "scenario": "GCash｜超市购物与返券广告",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "404.95",
+        "currency": "PHP",
+        "localDate": "2019-01-15",
+        "localTime": "11:33",
+        "action": "record"
+      }
+    },
+    {
+      "id": "C083",
+      "file": "C083.jpg",
+      "sourcePage": "https://gcashresource.com/all-you-need-to-know-about-using-qr-payments-in-gcash/",
+      "imageUrl": "https://i0.wp.com/gcashresource.com/wp-content/uploads/2020/01/gcash-stp-verify.jpg?ssl=1",
+      "sha256": "7bbf317dc2351cc3db07faed62f46f12d562c0cb1c658ee9412e293f8ad7732c",
+      "bytes": 27242,
+      "kind": "web-original",
+      "scenario": "GCash｜低金额付款与遮挡参考号",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "1",
+        "currency": "PHP",
+        "localDate": "2020-01-17",
+        "localTime": "23:11",
+        "action": "record"
+      }
+    },
+    {
+      "id": "C084",
+      "file": "C084.jpg",
+      "sourcePage": "https://www.scribd.com/document/831148294",
+      "imageUrl": "https://imgv2-2-f.scribdassets.com/img/document/831148294/original/1ff1d8ccdc/1?v=1",
+      "sha256": "4c79ed2cfd728bb5264a58096a1abe078c3149293490d02a0192aa17cd5b0ad7",
+      "bytes": 56556,
+      "kind": "web-original",
+      "scenario": "PayPal｜已发送金额但无日期",
+      "reason": "PayPal 付款截图缺交易日期。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C085",
+      "file": "C085.jpg",
+      "sourcePage": "https://funanit.com/shop/gong-yuan-ma-la-tang-gong-yuan-ma-la-tang-funan-mall",
+      "imageUrl": "https://assets.shopy.page/funan/shop_images/gong-yuan-ma-la-tang-gong-yuan-ma-la-tang-funan-mall_gong-yuan-ma-la-tang-gong-yuan-ma-la-tang-funan-mall_a617732e_processed.jpg",
+      "sha256": "c2f81f7402b75bd56aa2fb675c4a5432da57c1d4ba556b353e816ff9615929ed",
+      "bytes": 182591,
+      "kind": "web-original",
+      "scenario": "新加坡小票｜两张麻辣烫小票",
+      "reason": "同图两张不同小票，先指定目标。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C086",
+      "file": "C086.jpg",
+      "sourcePage": "https://mothership.sg/2021/05/family-meal-under-15-giant/",
+      "imageUrl": "https://static.mothership.sg/1/2021/05/ezgif.com-gif-maker-1.jpg",
+      "sha256": "a4ac70056e1a7b3f61d3f01a0afb03b468c918c142d83b18d6bf6a836410abf5",
+      "bytes": 1537000,
+      "kind": "web-original",
+      "scenario": "新加坡小票｜Giant 折痕、遮挡与底部日期",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "14.73",
+        "currency": "SGD",
+        "localDate": "2021-04-25",
+        "localTime": "15:12",
+        "action": "record"
+      }
+    },
+    {
+      "id": "C087",
+      "file": "C087.jpg",
+      "sourcePage": "https://amylamsg.com/2025/08/02/hello-august-2025/",
+      "imageUrl": "https://i0.wp.com/amylamsg.com/wp-content/uploads/2025/07/IMG_4089.jpg?ssl=1",
+      "sha256": "b53bda295360744f57f5c076b9f0878d72d7653dec08cc514a3fd64beae077ae",
+      "bytes": 2245349,
+      "kind": "web-original",
+      "scenario": "新加坡小票｜Giant 优惠券加现金但无日期",
+      "reason": "新加坡小票日期裁掉。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C089",
+      "file": "C089.jpg",
+      "sourcePage": "https://4travel.jp/travelogue/11590373",
+      "imageUrl": "https://cdn.4travel.jp/img/thumbnails/imk/travelogue_pict/64/59/22/650x_64592287.jpg?updated_at=1579657344",
+      "sha256": "486d4ce595c9a71dab2f366f456e1b1d4545f0c6a7df44b29070216ebb9c623e",
+      "bytes": 42927,
+      "kind": "web-original",
+      "scenario": "新加坡小票｜FairPrice 现金与找零、无日期",
+      "reason": "新加坡小票日期裁掉。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C091",
+      "file": "C091.webp",
+      "sourcePage": "https://www.tyla.com/news/travel/tourist-calls-police-seafood-singapore-restaurant-bill-467134-20230921",
+      "imageUrl": "https://resizer.ladbiblegroup.com/unsafe/rs%3Afit%3A3840%3A0%3A0%3A0/g%3Asm/q%3A70/aHR0cHM6Ly9ldS1pbWFnZXMuY29udGVudHN0YWNrLmNvbS92My9hc3NldHMvYmx0OGJiZjE2YzJkN2EyMDllNS9ibHRhMTA2ZmNiNjM4NGM2MTZkLzY1MGMzMTAwMDE0MTBhY2QwZGQ4ZTFhOS9yZXNpemUtNTMud2VicA.webp",
+      "sha256": "e4ed9f0720a74a13c29c13dd6442df4bd445eaf7dbf174dec42e2362612bdcd5",
+      "bytes": 51312,
+      "kind": "web-original",
+      "scenario": "新加坡小票｜海鲜餐厅税费与手写标记",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "1322.37",
+        "currency": "SGD",
+        "localDate": "2023-08-19",
+        "localTime": "21:40",
+        "action": "record"
+      }
+    },
+    {
+      "id": "C092",
+      "file": "C092.jpg",
+      "sourcePage": "https://www.asiaone.com/singapore/too-hot-handle-diner-forks-out-26-mala-bowl-food-republic",
+      "imageUrl": "https://media.asiaone.com/sites/default/files/inline-images/food%20republic%20receipt.jpeg",
+      "sha256": "074bafb78143fd16aa61464b392408a78efa51fe459efeb404f933bee5ea40e1",
+      "bytes": 113058,
+      "kind": "web-original",
+      "scenario": "新加坡小票｜Food Republic 下单与结账时间",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "26",
+        "currency": "SGD",
+        "localDate": "2022-09-23",
+        "localTime": "11:46",
+        "localSecond": 35,
+        "action": "record"
+      }
+    },
+    {
+      "id": "C094",
+      "file": "C094.jpg",
+      "sourcePage": "https://www.happycow.net/reviews/keat-lim-vegetarian-northeast-singapore-284077",
+      "imageUrl": "https://images.happycow.net/venues/1024/28/40/hcmp284077_3025085.jpeg",
+      "sha256": "fe106c5667b9bf4d3e3e9da24de9838ab622925d9786de68dd167257288514b5",
+      "bytes": 276999,
+      "kind": "web-original",
+      "scenario": "新加坡小票｜Keat Lim 餐饮",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "26.90",
+        "currency": "SGD",
+        "localDate": "2024-09-22",
+        "localTime": "13:17",
+        "localSecond": 33,
+        "action": "record"
+      }
+    },
+    {
+      "id": "C095",
+      "file": "C095.webp",
+      "sourcePage": "https://www.redants.sg/overview/story20220801-6421",
+      "imageUrl": "https://cassette.sphdigital.com.sg/image/redants/674d50a96819a0f0c144c36c351a4a6f501119222068ab34aec01b47c4ac2de8",
+      "sha256": "00ceb62bcc91b18a891c212560f7a79e214468bde59d990562039c4da613ed83",
+      "bytes": 109370,
+      "kind": "web-original",
+      "scenario": "新加坡小票｜Fu Lee 下单与结清时间",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
+      "expected": {
+        "amount": "23.70",
+        "currency": "SGD",
+        "localDate": "2022-07-20",
+        "localTime": "20:14",
+        "localSecond": 46,
+        "action": "record"
+      }
+    },
+    {
+      "id": "C096",
+      "file": "C096.png",
+      "sourcePage": "https://7news.com.au/lifestyle/internet-sad-as-shoppers-heartbreaking-receipt-detail-exposed-c-8662457",
+      "imageUrl": "https://images.7news.com.au/publication/C-8662457/87badf74459d97579617fe3c2eaa61dc9402907c.png",
+      "sha256": "7ec1f54fd8fd83a7a76e57d6e7bf9bfcb8c9ca4f5c4ef81538f4d3121eb55475",
+      "bytes": 575227,
+      "kind": "web-original",
+      "scenario": "Walmart｜地区被裁切、短日期歧义、现金和找零",
+      "reason": "地址和国家被裁掉，跨国品牌本身不能确定币种或01/11/20的月日顺序；先询问日期。补齐日期后，无其他币种线索应默认SGD。",
       "expected": {
         "action": "reject",
         "replyContains": [
           "日期"
         ]
-      },
-      "manualReason": "日文小票 2628 JPY；现金交付 2630 和找零 2；图片无日期，不能使用博客日期。",
-      "sourceKind": "public-web-image"
+      }
     },
     {
-      "id": "PUB-09",
+      "id": "C098",
+      "file": "C098.png",
+      "sourcePage": "https://didntijustfeedyou.com/episode/2019-14-01-episode-23-how-to-save-money-on-groceries-with-the-budget-mom/",
+      "imageUrl": "https://images.squarespace-cdn.com/content/v1/5b0da7065ffd2055a9a6f85a/1547345491989-6QBHGN4811MCGOTSCR77/ke17ZwdGBToddI8pDm48kBv_UPqonc0QkjVp7lmusaZ7gQa3H78H3Y0txjaiv_0fDoOvxcdMmMKkDsyUqMSsMWxHk725yiiHCCLfrh8O1z5QPOohDIaIeljMHgDF5CVlOqpeNLcJ80NK65_fV7S1UZFUQDVSm_V7g1-vmwns9FsSLAgpo8p9oLoEuD80jGG27zs2yPjc1ECvpa5Zm_kMqw/Tips%2Bfrom%2BThe%2BBudget%2BMom%2Bon%2Bhow%2Bto%2Bsave%2Bmoney%2Bon%2Bgroceries%2B%7C%2BDidn%27t%2BI%2BJust%2BFeed%2BYou%2Bfamily%2Bfood%2Bpodcast",
+      "sha256": "5b5752abe19d32d1d5d21117f55ff32d0af82769cbc6cd5dee944efcfa092634",
+      "bytes": 5774178,
+      "kind": "web-original",
+      "scenario": "美国小票｜多商家票据同图",
+      "reason": "同图多张不同商家的小票，先指定目标。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C102",
+      "file": "C102.jpg",
+      "sourcePage": "https://www.loc8nearme.com/california/long-beach/walgreens/288051/",
+      "imageUrl": "https://s1.localdatacdn.com/ca/long-beach/288051/original/QY3UyeMK0V.jpg",
+      "sha256": "02a7c5b40b0334a5be73097347c29ccc77f8e53513128bd7ce2b543d84dfa68e",
+      "bytes": 144154,
+      "kind": "web-original",
+      "scenario": "美国小票｜Walgreens 与 Costco 两笔消费",
+      "reason": "同图两笔不同商家的消费，先指定目标。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C103",
+      "file": "C103.jpg",
+      "sourcePage": "https://www.tastingtable.com/2151677/costco-california-bad-ratings-shopping-experience/",
+      "imageUrl": "https://www.tastingtable.com/img/gallery/costco-california-bad-ratings-shopping-experience/intro-1776615898.jpg",
+      "sha256": "359d5e66c825e5faa8cea7b59fa2f9a3c713af8b4bf0e4ef6ff0c80daedc62e5",
+      "bytes": 119316,
+      "kind": "web-original",
+      "scenario": "Costco｜日期被手指遮挡",
+      "reason": "Costco 小票日期被手指遮挡。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C104",
+      "file": "C104.jpg",
+      "sourcePage": "https://www.dealmoon.com/post/3226565",
+      "imageUrl": "https://imgcache.dealmoon.com/thumbimg.dealmoon.com/us2605/dealmoon/fb5/5e1/5c7/2c5eb5cd8c24f9d5207e041x730x2048x377.jpeg_480_0_3_63ae.jpeg",
+      "sha256": "c73ddf810c17470591595aaaf45a273c67b6f6a28ac01d8d8d673a85ce01a0a4",
+      "bytes": 212897,
+      "kind": "web-original",
+      "scenario": "Walmart｜79 件商品长小票、地区遮挡与短日期",
+      "reason": "人工复核修正：地域信息被遮挡，日期06/03/06不能唯一确定日月顺序；不能凭网页介绍或商店品牌判为美国日期与USD。需补具体日期。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C114",
+      "file": "C114.jpg",
       "sourcePage": "https://www.telepolis.pl/tech/aplikacje/eparagony-rzad-aplikacja-zmiany",
       "imageUrl": "https://pliki.telepolis.pl/images/2023/06/eparagony-zmiana-rzad.jpg",
-      "file": "PUB-09.jpg",
-      "bytes": 438909,
       "sha256": "06f09458e8d38f0452fe1ec8ce7b40a0ebd8392e887971cd8e4692977feec289",
-      "retrievedDate": "2026-10-11",
+      "bytes": 438909,
+      "kind": "web-original",
+      "scenario": "Lidl｜法国小票，逗号小数",
+      "reason": "单笔已发生支出；按原图读取实际总额与交易日期，保留可见钟点及秒数。",
       "expected": {
-        "action": "record",
         "amount": "24.58",
         "currency": "EUR",
         "localDate": "2021-11-18",
-        "localTime": "14:29"
-      },
-      "manualReason": "倾斜法文小票：含税 24.58 EUR，税前 23.30 和税额 1.23 不作最终支出；18.11.21 14:29。",
-      "sourceKind": "public-web-image"
+        "localTime": "14:29",
+        "action": "record"
+      }
     },
     {
-      "id": "PUB-10",
-      "sourcePage": "https://funanit.com/shop/gong-yuan-ma-la-tang-gong-yuan-ma-la-tang-funan-mall",
-      "imageUrl": "https://assets.shopy.page/funan/shop_images/gong-yuan-ma-la-tang-gong-yuan-ma-la-tang-funan-mall_gong-yuan-ma-la-tang-gong-yuan-ma-la-tang-funan-mall_a617732e_processed.jpg",
-      "file": "PUB-10.jpg",
-      "bytes": 182591,
-      "sha256": "c2f81f7402b75bd56aa2fb675c4a5432da57c1d4ba556b353e816ff9615929ed",
-      "retrievedDate": "2026-10-11",
+      "id": "C115",
+      "file": "C115.jpg",
+      "sourcePage": "https://ameblo.jp/yuiyui1010yuiyui1010/entry-12866505914.html",
+      "imageUrl": "https://stat.ameba.jp/user_images/20240907/21/yuiyui1010yuiyui1010/0c/b9/j/o1080108015483672555.jpg",
+      "sha256": "d29982100bb991b2f6d476e64344afceb28c496220637c5870cc209ed7b9a4fc",
+      "bytes": 145282,
+      "kind": "web-original",
+      "scenario": "日本小票｜日期裁切的购物明细",
+      "reason": "日本小票完整日期未显示。",
       "expected": {
         "action": "reject"
+      }
+    },
+    {
+      "id": "C116",
+      "file": "C116.jpg",
+      "sourcePage": "https://ameblo.jp/ako012570/entry-12884727233.html",
+      "imageUrl": "https://stat.ameba.jp/user_images/20250201/17/ako012570/2e/c7/j/o0831108015539470240.jpg",
+      "sha256": "0929abaa780a017b6a0229a368a584231a79ee6985b2cb09827b5ec1fd86d357",
+      "bytes": 191558,
+      "kind": "web-original",
+      "scenario": "日本小票｜日期不完整",
+      "reason": "日本小票完整日期未显示。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C118",
+      "file": "C118.jpg",
+      "sourcePage": "https://ameblo.jp/jieat/entry-12796709056.html",
+      "imageUrl": "https://stat.ameba.jp/user_images/20230403/16/jieat/21/3f/j/o0569108015264726946.jpg",
+      "sha256": "fc7a38674876a2143c3a82e45e83bb5690cb6421a8742c45937f756c133970be",
+      "bytes": 147511,
+      "kind": "web-original",
+      "scenario": "中国小票｜日期被涂掉",
+      "reason": "小票日期被涂掉。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C120",
+      "file": "C120.png",
+      "sourcePage": "https://infonegocios.info/nota-principal/a-partir-de-2025-podras-ver-cuanto-te-quita-el-estado-en-cada-compra-en-iva-y-otros-gravamenes",
+      "imageUrl": "https://infonegocios.info/content/images/2024/08/27/483393/iva-ticket.png",
+      "sha256": "be15d505ae92eda04877c560a1fdbc5d4eff4339aeb5f2a74e6cf910394dcdd6",
+      "bytes": 442509,
+      "kind": "web-original",
+      "scenario": "中国小票｜拍摄模糊",
+      "reason": "照片模糊，金额或完整日期不能可靠读取。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C121",
+      "file": "C121.jpg",
+      "sourcePage": "https://kaleaway.fi/blogi/kahden-hengen-viikon-ruokaostokset",
+      "imageUrl": "https://images.squarespace-cdn.com/content/v1/61e67c5cb52401079348646f/4e400036-9a94-47d2-b157-56f05405c486/vegan%2Band%2Bwild%2Bviikon%2Bruokaostokset%2B100%E2%82%AC.jpg",
+      "sha256": "e887f1b13de8442cec7c1dee9133f17cdf9bb08e67f1fc2557c9d889a6a4e48a",
+      "bytes": 1087499,
+      "kind": "web-original",
+      "scenario": "Lidl｜欧洲小票裁切日期",
+      "reason": "Lidl 小票交易日期未显示。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C124",
+      "file": "C124.jpg",
+      "sourcePage": "https://www.zdfheute.de/wirtschaft/supermarkt-lebensmittel-preissteigerung-gruende-100.html",
+      "imageUrl": "https://www.zdfheute.de/assets/preise-einzelhandel-100~768x432?cb=1738343322646",
+      "sha256": "c4b71d6b849f07318af926b471438621981bb4b06ecdd6e222835f1bbe52ac4b",
+      "bytes": 38839,
+      "kind": "web-original",
+      "scenario": "欧洲小票｜褪色倾斜，关键信息难辨",
+      "reason": "褪色倾斜小票，金额与日期不能可靠读取。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C127",
+      "file": "C127.jpg",
+      "sourcePage": "https://www.stern.de/panorama/nie-wieder-an-der-kasse-anstehen--so-sparen-sie-zeit-im-supermarkt-34727636.html",
+      "imageUrl": "https://image.stern.de/34727716/t/Gl/v4/w1440/r1.3333/-/einkaufen.jpg",
+      "sha256": "2dfb83857ede24e22e56f391804fd77c331a42bb4251eb2923381a21842adfb9",
+      "bytes": 173250,
+      "kind": "web-original",
+      "scenario": "德国小票｜手指遮日期与购物背景",
+      "reason": "德国小票日期被手指遮挡。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C129",
+      "file": "C129.jpg",
+      "sourcePage": "https://www.eiwittrends.nl/banken-ondanks-negatieve-inflatie-stijgen-prijzen-supermarkten-verder/",
+      "imageUrl": "https://www.eiwittrends.nl/app/uploads/2023/10/IMG_ANP-482458553.jpg",
+      "sha256": "6d6512850187ba2b80dc4dda4c7e71066a6ffa4f5b4150ad2d122e081c10a7ab",
+      "bytes": 140914,
+      "kind": "web-original",
+      "scenario": "荷兰小票｜卷曲纸张与硬币遮挡",
+      "reason": "荷兰小票日期被裁切或遮住。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C131",
+      "file": "C131.jpg",
+      "sourcePage": "https://note.com/ishity__/n/ndfcf65357b83",
+      "imageUrl": "https://assets.st-note.com/img/1765953672-S0BVu36lepNyUnM7C2JbwsRf.jpg?fit=bounds&height=2000&quality=85&width=2000",
+      "sha256": "79e827913ee1e27cd2ae4327e7b7941ba4867874adfb466529d3cf11a6a7a4a2",
+      "bytes": 341835,
+      "kind": "web-original",
+      "scenario": "德国小票｜商品优惠明细、日期裁切",
+      "reason": "德国小票只有商品与金额，缺交易日期。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "C133",
+      "file": "C133.png",
+      "sourcePage": "https://ecywang.com/pic/%E6%94%AF%E4%BB%98%E5%AE%9D%E6%94%AF%E4%BB%98%E6%88%90%E5%8A%9F%E6%88%AA%E5%9B%BE/",
+      "imageUrl": "https://ss1.baidu.com/9vo3dSag_xI4khGko9WTAnF6hhy/zhidao/wh%3D450%2C600/sign%3D80e45ea03fc79f3d8fb4ec348f91e127/a2cc7cd98d1001e970d80f50bc0e7bec55e7978c.jpg",
+      "sha256": "dbe1be9cd8c099036a98a2dcdadbf1969fda67071065f32b1999c06ea97d34aa",
+      "bytes": 44906,
+      "kind": "web-original",
+      "scenario": "支付宝｜转账成功，月份日期但无年份",
+      "reason": "支付宝付款成功，但日期缺年份。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "B01",
+      "file": "B01.jpg",
+      "sourcePage": "https://mediakonsumen.com/2024/10/22/surat-pembaca/mohon-mediasi-perihal-salah-transfer-yang-sangat-merugikan-saya",
+      "imageUrl": "https://mediakonsumen.com/files/2024/10/Screenshot_20240925_xx.jpg",
+      "sha256": "7a31b76da656e722175bb29b459175e97ae965f67d5bba55e4c19802df1b3ff7",
+      "bytes": 46997,
+      "kind": "web-original",
+      "scenario": "SeaBank → BCA｜成功转账，含可读用途",
+      "reason": "成功转出，金额和日期明确；Catatan备注栏可见raja cell，应保留原文，不因无法判断具体商品而写无。",
+      "expected": {
+        "action": "record",
+        "amount": 2350000,
+        "currency": "IDR",
+        "localDate": "2024-09-22",
+        "localTime": "18:57",
+        "commentContains": [
+          "raja cell"
+        ]
+      }
+    },
+    {
+      "id": "B02",
+      "file": "B02.webp",
+      "sourcePage": "https://mediakonsumen.com/2024/10/04/surat-pembaca/mohon-mediasi-perihal-salah-transfer-antar-rekening-bca",
+      "imageUrl": "https://mediakonsumen.com/files/2024/10/tubagus-bca.webp",
+      "sha256": "04fc744a779c5f578de19b59117db09517de2564b2c6f6a6e9c0ee0d8906145b",
+      "bytes": 50044,
+      "kind": "web-original",
+      "scenario": "BCA｜转账成功及手写说明",
+      "reason": "已成功向他人转出，实际金额和交易日期可见。",
+      "expected": {
+        "action": "record",
+        "amount": 2933233,
+        "currency": "IDR",
+        "localDate": "2024-09-03",
+        "localTime": "15:48",
+        "localSecond": 29
+      }
+    },
+    {
+      "id": "B03",
+      "file": "B03.jpeg",
+      "sourcePage": "https://mediakonsumen.com/2024/09/23/surat-pembaca/transfer-dari-bri-ke-bca-tidak-diterima",
+      "imageUrl": "https://mediakonsumen.com/files/2024/09/139fc4bb-e598-439xx-e1727062789870-800x445.jpeg",
+      "sha256": "4817c012795d7476aa01801753fac4dd759d82dc24a5006ea81eb26d7b977474",
+      "bytes": 20698,
+      "kind": "web-original",
+      "scenario": "BRI → BCA｜ATM 纸质转账凭证，金额裁切",
+      "reason": "ATM 凭证实际转出金额被裁切，不能猜测金额。",
+      "expected": {
+        "action": "reject"
+      }
+    },
+    {
+      "id": "B05",
+      "file": "B05.jpg",
+      "sourcePage": "https://id.scribd.com/document/706971193",
+      "imageUrl": "https://imgv2-2-f.scribdassets.com/img/document/706971193/original/c05baadc74/1?v=1",
+      "sha256": "fcbbec05b6e862c1084f4a00aea3cae044f95c4ddd87c6b679502fb199f45ab0",
+      "bytes": 67128,
+      "kind": "web-original",
+      "scenario": "BCA｜成功转账凭证，金额日期齐全、备注栏空白",
+      "reason": "成功向他人转出；姓名、账号和银行名称不算用途，空白备注按用户规则写无。",
+      "expected": {
+        "action": "record",
+        "amount": "585000",
+        "currency": "IDR",
+        "localDate": "2024-01-25",
+        "localTime": "18:38",
+        "localSecond": 25,
+        "commentEquals": "无",
+        "category": [
+          "其他杂项",
+          "其他支出"
+        ]
+      }
+    },
+    {
+      "id": "S01",
+      "file": "S01.jpg",
+      "sourcePage": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "imageUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/img/000.jpg",
+      "sha256": "8b85d2c325c68579b53446177602709a8f8faeeec710912f62b6ad369234887c",
+      "bytes": 98120,
+      "kind": "SROIE-real-scan",
+      "scenario": "BOOK TA .K (TAMAN DAYA) SDN BHD",
+      "reason": "真实马来西亚小票，按最终实付或现金取整后的总额入账，不能取交付现金或税前小计；可见结清时间时优先使用。",
+      "expected": {
+        "action": "record",
+        "amount": 9.0,
+        "currency": "MYR",
+        "localDate": "2018-12-25",
+        "localTime": "20:13",
+        "localSecond": 39
       },
-      "manualReason": "同图两张独立小票 17.35 和 25.70 SGD，先请用户指定或拆图，不能合并或任选。",
-      "sourceKind": "public-web-image"
+      "annotationUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/box/000.csv",
+      "annotationSha256": "6d467981bddd86522fb1dcda7c6127975fe2cec2c2d4fa87ca2d7765d4cb461a"
+    },
+    {
+      "id": "S02",
+      "file": "S02.jpg",
+      "sourcePage": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "imageUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/img/001.jpg",
+      "sha256": "4e7bb7f427732e769eafc6f6eed5a92eedccf96bc0c711f46466462b98916c73",
+      "bytes": 85804,
+      "kind": "SROIE-real-scan",
+      "scenario": "INDAH GIFT & HOME DECO",
+      "reason": "真实马来西亚小票，按最终实付或现金取整后的总额入账，不能取交付现金或税前小计；可见结清时间时优先使用。",
+      "expected": {
+        "action": "record",
+        "amount": 60.3,
+        "currency": "MYR",
+        "localDate": "2018-10-19",
+        "localTime": "20:49",
+        "localSecond": 59
+      },
+      "annotationUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/box/001.csv",
+      "annotationSha256": "280229706c7b18f056d4e277f820b0b6d52cac5e53a540b54f85b0645cc6fb47"
+    },
+    {
+      "id": "S03",
+      "file": "S03.jpg",
+      "sourcePage": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "imageUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/img/002.jpg",
+      "sha256": "c5995745cc13c8570fe0914567124d65e29df3ea4dd91713badb9e7217bc2db1",
+      "bytes": 124971,
+      "kind": "SROIE-real-scan",
+      "scenario": "MR D.I.Y. (JOHOR) SDN BHD",
+      "reason": "真实马来西亚小票，按最终实付或现金取整后的总额入账，不能取交付现金或税前小计；可见结清时间时优先使用。",
+      "expected": {
+        "action": "record",
+        "amount": 33.9,
+        "currency": "MYR",
+        "localDate": "2019-01-12",
+        "localTime": "21:13"
+      },
+      "annotationUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/box/002.csv",
+      "annotationSha256": "f90aab13a8d01a1db310b46a28edbae70f124d9337be6caaf8d591711148fe14"
+    },
+    {
+      "id": "S04",
+      "file": "S04.jpg",
+      "sourcePage": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "imageUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/img/003.jpg",
+      "sha256": "8d8707fd37e0bd756ac858cd6c71a93b26cc407110ca87655b66584108b79bf6",
+      "bytes": 93563,
+      "kind": "SROIE-real-scan",
+      "scenario": "YONGFATT ENTERPRISE",
+      "reason": "真实马来西亚小票，按最终实付或现金取整后的总额入账，不能取交付现金或税前小计；可见结清时间时优先使用。",
+      "expected": {
+        "action": "record",
+        "amount": 80.9,
+        "currency": "MYR",
+        "localDate": "2018-12-25",
+        "localTime": "12:31",
+        "localSecond": 0,
+        "category": [
+          "衣服饰品",
+          "鞋帽包包"
+        ]
+      },
+      "annotationUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/box/003.csv",
+      "annotationSha256": "438645d13fa24e0b83238bbf853e4b195332aa8d37da87581bf717b2d881b330"
+    },
+    {
+      "id": "S05",
+      "file": "S05.jpg",
+      "sourcePage": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "imageUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/img/004.jpg",
+      "sha256": "6214852fce616f6776900bf4a90b68ff267748ac61fa6f7290fac915684f7ac4",
+      "bytes": 102835,
+      "kind": "SROIE-real-scan",
+      "scenario": "MR D.I.Y. (M) SDN BHD",
+      "reason": "真实马来西亚小票，按最终实付或现金取整后的总额入账，不能取交付现金或税前小计；可见结清时间时优先使用。",
+      "expected": {
+        "action": "record",
+        "amount": 30.9,
+        "currency": "MYR",
+        "localDate": "2018-11-18",
+        "localTime": "13:58"
+      },
+      "annotationUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/box/004.csv",
+      "annotationSha256": "736b6b881d3072621dfd474e4025e70304cccd20bf3d2bfa91bb36fad4fa5253"
+    },
+    {
+      "id": "S06",
+      "file": "S06.jpg",
+      "sourcePage": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "imageUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/img/005.jpg",
+      "sha256": "44a286c3d1a2962115dd06bf7987924ddfdd7e7254f54c7e849f1140f14f7d63",
+      "bytes": 111000,
+      "kind": "SROIE-real-scan",
+      "scenario": "ABC HO TRADING",
+      "reason": "真实马来西亚小票，按最终实付或现金取整后的总额入账，不能取交付现金或税前小计；可见结清时间时优先使用。",
+      "expected": {
+        "action": "record",
+        "amount": 31.0,
+        "currency": "MYR",
+        "localDate": "2019-01-09",
+        "localTime": "20:01",
+        "localSecond": 11
+      },
+      "annotationUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/box/005.csv",
+      "annotationSha256": "f46ef92393618b0c84051f4f6f887b69fe8db9f7e175a65c94cd23916afdfbf1"
+    },
+    {
+      "id": "S07",
+      "file": "S07.jpg",
+      "sourcePage": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "imageUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/img/006.jpg",
+      "sha256": "37d946848416af4747cecc6563d0b91b2ed39a8d46222b1647d546c59ae43dad",
+      "bytes": 208615,
+      "kind": "SROIE-real-scan",
+      "scenario": "SOON HUAT MACHINERY ENTERPRISE",
+      "reason": "真实马来西亚小票，按最终实付或现金取整后的总额入账，不能取交付现金或税前小计；可见结清时间时优先使用。",
+      "expected": {
+        "action": "record",
+        "amount": 327.0,
+        "currency": "MYR",
+        "localDate": "2019-01-11",
+        "localTime": "09:44",
+        "localSecond": 0
+      },
+      "annotationUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/box/006.csv",
+      "annotationSha256": "c2af0b84498d81c076308be75baa63cb3a711335886161b780b035087ae0b876"
+    },
+    {
+      "id": "S08",
+      "file": "S08.jpg",
+      "sourcePage": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "imageUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/img/007.jpg",
+      "sha256": "092d0cdb4f16596f919bd2b8391fa3ad8f582822cd4b58a251498373f0b9dfb1",
+      "bytes": 127699,
+      "kind": "SROIE-real-scan",
+      "scenario": "S.H.H. MOTOR (SUNGAI RENGIT) SDN. BHD.",
+      "reason": "真实马来西亚小票，按最终实付或现金取整后的总额入账，不能取交付现金或税前小计；可见结清时间时优先使用。",
+      "expected": {
+        "action": "record",
+        "amount": 20.0,
+        "currency": "MYR",
+        "localDate": "2019-01-23",
+        "localTime": "13:14",
+        "localSecond": 15
+      },
+      "annotationUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/box/007.csv",
+      "annotationSha256": "ad2b93f2e722c9ebab5fee38a39d374f1ae4dde48a9130f5b47fdfcc2b5ca752"
+    },
+    {
+      "id": "S09",
+      "file": "S09.jpg",
+      "sourcePage": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "imageUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/img/008.jpg",
+      "sha256": "11be171f1a43305f9e0ae9e1548133a08900d250318ae7c4dcd357d831043445",
+      "bytes": 243639,
+      "kind": "SROIE-real-scan",
+      "scenario": "PERNIAGAAN ZHENG HUI",
+      "reason": "真实马来西亚小票，按最终实付或现金取整后的总额入账，不能取交付现金或税前小计；可见结清时间时优先使用。",
+      "expected": {
+        "action": "record",
+        "amount": 112.45,
+        "currency": "MYR",
+        "localDate": "2018-02-12",
+        "localTime": "08:30",
+        "localSecond": 0
+      },
+      "annotationUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/box/008.csv",
+      "annotationSha256": "c42e0ed7ffc9cfd61fa6f5dc52cf091a0f6126ea8db91088fcb5654e867e8316"
+    },
+    {
+      "id": "S10",
+      "file": "S10.jpg",
+      "sourcePage": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "imageUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/img/009.jpg",
+      "sha256": "cf33124b17bc93ad5b5b5480a584a31928af05e38739c283c73a236c4b97b8b8",
+      "bytes": 345189,
+      "kind": "SROIE-real-scan",
+      "scenario": "GERBANG ALAF RESTAURANTS SDN BHD",
+      "reason": "真实马来西亚小票，按最终实付或现金取整后的总额入账，不能取交付现金或税前小计；可见结清时间时优先使用。",
+      "expected": {
+        "action": "record",
+        "amount": 26.6,
+        "currency": "MYR",
+        "localDate": "2018-01-18",
+        "localTime": "10:27",
+        "localSecond": 3
+      },
+      "annotationUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/box/009.csv",
+      "annotationSha256": "e202cfb46878bd6c3418637b100b34fbd4d7f188a0c3b2acb2bf3674ccdfd318"
+    },
+    {
+      "id": "S11",
+      "file": "S11.jpg",
+      "sourcePage": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "imageUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/img/010.jpg",
+      "sha256": "ae9ee3b5dc0860c10753b9fa37adc88f424e72cc546cf68ad3bc0e7d4287af7d",
+      "bytes": 683767,
+      "kind": "SROIE-real-scan",
+      "scenario": "SAM SAM TRADING CO",
+      "reason": "真实马来西亚小票，按最终实付或现金取整后的总额入账，不能取交付现金或税前小计；可见结清时间时优先使用。",
+      "expected": {
+        "action": "record",
+        "amount": 14.1,
+        "currency": "MYR",
+        "localDate": "2017-12-29",
+        "localTime": "20:17",
+        "category": [
+          "居家物业",
+          "日常用品"
+        ]
+      },
+      "annotationUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/box/010.csv",
+      "annotationSha256": "aa39a7b33b0791bf69fc3743f932fcdd77d5127f969d7648d43fc21754efee94"
+    },
+    {
+      "id": "S12",
+      "file": "S12.jpg",
+      "sourcePage": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "imageUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/img/011.jpg",
+      "sha256": "2552af055d7749bc33fba7e2c8187d234bfafc9d1a345063839c4e6b805596bb",
+      "bytes": 801795,
+      "kind": "SROIE-real-scan",
+      "scenario": "AIK HUAT HARDWARE ENTERPRISE (SETIA ALAM) SDN BHD",
+      "reason": "真实马来西亚小票，按最终实付或现金取整后的总额入账，不能取交付现金或税前小计；可见结清时间时优先使用。",
+      "expected": {
+        "action": "record",
+        "amount": 15.0,
+        "currency": "MYR",
+        "localDate": "2017-06-15",
+        "localTime": "15:28",
+        "localSecond": 0
+      },
+      "annotationUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/box/011.csv",
+      "annotationSha256": "78f7a58a019b233027a358b85a4bf831249db590341b6ff6e93e66b894b090b9"
+    },
+    {
+      "id": "S13",
+      "file": "S13.jpg",
+      "sourcePage": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "imageUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/img/012.jpg",
+      "sha256": "c07bb1228ae7cc72d6510ae76dd1b6f542321d65ba38f99ad151ef64a68cafea",
+      "bytes": 488454,
+      "kind": "SROIE-real-scan",
+      "scenario": "HOME MASTER HARDWARE & ELECTRICAL",
+      "reason": "真实马来西亚小票，按最终实付或现金取整后的总额入账，不能取交付现金或税前小计；可见结清时间时优先使用。",
+      "expected": {
+        "action": "record",
+        "amount": 15.9,
+        "currency": "MYR",
+        "localDate": "2017-12-22",
+        "localTime": "14:03"
+      },
+      "annotationUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/box/012.csv",
+      "annotationSha256": "b4fc2da88e9ccde4ceca4223c927285569a283e08909a06d7d8d9eb9b36df992"
+    },
+    {
+      "id": "S14",
+      "file": "S14.jpg",
+      "sourcePage": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "imageUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/img/013.jpg",
+      "sha256": "eb7a5def675b80ce9161af879f94b9bb161ec1d5d8dafc1c1c236bb6afe3c9f9",
+      "bytes": 560882,
+      "kind": "SROIE-real-scan",
+      "scenario": "RESTORAN HASSANBISTRO",
+      "reason": "真实马来西亚小票，按最终实付或现金取整后的总额入账，不能取交付现金或税前小计；可见结清时间时优先使用。",
+      "expected": {
+        "action": "record",
+        "amount": 15.0,
+        "currency": "MYR",
+        "localDate": "2017-12-28",
+        "localTime": "22:17",
+        "localSecond": 32
+      },
+      "annotationUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/box/013.csv",
+      "annotationSha256": "2fde49e85c738bdbbef30eb5c130c25f4798900333837e508a8b6713295fe8a4"
+    },
+    {
+      "id": "S15",
+      "file": "S15.jpg",
+      "sourcePage": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "imageUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/img/014.jpg",
+      "sha256": "096a23d4824ba6f370defe01768be25a28a39d6fd273391b9e045191443e2956",
+      "bytes": 771695,
+      "kind": "SROIE-real-scan",
+      "scenario": "ASIA MART",
+      "reason": "真实马来西亚小票，按最终实付或现金取整后的总额入账，不能取交付现金或税前小计；可见结清时间时优先使用。",
+      "expected": {
+        "action": "record",
+        "amount": 32.7,
+        "currency": "MYR",
+        "localDate": "2017-12-22",
+        "localTime": "00:06",
+        "localSecond": 0
+      },
+      "annotationUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/box/014.csv",
+      "annotationSha256": "cd5bb19370a9af9e95259111356b580386bd01806eb8150b51295c83ae96608e"
+    },
+    {
+      "id": "S16",
+      "file": "S16.jpg",
+      "sourcePage": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "imageUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/img/016.jpg",
+      "sha256": "cf81742e708b6dda55b00856ec17ad2130e04f5caea3779a9d3e75a4f3bf5e1e",
+      "bytes": 725096,
+      "kind": "SROIE-real-scan",
+      "scenario": "LIGHTROOM GALLERY SDN BHD",
+      "reason": "真实马来西亚小票，按最终实付或现金取整后的总额入账，不能取交付现金或税前小计；可见结清时间时优先使用。",
+      "expected": {
+        "action": "record",
+        "amount": 73.0,
+        "currency": "MYR",
+        "localDate": "2017-12-20",
+        "localTime": "19:10",
+        "localSecond": 51
+      },
+      "annotationUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/box/016.csv",
+      "annotationSha256": "6bdaf463a3eb1ac949e7186f80bee96991c8c80c5933b6f4c2ac95a71a2f57e8"
+    },
+    {
+      "id": "S17",
+      "file": "S17.jpg",
+      "sourcePage": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "imageUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/img/019.jpg",
+      "sha256": "f7a0f48fad6c01d504c22a061418b50e4b7a177b7b7e0ddf97fdc757d9f86a31",
+      "bytes": 59235,
+      "kind": "SROIE-real-scan",
+      "scenario": "SHELL ISNI PETRO TRADING",
+      "reason": "真实马来西亚小票，按最终实付或现金取整后的总额入账，不能取交付现金或税前小计；可见结清时间时优先使用。",
+      "expected": {
+        "action": "record",
+        "amount": 86.0,
+        "currency": "MYR",
+        "localDate": "2018-03-18",
+        "localTime": "15:17"
+      },
+      "annotationUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/box/019.csv",
+      "annotationSha256": "65d2605eec44219f3ff06e6e2520f3de1b376071b3cd4c565af7236460510f2e"
+    },
+    {
+      "id": "S18",
+      "file": "S18.jpg",
+      "sourcePage": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "imageUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/img/020.jpg",
+      "sha256": "e0a0000905435b298437f1e46a7ca40ce895ad9209c5489b771c42b9785f9804",
+      "bytes": 122032,
+      "kind": "SROIE-real-scan",
+      "scenario": "SYL ROASTED DELIGHTS SDN. BHD.",
+      "reason": "真实马来西亚小票，按最终实付或现金取整后的总额入账，不能取交付现金或税前小计；可见结清时间时优先使用。",
+      "expected": {
+        "action": "record",
+        "amount": 54.5,
+        "currency": "MYR",
+        "localDate": "2018-03-06",
+        "localTime": "12:06",
+        "localSecond": 0
+      },
+      "annotationUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/box/020.csv",
+      "annotationSha256": "c93205389a0c40f364bdf232a2b0738cb9d4328456c1f610327685c18f99a6fe"
+    },
+    {
+      "id": "S19",
+      "file": "S19.jpg",
+      "sourcePage": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "imageUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/img/021.jpg",
+      "sha256": "92b12e2d5cd73a4e7024a53422f5c86ab01bcf0ad826fe15f302626fcc0396b4",
+      "bytes": 511575,
+      "kind": "SROIE-real-scan",
+      "scenario": "TEO HENG STATIONERY & BOOKS",
+      "reason": "真实马来西亚小票，按最终实付或现金取整后的总额入账，不能取交付现金或税前小计；可见结清时间时优先使用。",
+      "expected": {
+        "action": "record",
+        "amount": 4.9,
+        "currency": "MYR",
+        "localDate": "2018-01-18",
+        "category": [
+          "居家物业",
+          "日常用品"
+        ]
+      },
+      "annotationUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/box/021.csv",
+      "annotationSha256": "9e98b1b21bdfbc611e37928fae8d6177ad0cc05194d6388d54ce5eff6746b92a"
+    },
+    {
+      "id": "S20",
+      "file": "S20.jpg",
+      "sourcePage": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "imageUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/img/022.jpg",
+      "sha256": "deec5eb31030870b22f5428520ce3b5a3165e733471b0bbe8919f87996e9c602",
+      "bytes": 553086,
+      "kind": "SROIE-real-scan",
+      "scenario": "FUYI MINI MARKET",
+      "reason": "真实马来西亚小票，按最终实付或现金取整后的总额入账，不能取交付现金或税前小计；可见结清时间时优先使用。",
+      "expected": {
+        "action": "record",
+        "amount": 9.0,
+        "currency": "MYR",
+        "localDate": "2018-01-25",
+        "localTime": "13:22",
+        "localSecond": 56
+      },
+      "annotationUrl": "https://raw.githubusercontent.com/zzzDavid/ICDAR-2019-SROIE/master/data/box/022.csv",
+      "annotationSha256": "8dd0b2f26e1b3ed6c433d421857a6e85831ca2b8f40da9909799de8e7fea257a"
     }
   ]
 }

@@ -2,5 +2,8 @@
   "name": "clawbot-test-runtime-dependencies",
   "version": "0.1.0",
   "private": true,
-  "dependencies": { "qrcode-terminal": "0.12.0" }
+  "dependencies": {
+    "@silvia-odwyer/photon-node": "0.3.4",
+    "qrcode-terminal": "0.12.0"
+  }
 }

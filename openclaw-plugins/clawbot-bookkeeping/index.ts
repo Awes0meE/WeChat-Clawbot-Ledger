@@ -43,6 +43,7 @@ import { HISTORY_TOOL_NAME, HISTORY_FAILURE_TEXT, normalizeExpenseHistoryQuery, 
 import { CURRENCY_CODES } from './currency.mjs';
 import { answerBookkeepingQuestions, normalizeReadQuestion, questionsFromSummaryParams } from './bookkeeping-queries.mjs';
 import { readInboundImage, imageRunMatches, imageConfirmationSelection, validateImageExpense, imageExpenseTimeDisplay, imageExpenseCurrencyNote } from './image-expense.mjs';
+import { reviewImageExpense, ImageReviewError } from './image-review.mjs';
 
 type InboundMessage = {
   channel: string;
@@ -319,11 +320,11 @@ const EXPENSE_PARAMETER_PROPERTIES = {
   imageEvidence: Type.Optional(Type.Object({
     semanticVersion: Type.Literal(2),
     expenseStatus: Type.Union(['expense', 'unclear', 'not_expense'].map(v => Type.Literal(v)), {
-      description: 'AI综合判断是否为已发生的支出；小票/消费详情不必带已支付标签。未付款、退款、收入、转账、报价或未来计划为not_expense；真实消费性质仍不确定为unclear。' }),
+      description: 'AI综合判断是否为已发生的支出；小票/消费详情不必带已支付标签。成功转出默认按支出，不要求证明收款人不是自己；未付款、退款、收入、明确本人账户间划转、报价或未来计划为not_expense；真实消费性质仍不确定为unclear。' }),
     statusEvidence: Type.String({ minLength: 1, maxLength: 320, description: '当前图片支持上述判断的原文或上下文依据；没有付款标签就如实说明消费依据，不能编造已付字样。' }),
     totalEvidence: Type.String({ minLength: 1, maxLength: 320, description: 'AI选择实际支出金额的图片依据，可含单价、找零等多个数字并解释为何选择该总额；不要求固定标签。amount传规范十进制最终金额。' }),
     currencyEvidence: Type.String({ minLength: 1, maxLength: 320, description: 'AI结合可见币种与地区判断；没有币种信息（包括只有孤立$且无其他线索）按用户规则默认SGD，写明默认依据并设currencyDefaulted=true、currencyAmbiguous=false。与SGD不兼容的符号或明确币种冲突需澄清，不覆盖为SGD。' }),
-    purposeEvidence: Type.String({ minLength: 1, maxLength: 320, description: '图片中可辨认的商户、商品、服务或用途；comment给出有依据的简短摘要，不能用消费/其他等空泛描述补缺项。' }),
+    purposeEvidence: Type.String({ maxLength: 320, description: '图片中可辨认的商户、商品、服务或用途；缺失或无法辨认时可留空，purposeAmbiguous=true、comment=无，直接记账，不追问用途。收付款人姓名、卡号或通用转账标签不算用途。' }),
     timeKind: Type.Union(['expense', 'payment', 'purchase', 'transaction', 'order'].map(v => Type.Literal(v)), {
       description: '已明确是本笔消费的日期但没有付款/下单等标签时用expense，小票无标签日期或用户本条补充日期也用expense；无需细分具体时间类型。日期缺失/有歧义或只有物流时间则先询问，不调用记账或拟单工具。' }),
     localSecond: Type.Optional(Type.Integer({ minimum: 0, maximum: 59, description: '图片明确显示秒数时传；配合localDate/localTime保存完整时间，不显示秒则省略。' })),
@@ -332,7 +333,7 @@ const EXPENSE_PARAMETER_PROPERTIES = {
     currencyAmbiguous: Type.Boolean(),
     currencyDefaulted: Type.Optional(Type.Boolean({ description: '无币种信息按用户默认SGD时为true；有明确原币按原币，不因缺ISO代码就默认。' })),
     dateAmbiguous: Type.Boolean({ description: '消费日期缺失或歧义时先询问，不以收图时间补齐；明确日期用explicit，AI规范日期和时区，无固定原文格式要求。' }),
-    purposeAmbiguous: Type.Boolean(),
+    purposeAmbiguous: Type.Boolean({ description: '用途缺失或不能判断时true，备注无；不影响入账，也不需要确认。' }),
     orderReference: Type.Optional(Type.String({ maxLength: 160 })),
   }, { additionalProperties: false })),
 };
@@ -712,7 +713,11 @@ export default definePluginEntry({
               : trusted.content !== '' && promptEndsWithInboundMessage(event.prompt, trusted.content))
             && typeof trusted.observedAt === 'number'
             && now - trusted.observedAt >= 0
-            && now - trusted.observedAt <= TRUSTED_PROMPT_CORRELATION_MAX_AGE_MS;
+            // Images match the transport-owned async message/account/path, not
+            // prompt text. Slow media preprocessing must not outlive a shorter
+            // text-correlation window while that exact dispatch is still active.
+            && now - trusted.observedAt <= (trusted.image
+              ? TRUSTED_INBOUND_MAX_AGE_MS : TRUSTED_PROMPT_CORRELATION_MAX_AGE_MS);
         },
         now,
       ) as InboundMessage | undefined;
@@ -1291,6 +1296,7 @@ export default definePluginEntry({
                 'image-purpose': '这张图还不能确定钱花在哪，这次没有入账。请补充商户、商品或用途。',
                 'image-order': '这张图不能对应一笔明确支出，这次没有入账。请拆开发送或明确要记哪一笔。',
                 'image-source': '这次没有取得当前图片的有效来源，所以没有入账。请重新发送原图。',
+                'image-review': '这次原图复核暂时没能完成，没有入账。请稍后重发图片再试。',
               }[error.imageIssue] ?? '这张图的记账信息未通过校验，这次没有入账。请补充清楚的付款截图，或用文字说明金额和币种。')
               : error.rejectionReason === 'currency'
               ? '这笔金额旁的币种没能核对一致，所以没有入账。请把金额和币种一起标明，例如“35人民币”或“35 CNY”哦～'
@@ -1364,6 +1370,14 @@ export default definePluginEntry({
         }
         catch (error) { throw new ExpenseRecordingError('rejected', { rejectionReason: 'image',
           imageIssue: error instanceof Error ? error.message : undefined }); }
+        try {
+          input = await reviewImageExpense({ input, inbound, runtime: api.runtime,
+            config: api.config, isStillAuthorized });
+          evidence = validateImageExpense(input, inbound);
+        } catch (error) {
+          if (!(error instanceof ImageReviewError)) throw error;
+          throw new ExpenseRecordingError('rejected', { rejectionReason: 'image', imageIssue: error.issue });
+        }
         const keys = imageExpenseKeys(input, inbound);
         if (keys.orderKey) await refreshImageReceipt({ api: bookkeepingApi, store: receiptStore,
           inbound, evidenceKey: keys.orderKey, validateBeforeWrite: isStillAuthorized });
@@ -1549,7 +1563,9 @@ export default definePluginEntry({
           catalogMode: 'direct-only',
           description: [
             '将当前明确、已发生的一条消费消息按声明的原币记为一笔支出；没有币种时默认 SGD。由你理解语义并选择金额、一级和二级分类。',
-            '当前图片由你做语义校验：钱（实际总额和币种）、消费日期、用途三项明确且是一笔已发生支出，就直接record_expense。imageEvidence使用semanticVersion=2，逐项提供图片依据与歧义标志，不要求实付款/已支付等固定标签。小票、卡交易、付款凭证、订单、其他语言都按含义理解；未付、退款、收入、转账、报价、未来计划不记支出。日期或用途缺失先询问，不得用收图日期或泛化备注补齐。日期用explicit，按可见格式/地区解析localDate、localTime，秒数另传localSecond；只有日期可省略localTime，工具披露钟点回退。物流、到货、状态栏时间不可用。图片无币种信息或只有孤立$且无其他线索时默认SGD并标currencyDefaulted=true，不因此要求确认；有明确币种按原币，冲突才澄清。图片字段不得用于普通文字消息。',
+            '当前图片由你做语义校验：实际总额、币种和交易日期明确且是一笔已发生支出，就直接record_expense。imageEvidence使用semanticVersion=2，逐项提供图片依据与歧义标志，不要求实付款/已支付等固定标签。小票、卡交易、付款凭证、订单、其他语言都按含义理解；成功向他人转出也按支出；未付、退款、收入、明确本人账户间划转、报价、未来计划不记支出。缺日期先询问，不得用收图日期补齐。缺用途或用途不可辨认时purposeAmbiguous=true、comment=无，直接入账，不追问、不猜用途；按其他杂项/其他支出分类。日期用explicit，按可见格式/地区解析localDate、localTime，秒数另传localSecond；只有日期可省略localTime，工具披露钟点回退。物流、到货、状态栏时间不可用。图片无币种信息或只有孤立$且无其他线索时默认SGD并标currencyDefaulted=true，不因此要求确认；有明确币种按原币，冲突才澄清。图片字段不得用于普通文字消息。',
+            '成功转出默认按支出记录，只有当前图文明确说明本人账户间划转才排除。收款账户归属未写、姓名陌生或备注空白，不需要再问是不是自己的账户，也不追问用途。',
+            '图片结算区已显示完整商品小计、运费和总优惠，能唯一算出实付时，使用本工具交给原图复核；不能仅因最下方总计被裁掉，就假想还有其他费用并改用prepare_expense。展开的优惠明细不重复扣减。只有商品行单价、没有完整结算区，才不能认定实际总额。',
             '不要把“备注”后的文字放进参数；工具会从可信原始消息中原样提取。',
             '若原始消息未明确标注“备注”，可提供简短且有依据的商户、商品或用途说明；不得编造信息。',
             '超市消费整笔归食品酒水/超市购物；网线归学习进修/数码装备。',
@@ -1649,7 +1665,9 @@ export default definePluginEntry({
         catalogMode: 'direct-only',
         description: [
           '为语义或金额仍需用户确认的一笔候选支出生成确认单；本工具绝不会写入账本。',
-          '图片金额、币种或消费性质有可确认的合理候选时，附semanticVersion=2的imageEvidence拟单；日期和用途必须明确，缺失先询问。使用与record_expense相同的AI语义规则和证据。已知非支出或多笔不拟单。更正先取消原编号，再重发完整消费。',
+          '图片金额、币种或消费性质有可确认的合理候选时，附semanticVersion=2的imageEvidence拟单；日期必须明确，缺失先询问；用途缺失备注无，不因此拟单或追问。使用与record_expense相同的AI语义规则和证据。已知非支出或多笔不拟单。更正先取消原编号，再重发完整消费。',
+          '缺币种信息不是币种歧义：没有明确币种线索、仅凭无地区依据的跨国品牌/英文/税率/版式联想到某币种时，按默认SGD调用record_expense，不能据此使用本工具。用户已随图补清日期且金额明确时也直接记账；只有真实冲突、其他未解歧义或用户明确要求先拟单时才确认。',
+          '图片完整结算区能唯一算出支出时不使用本工具：清楚的商品小计、运费和总优惠已足够交给record_expense复核，即使最下方总计标签裁切也不能假想额外费用。用户明确要求先拟单时仍保留确认。',
           '例如“午饭7.2吗”应使用本工具，让用户确认你的金额、分类、备注和原消息时间理解。',
           '有多个可能金额时，根据消费语义选择当前消息中最可能的一个金额（或明确加、减、乘、除算式的结果）拟单，不必要求原文只有一个数字；没有合理候选时才追问。数量、型号、日期、原价、余额不能当作实付金额。数字间 / 或 ／ 按除法拟单，例如 3.8/2 传 1.90；不能直接写入，也不能选操作数。明确的一笔支出使用 ÷、除、除以且金额精确时应调用 record_expense，不要仅因除法就调用本工具。算式结果必须为正且精确到分，不舍入，除零或无法精确到分时请用户明确金额。',
           '金额、分类和备注由你根据当前消息理解；不得猜测消息中没有的信息。',

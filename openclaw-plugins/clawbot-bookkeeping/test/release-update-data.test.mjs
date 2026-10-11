@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { MIGRATION_ROLES } from '../../../deploy/docker/migration-format.mjs';
 import { releaseUpdateContract, rebindReleaseUpdateData, verifyReleaseUpdateData, enableOfficialOAuthRefresh } from '../../../deploy/docker/release-update-data.mjs';
 import { releaseUpdateStageTemplate, validateReleaseUpdateStage } from '../../../scripts/mac/release-update-review.mjs';
-import { BOOKKEEPING_IMAGE_UNDERSTANDING, LEGACY_BOOKKEEPING_IMAGE_UNDERSTANDING, withBookkeepingImageUnderstanding } from '../../../deploy/docker/bookkeeping-image-understanding.mjs';
+import { BOOKKEEPING_IMAGE_UNDERSTANDING, LEGACY_BOOKKEEPING_IMAGE_UNDERSTANDING, SEMANTIC_V2_BOOKKEEPING_IMAGE_UNDERSTANDING, PURPOSE_OPTIONAL_BOOKKEEPING_IMAGE_UNDERSTANDING, withBookkeepingImageUnderstanding } from '../../../deploy/docker/bookkeeping-image-understanding.mjs';
 const before = { project: 'clawbot-import-check-123456abcdef', sourceCommit: 'a'.repeat(40), sourceSnapshotSha256: 'b'.repeat(64),
   cutoverId: '11111111-2222-3333-4444-555555555555', importManifestSha256: 'c'.repeat(64), volumeGeneration: null,
   services: { origin: { image: 'same-pinned-origin' }, openclaw: { image: `sha256:${'d'.repeat(64)}` }, guard: { image: `sha256:${'e'.repeat(64)}` } } };
@@ -87,4 +87,13 @@ test('semantic image extraction upgrades only the exact managed previous prompt'
   assert.deepEqual(withBookkeepingImageUnderstanding(next), next);
   assert.throws(() => withBookkeepingImageUnderstanding({ tools: { media: { image: {
     ...LEGACY_BOOKKEEPING_IMAGE_UNDERSTANDING, prompt: LEGACY_BOOKKEEPING_IMAGE_UNDERSTANDING.prompt + ' custom' } } } }), /Unrecognized image/u);
+});
+
+test('previous semantic image prompt upgrades without overwriting custom media configuration', () => {
+  assert.deepEqual(withBookkeepingImageUnderstanding({ tools: { media: { image: structuredClone(PURPOSE_OPTIONAL_BOOKKEEPING_IMAGE_UNDERSTANDING) } } }).tools.media.image, BOOKKEEPING_IMAGE_UNDERSTANDING);
+  const config = { tools: { media: { image: structuredClone(SEMANTIC_V2_BOOKKEEPING_IMAGE_UNDERSTANDING) } } };
+  assert.deepEqual(withBookkeepingImageUnderstanding(config).tools.media.image, BOOKKEEPING_IMAGE_UNDERSTANDING);
+  assert.deepEqual(config.tools.media.image, SEMANTIC_V2_BOOKKEEPING_IMAGE_UNDERSTANDING);
+  config.tools.media.image.prompt += ' custom';
+  assert.throws(() => withBookkeepingImageUnderstanding(config), /Unrecognized image/u);
 });
