@@ -7,6 +7,7 @@ import { summarizeTunnelStatus } from './tunnel-authorization-inspection.mjs';
 
 const hostStates = new Set(['healthy', 'maintenance', 'disabled', 'another-operation', 'host-needs-attention',
   'waiting-for-docker', 'stopped-low-disk', 'low-disk-no-restart', 'healthy-low-disk', 'guard-unready',
+  'storage-observation-grace', 'storage-observation-paused',
   'recovery-backoff', 'storage-fault-latched', 'identity-needs-attention', 'activation-needs-attention', 'recovery-needs-attention']);
 function hostState(context, spec, now) {
   if (!context?.enabled) return 'disabled';

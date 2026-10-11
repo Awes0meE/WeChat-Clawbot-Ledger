@@ -71,6 +71,28 @@ try {
   assert.equal(await reconcileRuntime(driver, {}, { storage }), 'healthy');
   console.log('CLAWBOT_THREE_SERVICE_OK:healthy-boundary');
   if (!process.argv.includes('--switch-only')) {
+    stage = 'storage-observation';
+    const observationState = {}, at = Date.now(), timeoutSample = {
+      error: 'STORAGE_UNAVAILABLE', diagnostic: { kind: 'timeout' },
+    };
+    assert.equal(await reconcileRuntime(driver, observationState, { storage, now: at }), 'healthy');
+    const beforeObservation = await driver.inspect();
+    assert.equal(await reconcileRuntime(driver, observationState, { storage: timeoutSample, now: at + 30000 }), 'storage-observation-grace');
+    const afterGrace = await driver.inspect();
+    assert.deepEqual(afterGrace.trusted, beforeObservation.trusted);
+    for (const role of ['origin', 'openclaw', 'guard']) {
+      assert.equal(afterGrace.diagnostics[role].startedAt, beforeObservation.diagnostics[role].startedAt);
+      assert.equal(afterGrace.diagnostics[role].restartCount, beforeObservation.diagnostics[role].restartCount);
+    }
+    assert.equal(latch, false);
+    assert.equal(await reconcileRuntime(driver, observationState, { storage: timeoutSample, now: at + 60000 }), 'storage-observation-paused');
+    assert.ok(Object.values((await driver.inspect()).running).every(running => !running));
+    assert.equal(latch, false);
+    assert.equal(await reconcileRuntime(driver, observationState, { storage: await driver.storage(), now: at + 61000 }), 'healthy');
+    assert.equal(latch, false);
+    view = await driver.inspect();
+    assert.equal(view.trusted.origin, beforeObservation.trusted.origin);
+    console.log('CLAWBOT_THREE_SERVICE_OK:transient-observation-grace-bounded-pause-and-recovery');
     stage = 'maintenance';
     let paused = false;
     await enterMaintenance(driver, () => { paused = true; });

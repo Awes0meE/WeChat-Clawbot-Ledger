@@ -15,6 +15,37 @@ import {
   trustedInboundMessageKey,
 } from '../adapter.mjs';
 
+test('transaction existence accepts only an exact row or the pinned not-found response', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'clawbot-transaction-presence-'));
+  const tokenPath = join(directory, 'token.txt'); writeFileSync(tokenPath, 'synthetic-token');
+  let reply, options, lookupUrl;
+  const api = new EzBookkeepingApi({ serverBaseUrl: 'http://127.0.0.1:8888', tokenPath, fetchImpl: async (url, request) => {
+    lookupUrl = new URL(url); options = request;
+    if (reply instanceof Error) throw reply;
+    return new Response(JSON.stringify(reply.body), { status: reply.status });
+  } });
+  const missing = { success: false, errorCode: 205001, errorMessage: 'transaction not found' };
+  try {
+    reply = { status: 200, body: { success: true, result: { id: '123', comment: 'edited on website' } } };
+    assert.equal(await api.transactionExists('123'), true);
+    assert.equal(lookupUrl.pathname, '/api/v1/transactions/get.json');
+    assert.equal(lookupUrl.searchParams.get('id'), '123');
+    assert.equal(options.method, 'GET');
+    assert.equal(options.headers['X-Timezone-Name'], 'Asia/Singapore');
+    reply = { status: 400, body: missing };
+    assert.equal(await api.transactionExists('123'), false);
+    for (const invalid of [
+      { status: 400, body: { ...missing, errorCode: 200008, errorMessage: 'client timezone offset is invalid' } },
+      { status: 401, body: missing }, { status: 404, body: missing }, { status: 500, body: missing },
+      { status: 200, body: missing }, { status: 400, body: { ...missing, success: true } },
+      { status: 400, body: { ...missing, result: { id: '123' } } },
+      { status: 200, body: { success: true, result: { id: '456' } } },
+      { status: 200, body: { success: true, result: null } }, new Error('timeout'),
+    ]) { reply = invalid; await assert.rejects(api.transactionExists('123')); }
+    await assert.rejects(api.transactionExists(''));
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 function pendingExpenseProposal({
   conversationKey = 'a'.repeat(64),
   messageId = 'pending-message-1',

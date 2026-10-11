@@ -22,9 +22,23 @@ The local inbound-context mapping preserves two trusted provider fields:
 These mappings are maintained in the source and compiled inbound context.
 `test/inbound-message-id.test.mjs` covers stable IDs, distinct same-text messages,
 and the missing-ID fallback with synthetic fixtures. Those tests do not prove
-real platform redelivery. As of 2026-09-05, same-message-ID platform replay
-acceptance still lacks a real trigger and evidence; see the
-[active handoff](../../docs/handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md).
+real platform redelivery. Same-message-ID platform replay still lacks a real
+trigger and evidence; see the
+[current acceptance boundaries](../../docs/mac-before-windows-checklist.md).
+
+For a single current image, the media metadata also carries its provider message
+ID. `withWeixinInboundContext` wraps authorized inbound dispatch in
+`AsyncLocalStorage`, preserving the exact account, sender, message and attachment
+through the model-input hook even when the text body is empty. The bookkeeping
+plugin matches that context against its durable inbound record and validates the
+controlled file path, type, size and hash. Model arguments cannot select the
+attachment or grant authority. Multi-image or quoted historical-image messages
+do not obtain a single-current-image binding. Both source and compiled files
+carry this bridge; framework upgrades must recheck the actual asynchronous path.
+The pinned Mac harness passed isolated image acceptance and the adapter's 26
+tests at the first image release; Windows native media execution remains
+unverified. See the [image design](../../docs/superpowers/specs/2026-10-01-image-bookkeeping-design.md)
+and [release record](../../docs/handoffs/2026-10-01-image-bookkeeping.md).
 
 Inbound sender authorization runs before local slash commands and media
 downloads. The framework pairing store remains authoritative, with the legacy

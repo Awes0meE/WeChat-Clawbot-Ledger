@@ -28,6 +28,8 @@ docker compose -f deploy/docker/compose.test.yml --profile tools run --rm -T cli
 
 Linux 镜像保留固定官方 harness，并用受限适配连接本地 MCP。上游 MCP 配置模块保持原样；Windows manifest 继续使用原生 MCP。新启动策略检查六工具、固定模型、账本插件的消息/时间上下文授权，以及说明文件未被截断。
 
+图片实际模型验收使用 [私有用例入口](../../test-cases/README.md#图片与时间的实际模型测试)：构建本次源码的 `isolated-test` 镜像，设置 `CLAWBOT_CORPUS_IMAGE` 与 Git 外的 `CLAWBOT_IMAGE_CASES_DIR`，核对隔离新增账目和权威回执。不能把旧六工具探针的成功当作图片、日期或秒数验收；图片测试同样不覆盖真实手机收件。
+
 真实模型验收先停止测试 Gateway，避免两个模型运行时操作同一状态；两个探针串行运行：
 
 ```sh

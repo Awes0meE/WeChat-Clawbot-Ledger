@@ -1,6 +1,7 @@
 const $ = id => document.getElementById(id);
 const hostStates = { healthy: '运行正常', disabled: '尚未启用', maintenance: '正在维护',
   'waiting-for-docker': '等待 Docker 恢复', 'another-operation': '后台任务进行中', 'host-needs-attention': '生产宿主需要检查',
+  'storage-observation-grace': '存储检查暂时超时，正在重试', 'storage-observation-paused': '存储检查持续不可用，服务暂停等待复检',
   'stopped-low-disk': '空间不足，服务已停止', 'low-disk-no-restart': '空间偏低，暂停恢复', 'healthy-low-disk': '服务运行中，空间偏低',
   'guard-unready': '公网连接守护未就绪', 'recovery-backoff': '等待下一次恢复检查', 'storage-fault': '存储故障待核验',
   'storage-fault-latched': '存储故障待核验', 'identity-needs-attention': '服务身份或连接需要核验',

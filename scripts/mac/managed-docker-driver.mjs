@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { statfsSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { checkManagedContainer, managedVolumeName } from './managed-runtime-spec.mjs';
 import { storageDecision } from './runtime-controller.mjs';
@@ -36,6 +37,79 @@ export function managedDockerDriver(spec, composePath, { latchStorageFault, vali
     '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true', ...mounts.flatMap(([name, target]) =>
       ['--mount', `type=volume,src=${managedVolumeName(spec, name)},dst=${target},readonly`]),
     '--entrypoint', 'node', spec.services.openclaw.image, ...script, ...args];
+  const probeName = `clawbot-storage-${createHash('sha256').update(JSON.stringify([spec.project, spec.volumeGeneration ?? null])).digest('hex').slice(0, 24)}`;
+  const probeLabels = { 'clawbot.task': 'storage-capacity-probe', 'clawbot.project': spec.project,
+    'clawbot.source': spec.sourceCommit, 'clawbot.generation': spec.volumeGeneration ?? 'none' };
+  const probeCommand = ['--input-type=module', '-e',
+    'import{statfsSync}from"node:fs";const s=statfsSync(process.argv[1]);console.log(s.bavail*s.bsize)', `${spec.root}/ledger`];
+  const equal = (left, right) => JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
+  async function probeIds() {
+    const text = await run(['ps', '-a', '-q', '--no-trunc', '--filter', `name=^/${probeName}$`], 20000, 'storage.probe-discovery');
+    const ids = text.split('\n').filter(Boolean);
+    if (ids.length > 1 || ids.some(id => !/^[a-f0-9]{64}$/.test(id))) throw Error('CLAWBOT_STORAGE_PROBE_IDENTITY');
+    return ids;
+  }
+  async function cleanStorageProbe() {
+    const ids = await probeIds();
+    if (!ids.length) return;
+    let rows;
+    try { rows = await json(['inspect', ids[0]], 'storage.probe-identity'); }
+    catch (error) {
+      if (error.diagnostic?.kind === 'missing-resource' && !(await probeIds()).length) return;
+      throw error;
+    }
+    const c = rows[0];
+    const config = c?.Config, host = c?.HostConfig, mount = c?.Mounts?.[0];
+    if (rows.length !== 1 || c?.Id !== ids[0] || c.Name !== `/${probeName}`
+      || config?.Image !== spec.services.openclaw.image || c.Image !== spec.services.openclaw.image
+      || !equal(config.Entrypoint, ['node']) || !equal(config.Cmd, probeCommand) || config.User !== '1000:1000'
+      || !Object.entries(probeLabels).every(([key, value]) => typeof value === 'string' && config.Labels?.[key] === value)
+      || config.Labels?.['com.docker.compose.project'] || config.Labels?.['com.docker.compose.service']
+      || host?.NetworkMode !== 'none' || host.ReadonlyRootfs !== true || host.Privileged !== false
+      || !equal(host.CapDrop, ['ALL']) || (host.CapAdd ?? []).length
+      || !equal(host.SecurityOpt, ['no-new-privileges:true']) || host.AutoRemove !== true
+      || !['no', ''].includes(host.RestartPolicy?.Name) || host.PidMode || host.IpcMode === 'host'
+      || host.PublishAllPorts || Object.keys(host.PortBindings ?? {}).length
+      || (host.Devices ?? []).length || (host.DeviceRequests ?? []).length
+      || (host.Binds ?? []).length || Object.keys(host.Tmpfs ?? {}).length
+      || c.Mounts?.length !== 1 || mount.Type !== 'volume' || mount.Name !== managedVolumeName(spec, 'ledger-data')
+      || mount.Destination !== `${spec.root}/ledger` || mount.RW !== false) throw Error('CLAWBOT_STORAGE_PROBE_IDENTITY');
+    // The immutable ID is removed only after complete task and sandbox checks.
+    // No project-wide or name-only removal can touch a business container.
+    try { await run(['rm', '--force', ids[0]], 20000, 'storage.probe-cleanup'); }
+    catch (error) {
+      if (error.diagnostic?.kind === 'missing-resource' && !(await probeIds()).length) return;
+      throw error;
+    }
+    if ((await probeIds()).length) throw Error('CLAWBOT_STORAGE_PROBE_CLEANUP');
+  }
+  async function storageProbe() {
+    await cleanStorageProbe();
+    const args = helper([['ledger-data', `${spec.root}/ledger`]], probeCommand);
+    args.splice(1, 0, '--name', probeName, ...Object.entries(probeLabels).flatMap(([key, value]) => ['--label', `${key}=${value}`]));
+    let volumeFreeBytes, failure;
+    try {
+      const free = await run(args, 20000, 'storage.volume-free');
+      volumeFreeBytes = /^\d+$/.test(free) ? Number(free) : NaN;
+    }
+    catch (error) { failure = error; }
+    // A killed Docker client does not establish that the daemon-side helper
+    // exited. Cleanup must succeed before this observation can be accepted.
+    try { await cleanStorageProbe(); }
+    catch (cleanupError) {
+      observe({ event: 'storage-probe-cleanup-failed', phase: 'storage.probe-cleanup',
+        error: cleanupError.diagnostic ?? diagnosticError(cleanupError) });
+      // A later cleanup timeout cannot downgrade evidence of an actual disk,
+      // identity, permission or otherwise unclassified execution failure.
+      const error = failure && !['timeout', 'daemon-unavailable'].includes(failure.diagnostic?.kind) ? failure : cleanupError;
+      // Successful measurements remain evidence even if cleanup failed. In
+      // particular, known low space or malformed output must not become grace.
+      if (volumeFreeBytes !== undefined) error.volumeFreeBytes = volumeFreeBytes;
+      throw error;
+    }
+    if (failure) throw failure;
+    return volumeFreeBytes;
+  }
   return {
     run,
     async createStopped() {
@@ -54,7 +128,7 @@ export function managedDockerDriver(spec, composePath, { latchStorageFault, vali
       if (!view.identityValid || !view.namespaceValid || Object.values(view.running).some(Boolean)) throw new Error('CLAWBOT_INITIAL_BOUNDARY');
       return view;
     },
-    async validateVolumes(phase = 'volumes.identity') {
+    async validateVolumes(phase = 'volumes.identity', { propagateErrors = false } = {}) {
       try {
         const roles = new Set(Object.values(spec.services).flatMap((service) => service.mounts.map(([name]) => name)));
         for (const role of roles) {
@@ -65,7 +139,11 @@ export function managedDockerDriver(spec, composePath, { latchStorageFault, vali
             || (spec.profile === 'production' && v.Labels['clawbot.cutover'] !== spec.cutoverId)) return false;
         }
         return true;
-      } catch (error) { observe({ event: 'volume-inspection-failed', phase, error: error.diagnostic ?? diagnosticError(error) }); return false; }
+      } catch (error) {
+        observe({ event: 'volume-inspection-failed', phase, error: error.diagnostic ?? diagnosticError(error) });
+        if (propagateErrors) throw error;
+        return false;
+      }
     },
     async inspect() {
       try { await run(['info', '--format', '{{.ServerVersion}}']); }
@@ -165,17 +243,19 @@ export function managedDockerDriver(spec, composePath, { latchStorageFault, vali
       throw new Error('Runtime readiness timeout');
     },
     async storage() {
+      let hostFreeBytes;
       try {
-        if (!await this.validateVolumes('storage.volume-identity')) return { error: 'STORAGE_IDENTITY_INVALID' };
+        if (!await this.validateVolumes('storage.volume-identity', { propagateErrors: true })) return { error: 'STORAGE_IDENTITY_INVALID' };
         observe({ event: 'command-start', phase: 'storage.host-free' });
         const host = statfsSync(homedir());
-        const free = await run(helper([['ledger-data', `${spec.root}/ledger`]], ['--input-type=module', '-e',
-          'import{statfsSync}from"node:fs";const s=statfsSync(process.argv[1]);console.log(s.bavail*s.bsize)', `${spec.root}/ledger`]), 20000, 'storage.volume-free');
-        return { hostFreeBytes: host.bavail * host.bsize, volumeFreeBytes: Number(free) };
+        hostFreeBytes = host.bavail * host.bsize;
+        const volumeFreeBytes = await storageProbe();
+        return { hostFreeBytes, volumeFreeBytes };
       } catch (error) {
         const diagnostic = error.diagnostic ?? diagnosticError(error);
         observe({ event: 'storage-failed', phase: 'storage.sample', error: diagnostic });
-        return { error: 'STORAGE_UNAVAILABLE', diagnostic };
+        return { error: 'STORAGE_UNAVAILABLE', hostFreeBytes,
+          ...(error.volumeFreeBytes !== undefined ? { volumeFreeBytes: error.volumeFreeBytes } : {}), diagnostic };
       }
     },
     async diagnosticStats() {

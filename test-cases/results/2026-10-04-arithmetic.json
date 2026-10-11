@@ -1,0 +1,1315 @@
+{
+  "date": "2026-10-04",
+  "productionDeployed": false,
+  "realWeChatSend": false,
+  "model": "gpt-5.6-sol",
+  "harness": "codex",
+  "initial": {
+    "image": "sha256:5e1f6021cb01b475260f29b4b005e95e4d4099615dc06da596a2aa32c4e3e8ae",
+    "hashes": {
+      "bookkeeping-core.mjs": "2c39aa2c355fd1a82f4a69d71161a6f62651bdf60f64f0eec6f123a2f20989ef",
+      "index.ts": "d3b9abb59c27c10bfbac82631e6e66d60f130887ed0dce54916986b196074a22",
+      "workspace/AGENTS.md": "cb6da537ae43b9445164e08857d018d1fcc5a52b60f2c4dacb8e280950207635"
+    },
+    "total": 17,
+    "passed": 15,
+    "results": [
+      {
+        "corpus": "case",
+        "id": "WX-211",
+        "group": "multiply-divide",
+        "message": "午饭6.7×0.9",
+        "expected": {
+          "action": "record",
+          "amount": "6.03",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 17469,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：6.03 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:15",
+        "writes": [
+          {
+            "amount": "6.03",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1791044122
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-212",
+        "group": "multiply-divide",
+        "message": "午饭6.7*0.9",
+        "expected": {
+          "action": "record",
+          "amount": "6.03",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 10274,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：6.03 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:15",
+        "writes": [
+          {
+            "amount": "6.03",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1791044139
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-213",
+        "group": "multiply-divide",
+        "message": "午饭3.8/2",
+        "expected": {
+          "action": "prepare",
+          "amount": "1.90",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 12519,
+        "reply": "帮你核对一下这笔～🤔\n- 账本：[ 日常账本 ]\n- 支出：1.90 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:15\n- 确认：没问题就回复“是”，不记的话回复“不是”就好～",
+        "writes": [],
+        "pending": {
+          "amount": "1.90",
+          "currency": "SGD"
+        },
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-214",
+        "group": "multiply-divide",
+        "message": "确认",
+        "expected": {
+          "action": "record",
+          "amount": "1.90",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 8316,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：1.90 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:15",
+        "writes": [
+          {
+            "amount": "1.90",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1791044150
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-215",
+        "group": "multiply-divide",
+        "message": "午饭3.8／2",
+        "expected": {
+          "action": "prepare",
+          "amount": "1.90",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 13635,
+        "reply": "帮你核对一下这笔～🤔\n- 账本：[ 日常账本 ]\n- 支出：1.90 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:16\n- 确认：没问题就回复“是”，不记的话回复“不是”就好～",
+        "writes": [],
+        "pending": {
+          "amount": "1.90",
+          "currency": "SGD"
+        },
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-216",
+        "group": "multiply-divide",
+        "message": "取消",
+        "expected": {
+          "action": "cancel"
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 11208,
+        "reply": "好哒，已经帮你取消啦～ 这笔没有记到账本里 😊",
+        "writes": [],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-217",
+        "group": "multiply-divide",
+        "message": "午饭3.8÷2",
+        "expected": {
+          "action": "record",
+          "amount": "1.90",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": false,
+        "issues": [
+          "expected-one-write"
+        ],
+        "durationMs": 10891,
+        "reply": "帮你核对一下这笔～🤔\n- 账本：[ 日常账本 ]\n- 支出：1.90 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:16\n- 确认：没问题就回复“是”，不记的话回复“不是”就好～",
+        "writes": [],
+        "pending": {
+          "amount": "1.90",
+          "currency": "SGD"
+        },
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-218",
+        "group": "multiply-divide",
+        "message": "午饭3.8除以2",
+        "expected": {
+          "action": "record",
+          "amount": "1.90",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": false,
+        "issues": [
+          "expected-one-write"
+        ],
+        "durationMs": 11862,
+        "reply": "帮你核对一下这笔～🤔\n- 账本：[ 日常账本 ]\n- 支出：1.90 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:16\n- 确认：没问题就回复“是”，不记的话回复“不是”就好～",
+        "writes": [],
+        "pending": {
+          "amount": "1.90",
+          "currency": "SGD"
+        },
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-219",
+        "group": "multiply-divide",
+        "message": "午饭2+3*4",
+        "expected": {
+          "action": "record",
+          "amount": "14",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 12273,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：14.00 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:16",
+        "writes": [
+          {
+            "amount": "14.00",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1791044218
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-220",
+        "group": "multiply-divide",
+        "message": "午饭12/2*3",
+        "expected": {
+          "action": "prepare",
+          "amount": "18",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 12920,
+        "reply": "帮你核对一下这笔～🤔\n- 账本：[ 日常账本 ]\n- 支出：18.00 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:17\n- 确认：没问题就回复“是”，不记的话回复“不是”就好～",
+        "writes": [],
+        "pending": {
+          "amount": "18.00",
+          "currency": "SGD"
+        },
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-221",
+        "group": "multiply-divide",
+        "message": "午饭3.8 备注食堂/咖啡",
+        "expected": {
+          "action": "record",
+          "amount": "3.80",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ],
+          "commentEquals": "食堂/咖啡"
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 14408,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：3.80 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：食堂/咖啡\n- 时间：2026/10/04 00:17",
+        "writes": [
+          {
+            "amount": "3.80",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "食堂/咖啡",
+            "time": 1791044243
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-222",
+        "group": "multiply-divide",
+        "message": "午饭1/3",
+        "expected": {
+          "action": "no_write"
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 6788,
+        "reply": "午饭金额 1÷3 无法精确到分，请告诉我最终实付金额。",
+        "writes": [],
+        "pending": null,
+        "authoritative": false
+      },
+      {
+        "corpus": "case",
+        "id": "WX-223",
+        "group": "multiply-divide",
+        "message": "午饭3.8/0",
+        "expected": {
+          "action": "no_write"
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 6745,
+        "reply": "3.8÷0 无法计算。请告诉我午饭的最终金额。",
+        "writes": [],
+        "pending": null,
+        "authoritative": false
+      },
+      {
+        "corpus": "case",
+        "id": "WX-224",
+        "group": "multiply-divide",
+        "message": "午饭6.7*0.9人民币",
+        "expected": {
+          "action": "record",
+          "amount": "6.03",
+          "currency": "CNY",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 11788,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：6.03 CNY\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:17",
+        "writes": [
+          {
+            "amount": "6.03",
+            "currency": "CNY",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1791044271
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-225",
+        "group": "multiply-divide",
+        "message": "午饭6.7乘以0.9",
+        "expected": {
+          "action": "record",
+          "amount": "6.03",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 9977,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：6.03 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:18",
+        "writes": [
+          {
+            "amount": "6.03",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1791044283
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-226",
+        "group": "multiply-divide",
+        "message": "午饭3.8/2 备注食堂/打包",
+        "expected": {
+          "action": "prepare",
+          "amount": "1.90",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ],
+          "commentEquals": "食堂/打包"
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 15338,
+        "reply": "帮你核对一下这笔～🤔\n- 账本：[ 日常账本 ]\n- 支出：1.90 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：食堂/打包\n- 时间：2026/10/04 00:18\n- 确认：没问题就回复“是”，不记的话回复“不是”就好～",
+        "writes": [],
+        "pending": {
+          "amount": "1.90",
+          "currency": "SGD"
+        },
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-227",
+        "group": "multiply-divide",
+        "message": "是的",
+        "expected": {
+          "action": "record",
+          "amount": "1.90",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ],
+          "commentEquals": "食堂/打包"
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 9601,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：1.90 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：食堂/打包\n- 时间：2026/10/04 00:18",
+        "writes": [
+          {
+            "amount": "1.90",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "食堂/打包",
+            "time": 1791044293
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      }
+    ]
+  },
+  "final": {
+    "image": "sha256:5088b2f7cee868759d49a849263b47d157080d4e224c0d273eaa56b82f854321",
+    "hashes": {
+      "openclaw-plugins/clawbot-bookkeeping/bookkeeping-core.mjs": "8b429813ed5d713ccf3909d9009d3c1dc0143244b293e407df8da02f5403771a",
+      "openclaw-plugins/clawbot-bookkeeping/index.ts": "db6a84c7f49e25c90efaab2534313bb2faa021bb20db7ebbb13f5609707e6b2e",
+      "openclaw-workspace/AGENTS.md": "7e2d88021e4ab5caa8551c7f715adcd02e63768b015624a3083c9f495e5e8cf5"
+    },
+    "total": 29,
+    "passed": 29,
+    "results": [
+      {
+        "corpus": "case",
+        "id": "WX-194",
+        "group": "实测问题回归",
+        "message": "午饭10-2",
+        "expected": {
+          "action": "record",
+          "amount": "8",
+          "currency": "SGD"
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 15588,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：8.00 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:20",
+        "writes": [
+          {
+            "amount": "8.00",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1791044426
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-211",
+        "group": "multiply-divide",
+        "message": "午饭6.7×0.9",
+        "expected": {
+          "action": "record",
+          "amount": "6.03",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 13680,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：6.03 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:20",
+        "writes": [
+          {
+            "amount": "6.03",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1791044441
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-212",
+        "group": "multiply-divide",
+        "message": "午饭6.7*0.9",
+        "expected": {
+          "action": "record",
+          "amount": "6.03",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 12724,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：6.03 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:20",
+        "writes": [
+          {
+            "amount": "6.03",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1791044455
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-213",
+        "group": "multiply-divide",
+        "message": "午饭3.8/2",
+        "expected": {
+          "action": "prepare",
+          "amount": "1.90",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 11824,
+        "reply": "帮你核对一下这笔～🤔\n- 账本：[ 日常账本 ]\n- 支出：1.90 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:21\n- 确认：没问题就回复“是”，不记的话回复“不是”就好～",
+        "writes": [],
+        "pending": {
+          "amount": "1.90",
+          "currency": "SGD"
+        },
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-214",
+        "group": "multiply-divide",
+        "message": "确认",
+        "expected": {
+          "action": "record",
+          "amount": "1.90",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 7348,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：1.90 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:21",
+        "writes": [
+          {
+            "amount": "1.90",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1791044468
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-215",
+        "group": "multiply-divide",
+        "message": "午饭3.8／2",
+        "expected": {
+          "action": "prepare",
+          "amount": "1.90",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 13937,
+        "reply": "帮你核对一下这笔～🤔\n- 账本：[ 日常账本 ]\n- 支出：1.90 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:21\n- 确认：没问题就回复“是”，不记的话回复“不是”就好～",
+        "writes": [],
+        "pending": {
+          "amount": "1.90",
+          "currency": "SGD"
+        },
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-216",
+        "group": "multiply-divide",
+        "message": "取消",
+        "expected": {
+          "action": "cancel"
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 6822,
+        "reply": "好哒，已经帮你取消啦～ 这笔没有记到账本里 😊",
+        "writes": [],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-217",
+        "group": "multiply-divide",
+        "message": "午饭3.8÷2",
+        "expected": {
+          "action": "record",
+          "amount": "1.90",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 11284,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：1.90 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：无\n- 时间：2026/10/04 00:21",
+        "writes": [
+          {
+            "amount": "1.90",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "",
+            "time": 1791044508
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-218",
+        "group": "multiply-divide",
+        "message": "午饭3.8除以2",
+        "expected": {
+          "action": "record",
+          "amount": "1.90",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 13360,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：1.90 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:21",
+        "writes": [
+          {
+            "amount": "1.90",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1791044519
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-219",
+        "group": "multiply-divide",
+        "message": "午饭2+3*4",
+        "expected": {
+          "action": "record",
+          "amount": "14",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 12342,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：14.00 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:22",
+        "writes": [
+          {
+            "amount": "14.00",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1791044532
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-220",
+        "group": "multiply-divide",
+        "message": "午饭12/2*3",
+        "expected": {
+          "action": "prepare",
+          "amount": "18",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 12135,
+        "reply": "帮你核对一下这笔～🤔\n- 账本：[ 日常账本 ]\n- 支出：18.00 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:22\n- 确认：没问题就回复“是”，不记的话回复“不是”就好～",
+        "writes": [],
+        "pending": {
+          "amount": "18.00",
+          "currency": "SGD"
+        },
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-221",
+        "group": "multiply-divide",
+        "message": "午饭3.8 备注食堂/咖啡",
+        "expected": {
+          "action": "record",
+          "amount": "3.80",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ],
+          "commentEquals": "食堂/咖啡"
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 13826,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：3.80 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：食堂/咖啡\n- 时间：2026/10/04 00:22",
+        "writes": [
+          {
+            "amount": "3.80",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "食堂/咖啡",
+            "time": 1791044557
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-222",
+        "group": "multiply-divide",
+        "message": "午饭1/3",
+        "expected": {
+          "action": "no_write"
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 5515,
+        "reply": "午饭 1÷3 无法精确到分，请告诉我最终实付金额。",
+        "writes": [],
+        "pending": null,
+        "authoritative": false
+      },
+      {
+        "corpus": "case",
+        "id": "WX-223",
+        "group": "multiply-divide",
+        "message": "午饭3.8/0",
+        "expected": {
+          "action": "no_write"
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 5032,
+        "reply": "金额不能除以 0，请告诉我午饭的最终实付金额。",
+        "writes": [],
+        "pending": null,
+        "authoritative": false
+      },
+      {
+        "corpus": "case",
+        "id": "WX-224",
+        "group": "multiply-divide",
+        "message": "午饭6.7*0.9人民币",
+        "expected": {
+          "action": "record",
+          "amount": "6.03",
+          "currency": "CNY",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 10948,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：6.03 CNY\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:23",
+        "writes": [
+          {
+            "amount": "6.03",
+            "currency": "CNY",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1791044581
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-225",
+        "group": "multiply-divide",
+        "message": "午饭6.7乘以0.9",
+        "expected": {
+          "action": "record",
+          "amount": "6.03",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 12256,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：6.03 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:23",
+        "writes": [
+          {
+            "amount": "6.03",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1791044592
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-226",
+        "group": "multiply-divide",
+        "message": "午饭3.8/2 备注食堂/打包",
+        "expected": {
+          "action": "prepare",
+          "amount": "1.90",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ],
+          "commentEquals": "食堂/打包"
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 8522,
+        "reply": "帮你核对一下这笔～🤔\n- 账本：[ 日常账本 ]\n- 支出：1.90 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：食堂/打包\n- 时间：2026/10/04 00:23\n- 确认：没问题就回复“是”，不记的话回复“不是”就好～",
+        "writes": [],
+        "pending": {
+          "amount": "1.90",
+          "currency": "SGD"
+        },
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-227",
+        "group": "multiply-divide",
+        "message": "是的",
+        "expected": {
+          "action": "record",
+          "amount": "1.90",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ],
+          "commentEquals": "食堂/打包"
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 5229,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：1.90 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：食堂/打包\n- 时间：2026/10/04 00:23",
+        "writes": [
+          {
+            "amount": "1.90",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "食堂/打包",
+            "time": 1791044604
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-228",
+        "group": "subtract",
+        "message": "午饭10-3.8",
+        "expected": {
+          "action": "record",
+          "amount": "6.20",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 14005,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：6.20 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:23",
+        "writes": [
+          {
+            "amount": "6.20",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1791044618
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-229",
+        "group": "subtract",
+        "message": "午饭10减去3.8",
+        "expected": {
+          "action": "record",
+          "amount": "6.20",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 12885,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：6.20 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:23",
+        "writes": [
+          {
+            "amount": "6.20",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1791044632
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-230",
+        "group": "subtract",
+        "message": "午饭10-2*3",
+        "expected": {
+          "action": "record",
+          "amount": "4",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 13277,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：4.00 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:24",
+        "writes": [
+          {
+            "amount": "4.00",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1791044645
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-231",
+        "group": "subtract",
+        "message": "午饭3-5+4",
+        "expected": {
+          "action": "record",
+          "amount": "2",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 12650,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：2.00 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:24",
+        "writes": [
+          {
+            "amount": "2.00",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1791044658
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-232",
+        "group": "subtract",
+        "message": "午饭10-3.8/2",
+        "expected": {
+          "action": "prepare",
+          "amount": "8.10",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 12159,
+        "reply": "帮你核对一下这笔～🤔\n- 账本：[ 日常账本 ]\n- 支出：8.10 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:24\n- 确认：没问题就回复“是”，不记的话回复“不是”就好～",
+        "writes": [],
+        "pending": {
+          "amount": "8.10",
+          "currency": "SGD"
+        },
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-233",
+        "group": "subtract",
+        "message": "确认",
+        "expected": {
+          "action": "record",
+          "amount": "8.10",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 7827,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：8.10 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:24",
+        "writes": [
+          {
+            "amount": "8.10",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1791044671
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-234",
+        "group": "subtract",
+        "message": "午饭3.8-10",
+        "expected": {
+          "action": "no_write"
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 7971,
+        "reply": "午饭金额算出来是负数。请告诉我实际支付金额。",
+        "writes": [],
+        "pending": null,
+        "authoritative": false
+      },
+      {
+        "corpus": "case",
+        "id": "WX-235",
+        "group": "subtract",
+        "message": "午饭3.8-3.8",
+        "expected": {
+          "action": "no_write"
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 5823,
+        "reply": "金额算出来是 0，无法记为支出。请告诉我实际支付金额。",
+        "writes": [],
+        "pending": null,
+        "authoritative": false
+      },
+      {
+        "corpus": "case",
+        "id": "WX-236",
+        "group": "subtract",
+        "message": "午饭-3.8",
+        "expected": {
+          "action": "no_write"
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 15320,
+        "reply": "这次没能从消息中核对出唯一的支出金额，所以没有入账。请把消费金额单独标明后再发一次哦～",
+        "writes": [],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-237",
+        "group": "subtract",
+        "message": "午饭10-3.8人民币",
+        "expected": {
+          "action": "record",
+          "amount": "6.20",
+          "currency": "CNY",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ]
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 7706,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：6.20 CNY\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/04 00:25",
+        "writes": [
+          {
+            "amount": "6.20",
+            "currency": "CNY",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1791044720
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      },
+      {
+        "corpus": "case",
+        "id": "WX-238",
+        "group": "subtract",
+        "message": "2026-10-03午饭10-3.8",
+        "expected": {
+          "action": "record",
+          "amount": "6.20",
+          "currency": "SGD",
+          "category": [
+            "食品酒水",
+            "早午晚餐"
+          ],
+          "localDate": "2026-10-03"
+        },
+        "passed": true,
+        "issues": [],
+        "durationMs": 11975,
+        "reply": "记下来啦！🧾\n- 账本：[ 日常账本 ]\n- 支出：6.20 SGD\n- 分类：食品酒水 - 早午晚餐\n- 备注：午饭\n- 时间：2026/10/03 00:25",
+        "writes": [
+          {
+            "amount": "6.20",
+            "currency": "SGD",
+            "category": {
+              "primary": "食品酒水",
+              "name": "早午晚餐"
+            },
+            "comment": "午饭",
+            "time": 1790958300
+          }
+        ],
+        "pending": null,
+        "authoritative": true
+      }
+    ]
+  }
+}

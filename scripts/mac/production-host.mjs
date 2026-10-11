@@ -77,8 +77,10 @@ async function tick() {
     if (maintenance) { result = 'maintenance'; return; }
     state.storageFault ||= existsSync(faultPath);
     view = await driver.inspect();
-    storage = view.available && view.identityValid ? await driver.storage() : undefined;
-    result = await reconcileRuntime(driver, state, { storage });
+    storage = !state.storageFault && view.available && view.identityValid ? await driver.storage() : undefined;
+    // Use the same inspected identity that authorized this sample. A second
+    // inspection used to turn a recovered Docker query + no sample into a fault.
+    result = await reconcileRuntime(driver, state, { storage, view });
   } catch (error) {
     result = error.message === 'CLAWBOT_OPERATION_BUSY' ? 'another-operation' : 'host-needs-attention';
     if (result !== 'another-operation') lastError = error.diagnostic ?? diagnosticError(error);

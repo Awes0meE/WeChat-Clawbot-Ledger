@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 import { logger } from "../util/logger.js";
 import { generateId } from "../util/random.js";
@@ -155,11 +156,26 @@ export type WeixinMsgContext = {
   MediaUrl?: string;
   MediaPath?: string;
   MediaType?: string;
+  /** Current provider message identity, omitted for quoted or multiple images. */
+  media?: Array<{ path: string; contentType: string; messageId?: string }>;
   /** Raw message body for framework command authorization. */
   CommandBody?: string;
   /** Whether the sender is authorized to execute slash commands. */
   CommandAuthorized?: boolean;
 };
+
+const imageContextKey = Symbol.for('clawbot.weixin.inbound-image-context.v1');
+type ImageContext = { messageId: string; accountId: string; senderId: string; imagePath: string };
+
+/** Keep transport identity across the official harness without changing its prompt or code. */
+export function withWeixinInboundContext<T>(ctx: WeixinMsgContext, operation: () => T): T {
+  const shared = globalThis as unknown as { [key: symbol]: AsyncLocalStorage<ImageContext | undefined> };
+  const storage = shared[imageContextKey] ??= new AsyncLocalStorage<ImageContext | undefined>();
+  const media = ctx.media?.length === 1 ? ctx.media[0] : undefined;
+  const image = media?.messageId === ctx.MessageSid && media.contentType.startsWith('image/')
+    ? { messageId: ctx.MessageSid, accountId: ctx.AccountId, senderId: ctx.SenderId, imagePath: media.path } : undefined;
+  return storage.run(image, operation);
+}
 
 /** Returns true if the message item is a media type (image, video, file, or voice). */
 export function isMediaItem(item: MessageItem): boolean {
@@ -247,6 +263,9 @@ export function weixinMessageToMsgContext(
   if (opts?.decryptedPicPath) {
     ctx.MediaPath = opts.decryptedPicPath;
     ctx.MediaType = "image/*";
+    ctx.media = [{ path: opts.decryptedPicPath, contentType: 'image/*',
+      ...(msg.item_list?.filter((item) => item.type === MessageItemType.IMAGE).length === 1
+        ? { messageId: ctx.MessageSid } : {}) }];
   } else if (opts?.decryptedVideoPath) {
     ctx.MediaPath = opts.decryptedVideoPath;
     ctx.MediaType = "video/mp4";

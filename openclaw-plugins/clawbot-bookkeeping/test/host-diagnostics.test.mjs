@@ -18,11 +18,28 @@ test('Failures retain stage, timeout and exit metadata without command, token or
   assert.equal(events.at(-1).error.timeoutMs, 20000); assert.equal(JSON.stringify(events).includes(secret), false);
   assert.equal(diagnosticError({ stderr: `write failed: no space left on device ${secret}`, code: 1 }).kind, 'disk-full');
   assert.equal(diagnosticError({ stderr: secret, code: 125 }).code, 125);
+  for (const [stderr, kind] of [['ENOSPC', 'disk-full'], ['input/output error', 'io-error'], ['EROFS', 'read-only-filesystem']]) {
+    assert.equal(diagnosticError({ stderr, killed: true }, { elapsedMs: 30000, timeoutMs: 20000 }).kind, kind);
+  }
+});
+test('Storage volume inspection failure retains timeout instead of inventing an identity mismatch', async () => {
+  const spec = { project: 'clawbot-production', profile: 'production', root: '/state', cutoverId: 'test',
+    volumeGeneration: null, services: { openclaw: { image: 'synthetic', mounts: [['ledger-data', '/ledger']] } } };
+  const events = [];
+  const d = managedDockerDriver(spec, 'fixture', { onDiagnostic: event => events.push(event), execute: async () => {
+    throw Object.assign(Error('deadline exceeded'), { code: 1 });
+  } });
+  assert.equal(await d.validateVolumes(), false);
+  const sample = await d.storage();
+  assert.equal(sample.error, 'STORAGE_UNAVAILABLE');
+  assert.equal(sample.diagnostic.kind, 'timeout');
+  assert.ok(events.some(e => e.phase === 'storage.volume-identity' && e.event === 'command-failed'));
 });
 test('Storage helper failure remains fail-closed and carries the actual failure diagnostic', async () => {
   const events = [], spec = { project: 'clawbot-production', profile: 'production', root: '/state', cutoverId: 'test',
     volumeGeneration: null, services: { openclaw: { image: 'synthetic', mounts: [['ledger-data', '/ledger']] } } };
   const d = managedDockerDriver(spec, 'fixture', { onDiagnostic: event => events.push(event), execute: async (_, args) => {
+    if (args[0] === 'ps') return { stdout: '' };
     if (args[0] === 'volume') return { stdout: JSON.stringify([{ Name: 'clawbot-production_ledger-data', Driver: 'local', Options: {},
       Labels: { 'clawbot.project': spec.project, 'clawbot.volume': 'ledger-data', 'clawbot.cutover': spec.cutoverId } }]) };
     throw Object.assign(Error('sensitive command'), { code: 125, stderr: 'Cannot connect to the Docker daemon' });

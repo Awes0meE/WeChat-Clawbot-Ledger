@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -19,6 +20,226 @@ function receivedExpenseParams(overrides = {}) {
     ...overrides,
   };
 }
+
+function imageParams(overrides = {}) {
+  return receivedExpenseParams({ timeMode: 'explicit', localDate: '2026-09-01',
+    timeEvidence: 'Sep 1, 2026', comment: 'Synthetic cafe lunch',
+    imageEvidence: { semanticVersion: 2, expenseStatus: 'expense', statusEvidence: 'Cafe purchase receipt',
+      totalEvidence: 'Amount paid SGD 7.20', currencyEvidence: 'SGD', purposeEvidence: 'Synthetic cafe lunch',
+      timeKind: 'purchase', dateAmbiguous: false, purposeAmbiguous: false,
+      orderCount: 1, amountAmbiguous: false, currencyAmbiguous: false, ...overrides } });
+}
+
+async function beginImageTurn(h, directory, id, { wrongIdentity = false, sameBytes = false } = {}) {
+  const path = join(directory, 'media', 'inbound', `${id}.jpg`);
+  mkdirSync(join(directory, 'media', 'inbound'), { recursive: true });
+  writeFileSync(path, Buffer.concat([Buffer.from([255, 216, 255]), Buffer.from(sameBytes ? 'image-0' : id)]));
+  const ctx = { channelId: 'openclaw-weixin', accountId: 'bot-account', messageId: id,
+    senderId: 'owner-user', sessionKey: 'agent:main:main' };
+  await h.inboundHooks.get('message_received')({ content: '', timestamp: Date.now(), media: [{ path, messageId: id }] }, ctx);
+  const prompt = 'Conversation info: ⟦openclaw:ctx⟧\n```json\n'
+    + JSON.stringify({ message_id: wrongIdentity ? 'wrong-message' : id, sender: { id: 'owner-user' }, source_modality: 'image' })
+    + `\n\`\`\`\n\n[media attached: media://inbound/${id}.jpg (image/*)]\n[Image]`;
+  const storage = globalThis[Symbol.for('clawbot.weixin.inbound-image-context.v1')] ??= new AsyncLocalStorage();
+  await storage.run({ messageId: wrongIdentity ? 'wrong-message' : id, imagePath: path, accountId: 'bot-account', senderId: 'owner-user' }, () =>
+    h.inboundHooks.get('llm_input')({ runId: id, prompt, imagesCount: 1 }, {
+    ...ctx, channel: 'openclaw-weixin', trigger: 'user',
+    channelContext: { sender: { id: 'owner-user' }, clawbotInbound: { messageId: wrongIdentity ? 'wrong-message' : id,
+      imagePath: path, accountId: 'bot-account' } },
+  }));
+  h.inboundHooks.latestRunId = id;
+}
+
+test('four image-only turns write independently; exact image resend does not write twice', async () => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'clawbot-image-')));
+  const previous = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = directory;
+  writeFileSync(join(directory, 'token.txt'), 'synthetic-token');
+  const requests = [], h = createPluginHarness(directory, successfulExpenseFetch(requests));
+  try {
+    for (let n = 0; n < 4; n++) {
+      await beginImageTurn(h, directory, `image-${n}`);
+      const result = await h.recordExpenseFactory(trustedOwnerContext()).execute(`image-call-${n}`, imageParams());
+      assert.equal(result.details.status, 'created');
+      assert.match(result.content[0].text, /具体时分采用收到图片的时间/u);
+    }
+    await beginImageTurn(h, directory, 'resend', { sameBytes: true });
+    assert.equal((await h.recordExpenseFactory(trustedOwnerContext()).execute('resend-call', imageParams())).details.status, 'duplicate');
+    await beginImageTurn(h, directory, 'resend-ambiguous', { sameBytes: true });
+    assert.equal((await h.prepareExpenseFactory(trustedOwnerContext()).execute('resend-prepare', imageParams({ amountAmbiguous: true, statusEvidence: '退款' }))).details.status, 'duplicate');
+    assert.equal(requests.filter(r => r.url.endsWith('/transactions/add.json')).length, 4);
+    await beginImageTurn(h, directory, 'wrong-context', { wrongIdentity: true });
+    await assert.rejects(h.recordExpenseFactory(trustedOwnerContext()).execute('wrong-call', imageParams()), /可信元数据/u);
+  } finally {
+    h.restore(); previous === undefined ? delete process.env.OPENCLAW_STATE_DIR : process.env.OPENCLAW_STATE_DIR = previous;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('image tools recheck deleted ledger rows and return a readable failure when lookup is unavailable', async () => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'clawbot-image-reentry-')));
+  const previous = process.env.OPENCLAW_STATE_DIR; process.env.OPENCLAW_STATE_DIR = directory;
+  writeFileSync(join(directory, 'token.txt'), 'synthetic-token');
+  const requests = []; const base = successfulExpenseFetch(requests); let state = 'present';
+  let writes = 0;
+  const h = createPluginHarness(directory, async (url, options) => {
+    if (url.includes('/transactions/get.json?')) {
+      if (state === 'unavailable') throw Error('timeout');
+      if (state === 'deleted') return new Response(JSON.stringify({ success: false,
+        errorCode: 205001, errorMessage: 'transaction not found' }), { status: 400 });
+    }
+    if (url.endsWith('/transactions/add.json')) { writes++; state = 'present'; }
+    return base(url, options);
+  });
+  try {
+    await beginImageTurn(h, directory, 'image-0');
+    assert.equal((await h.recordExpenseFactory(trustedOwnerContext()).execute('original-image', imageParams())).details.status, 'created');
+    state = 'unavailable';
+    await beginImageTurn(h, directory, 'lookup-unavailable', { sameBytes: true });
+    const failed = await h.recordExpenseFactory(trustedOwnerContext()).execute('failed-lookup', imageParams());
+    assert.equal(failed.details.status, 'failed');
+    assert.match(failed.content[0].text, /无法核对.*没有重新入账/u); assert.equal(writes, 1);
+    state = 'deleted';
+    await beginImageTurn(h, directory, 'new-image-message', { sameBytes: true });
+    const replaced = await h.recordExpenseFactory(trustedOwnerContext()).execute('replace-deleted-image', imageParams());
+    assert.equal(replaced.details.status, 'created'); assert.equal(writes, 2);
+    await beginImageTurn(h, directory, 'duplicate-new-image', { sameBytes: true });
+    assert.equal((await h.recordExpenseFactory(trustedOwnerContext()).execute('still-present', imageParams())).details.status, 'duplicate');
+    assert.equal(writes, 2);
+  } finally {
+    h.restore(); previous === undefined ? delete process.env.OPENCLAW_STATE_DIR : process.env.OPENCLAW_STATE_DIR = previous;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('image validation explains the specific rejected field and accepts a final amount actually paid', async () => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'clawbot-image-evidence-')));
+  const previous = process.env.OPENCLAW_STATE_DIR; process.env.OPENCLAW_STATE_DIR = directory;
+  writeFileSync(join(directory, 'token.txt'), 'synthetic-token');
+  const requests = [], h = createPluginHarness(directory, successfulExpenseFetch(requests));
+  try {
+    for (const [name, evidence, message] of [
+      ['currency', { currencyEvidence: '' }, /币种没能核对明确/u],
+      ['total', { totalEvidence: '' }, /最终实付款没能核对一致/u],
+      ['payment', { statusEvidence: '退款成功', expenseStatus: 'not_expense' }, /付款或退款状态/u],
+    ]) {
+      await beginImageTurn(h, directory, `rejected-${name}`);
+      const result = await h.recordExpenseFactory(trustedOwnerContext()).execute(`reject-${name}`, imageParams(evidence));
+      assert.equal(result.details.status, 'rejected'); assert.equal(result.details.imageIssue, `image-${name}`);
+      assert.match(result.content[0].text, message);
+    }
+    assert.equal(requests.filter(r => r.url.endsWith('/transactions/add.json')).length, 0);
+    await beginImageTurn(h, directory, 'paid-amount');
+    const success = await h.recordExpenseFactory(trustedOwnerContext()).execute('record-paid-amount', imageParams({
+      statusEvidence: 'Payment method: card; Amount paid SGD 7.20',
+    }));
+    assert.equal(success.details.status, 'created');
+    assert.equal(requests.filter(r => r.url.endsWith('/transactions/add.json')).length, 1);
+  } finally {
+    h.restore(); previous === undefined ? delete process.env.OPENCLAW_STATE_DIR : process.env.OPENCLAW_STATE_DIR = previous;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('card image tools write original unlabelled transaction times once and reject reversed payments', async () => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'clawbot-card-image-')));
+  const previous = process.env.OPENCLAW_STATE_DIR; process.env.OPENCLAW_STATE_DIR = directory;
+  writeFileSync(join(directory, 'token.txt'), 'synthetic-token');
+  const requests = [], h = createPluginHarness(directory, successfulExpenseFetch(requests));
+  try {
+    for (const [n, amount, day, clock] of [[0, '7.20', '01', '22:34'], [1, '18.50', '02', '00:59']]) {
+      const params = { ...imageParams({ statusEvidence: 'Status: Approved，Visa Debit Card', totalEvidence: `Total SGD ${amount}` }),
+        amount, timeMode: 'explicit', localDate: `2026-09-${day}`, localTime: clock, timeEvidence: `2026/9/${Number(day)}, ${clock}` };
+      await beginImageTurn(h, directory, `image-${n}`);
+      const result = await h.recordExpenseFactory(trustedOwnerContext()).execute(`card-${n}`, params);
+      assert.equal(result.details.status, 'created');
+      assert.equal(result.details.amountMinor, Math.round(Number(amount) * 100));
+      assert.equal(result.details.time, Date.parse(`2026-09-${day}T${clock}:00+08:00`) / 1000);
+      assert.match(result.content[0].text, new RegExp(`2026/09/${day} ${clock}`));
+    }
+    await beginImageTurn(h, directory, 'card-resend', { sameBytes: true });
+    assert.equal((await h.recordExpenseFactory(trustedOwnerContext()).execute('card-repeat', imageParams())).details.status, 'duplicate');
+    await beginImageTurn(h, directory, 'card-reversed');
+    const rejected = await h.recordExpenseFactory(trustedOwnerContext()).execute('reversed', imageParams({ statusEvidence: 'Status: Approved; Reversed', expenseStatus: 'not_expense' }));
+    assert.equal(rejected.details.status, 'rejected'); assert.equal(rejected.details.imageIssue, 'image-payment');
+    assert.equal(requests.filter(r => r.url.endsWith('/transactions/add.json')).length, 2);
+  } finally {
+    h.restore(); previous === undefined ? delete process.env.OPENCLAW_STATE_DIR : process.env.OPENCLAW_STATE_DIR = previous;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('numbered image proposals survive new requests and plugin restart and consume once', async () => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'clawbot-image-queue-')));
+  const previous = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = directory;
+  writeFileSync(join(directory, 'token.txt'), 'synthetic-token');
+  const requests = [];
+  let h = createPluginHarness(directory, successfulExpenseFetch(requests));
+  try {
+    const ids = [];
+    for (let n = 0; n < 2; n++) {
+      await beginImageTurn(h, directory, `pending-${n}`);
+      const result = await h.recordExpenseFactory(trustedOwnerContext()).execute(`pending-call-${n}`, imageParams({ amountAmbiguous: true }));
+      assert.equal(result.details.status, 'pending_confirmation');
+      ids.push(result.details.proposalId);
+    }
+    h.restore(); h = createPluginHarness(directory, successfulExpenseFetch(requests));
+    await receiveTrustedOwnerMessage(h.inboundHooks, { content: '确认', messageId: 'ambiguous-confirm' });
+    assert.equal((await h.resolveExpenseConfirmationFactory(trustedOwnerContext()).execute('ambiguous-call', { decision: 'confirm' })).details.status, 'ambiguous');
+    await receiveTrustedOwnerMessage(h.inboundHooks, { content: `确认第${ids[1]}笔`, messageId: 'numbered-confirm' });
+    assert.equal((await h.resolveExpenseConfirmationFactory(trustedOwnerContext()).execute('numbered-call', { decision: 'confirm' })).details.status, 'created');
+    await receiveTrustedOwnerMessage(h.inboundHooks, { content: `取消第${ids[0]}笔`, messageId: 'numbered-cancel' });
+    assert.equal((await h.resolveExpenseConfirmationFactory(trustedOwnerContext()).execute('cancel-call', { decision: 'cancel' })).details.status, 'cancelled');
+    await receiveTrustedOwnerMessage(h.inboundHooks, { content: `确认第${ids[1]}笔`, messageId: 'repeat-confirm' });
+    assert.equal((await h.resolveExpenseConfirmationFactory(trustedOwnerContext()).execute('repeat-call', { decision: 'confirm' })).details.status, 'missing');
+    assert.equal(requests.filter(r => r.url.endsWith('/transactions/add.json')).length, 1);
+  } finally {
+    h.restore(); previous === undefined ? delete process.env.OPENCLAW_STATE_DIR : process.env.OPENCLAW_STATE_DIR = previous;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('missing image currency defaults to SGD with an authoritative receipt and one write', async () => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'clawbot-image-default-currency-')));
+  const previous = process.env.OPENCLAW_STATE_DIR; process.env.OPENCLAW_STATE_DIR = directory;
+  writeFileSync(join(directory, 'token.txt'), 'synthetic-token');
+  const requests = [], h = createPluginHarness(directory, successfulExpenseFetch(requests));
+  try {
+    await beginImageTurn(h, directory, 'default-currency');
+    const params = imageParams({ currencyDefaulted: true, currencyEvidence: 'No currency shown; user default SGD', totalEvidence: 'Total $7.20' });
+    const result = await h.recordExpenseFactory(trustedOwnerContext()).execute('default-currency-write', params);
+    assert.equal(result.details.status, 'created'); assert.equal(result.details.currency, 'SGD');
+    assert.match(result.content[0].text, /默认 SGD/u);
+    assert.equal(requests.filter(r => r.url.endsWith('/transactions/add.json')).length, 1);
+  } finally {
+    h.restore(); previous === undefined ? delete process.env.OPENCLAW_STATE_DIR : process.env.OPENCLAW_STATE_DIR = previous;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('fresh image tools require semantic assessment and refuse date or purpose gaps before writing', async () => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'clawbot-semantic-image-')));
+  const previous = process.env.OPENCLAW_STATE_DIR; process.env.OPENCLAW_STATE_DIR = directory;
+  writeFileSync(join(directory, 'token.txt'), 'synthetic-token');
+  const requests = [], h = createPluginHarness(directory, successfulExpenseFetch(requests));
+  try {
+    for (const [n, params, reason] of [
+      [0, { ...imageParams(), timeMode: 'received' }, 'image-date'],
+      [1, imageParams({ dateAmbiguous: true }), 'image-date'],
+      [2, imageParams({ purposeEvidence: '' }), 'image-purpose'],
+      [3, imageParams({ semanticVersion: undefined, paymentStatus: 'paid' }), 'image-evidence'],
+    ]) {
+      await beginImageTurn(h, directory, `semantic-missing-${n}`);
+      const result = await h.recordExpenseFactory(trustedOwnerContext()).execute(`missing-${n}`, params);
+      assert.equal(result.details.status, 'rejected'); assert.equal(result.details.imageIssue, reason);
+    }
+    assert.equal(requests.filter(r => r.url.endsWith('/transactions/add.json')).length, 0);
+  } finally {
+    h.restore(); previous === undefined ? delete process.env.OPENCLAW_STATE_DIR : process.env.OPENCLAW_STATE_DIR = previous;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 function normalizeExpenseTestParams(toolName, params) {
   return toolName === 'record_expense' || toolName === 'prepare_expense'
@@ -102,6 +323,7 @@ function createPluginHarness(tempDirectory, fetchImpl, pluginConfig = {}) {
     inboundHooks,
     hookOptions,
     summarizeExpensesFactory: (context) => materializeExpenseTool(summarizeExpensesFactory, 'summarize_expenses', context),
+    rawSummarizeExpensesFactory: summarizeExpensesFactory,
     recordExpenseFactory: (context) => materializeExpenseTool(recordExpenseFactory, 'record_expense', context),
     prepareExpenseFactory: (context) => materializeExpenseTool(prepareExpenseFactory, 'prepare_expense', context),
     resolveExpenseConfirmationFactory: (context) => materializeExpenseTool(
@@ -256,9 +478,89 @@ for (const toolName of ['prepare_expense', 'record_expense']) {
   }
 }
 
+for (const separateExecution of [false, true]) {
+  test(`summary parameter correction delivers the successful retry (separate=${separateExecution})`, async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'clawbot-summary-retry-'));
+    writeFileSync(join(directory, 'token.txt'), 'synthetic-token');
+    const requests = [];
+    const baseFetch = successfulExpenseFetch(requests);
+    const fetchImpl = async (url, options) => {
+      if (new URL(url).pathname.endsWith('/transactions/list/all.json')) {
+        requests.push({ url, options });
+        return new Response(JSON.stringify({ success: true, result: [] }));
+      }
+      return baseFetch(url, options);
+    };
+    const h = createPluginHarness(directory, fetchImpl);
+    const executor = separateExecution ? createPluginHarness(directory, fetchImpl) : h;
+    const runId = 'summary-correction-run';
+    const context = { runId, sessionKey: 'agent:main:main', channelId: 'openclaw-weixin',
+      requester: { channel: 'openclaw-weixin', accountId: 'bot-account', senderId: 'owner-user', senderIsOwner: true } };
+    try {
+      await beginTrustedOwnerTurn(h.inboundHooks, { runId, messageId: 'summary-correction-message', content: '开始记账至今花了多少钱' });
+      for (const params of [
+        { questions: [{ kind: 'summary' }] },
+        { questions: [{ kind: 'summary', period: 'custom', startDate: '2026-02-30', endDate: '2026-09-30' }] },
+        { period: 'this_month', unexpected: true },
+      ]) {
+        const invalid = { toolName: 'summarize_expenses', runId, toolCallId: 'invalid-summary-call', params };
+        const blocked = await h.inboundHooks.get('before_tool_call')(invalid, context);
+        assert.equal(blocked?.block, true);
+        await h.inboundHooks.get('after_tool_call')({ ...invalid, result: {
+          content: [{ type: 'text', text: blocked.blockReason }], details: { status: 'blocked', reason: blocked.blockReason },
+        } }, context);
+      }
+      assert.equal(requests.length, 0);
+      const valid = { toolName: 'summarize_expenses', runId, toolCallId: 'corrected-summary-call',
+        params: { questions: [{ kind: 'summary', period: 'custom', startDate: '2000-01-01', endDate: '2026-09-30' }] } };
+      assert.equal((await h.inboundHooks.get('before_tool_call')(valid, context))?.block, undefined);
+      const result = await executor.rawSummarizeExpensesFactory(trustedOwnerContext())
+        .execute(separateExecution ? 'execution-call' : valid.toolCallId, valid.params);
+      assert.equal(result.details.status, 'ok');
+      await h.inboundHooks.get('after_tool_call')({ ...valid, result }, context);
+      assert.equal((await h.inboundHooks.get('reply_payload_sending')({ kind: 'final', payload: { text: 'failed' } }, context)).payload.text, result.content[0].text);
+      // The persisted result must also reach WeChat through a fresh plugin instance.
+      const sender = createPluginHarness(directory, fetchImpl);
+      try {
+        const outgoing = await sender.inboundHooks.get('message_sending')({ to: 'owner-user', content: 'failed',
+          metadata: { channel: 'openclaw-weixin', accountId: 'bot-account', runId } }, { channelId: 'openclaw-weixin', accountId: 'bot-account' });
+        assert.equal(outgoing.content, result.content[0].text);
+      } finally { sender.restore(); }
+      assert.equal(requests.length, 3);
+      assert.ok(requests.every(r => !r.url.includes('/transactions/add.json')));
+    } finally {
+      if (executor !== h) executor.restore();
+      h.restore(); rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+test('summary execution errors and unproven blocks retain failure authority', async () => {
+  for (const evidence of ['error', 'wrong-reason', 'no-result']) {
+    const directory = mkdtempSync(join(tmpdir(), 'clawbot-summary-error-'));
+    const h = createPluginHarness(directory, async () => assert.fail('no HTTP expected'));
+    const runId = 'summary-execution-error';
+    try {
+      await beginTrustedOwnerTurn(h.inboundHooks, { runId, messageId: 'summary-execution-error', content: '查账' });
+      const event = { toolName: 'summarize_expenses', runId, params: { questions: [{ kind: 'summary' }] },
+        ...(evidence === 'error' ? { error: 'execution failed' } : evidence === 'wrong-reason' ? {
+          result: { content: [{ type: 'text', text: 'unproven failure' }], details: { status: 'blocked', reason: 'different reason' } },
+        } : { error: 'Invalid arguments for tool summarize_expenses' }) };
+      await h.inboundHooks.get('after_tool_call')(event, { runId });
+      await h.inboundHooks.get('after_tool_call')({ toolName: 'summarize_expenses', runId,
+        params: { period: 'this_month' }, result: { content: [{ type: 'text', text: 'later result' }] } }, { runId });
+      const outgoing = await h.inboundHooks.get('reply_payload_sending')({ kind: 'final', payload: { text: 'later result' } }, { runId });
+      assert.equal(outgoing.payload.text, evidence === 'wrong-reason' ? 'unproven failure' : '这次没查成功，稍后再试一下吧～');
+    } finally { h.restore(); rmSync(directory, { recursive: true, force: true }); }
+  }
+});
+
 function successfulExpenseFetch(requests) {
   return async (url, options) => {
     requests.push({ url, options });
+    if (url.includes('/transactions/get.json?')) {
+      return new Response(JSON.stringify({ success: true, result: { id: new URL(url).searchParams.get('id') } }), { status: 200 });
+    }
     if (url.endsWith('/accounts/list.json')) {
       return new Response(JSON.stringify({ success: true, result: [
         { id: 'account-1', name: '日常支出', currency: 'SGD' },
@@ -4282,4 +4584,89 @@ test('batch read authoritative reply preserves every answer after a restart and 
     const stale = await h.inboundHooks.get('message_sending')({ ...event, content: result.content[0].text }, context);
     assert.equal(stale, undefined, 'old authoritative text must not be recovered for the newer source');
   } finally { h.restore(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+for (const entry of ['record', 'prepare']) for (const ending of ['confirm', 'cancel', 'new-message', 'expired']) {
+  test(`${entry} slash division requires durable confirmation and handles ${ending}`, async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'clawbot-division-'));
+    writeFileSync(join(directory, 'token.txt'), 'test-token', 'utf8');
+    const requests = [];
+    let harness = createPluginHarness(directory, successfulExpenseFetch(requests));
+    const originalNow = Date.now;
+    let now = originalNow();
+    Date.now = () => now;
+    const timestamp = Math.floor(now / 1000);
+    try {
+      const runId = await receiveTrustedOwnerMessage(harness.inboundHooks, {
+        content: '午饭3.8/2 备注食堂/打包', messageId: 'division-source', timestamp,
+      });
+      const factory = entry === 'record' ? harness.recordExpenseFactory : harness.prepareExpenseFactory;
+      const result = await factory(trustedOwnerContext()).execute('division-proposal', receivedExpenseParams({ amount: '1.90' }));
+      assert.equal(result.details.status, 'pending_confirmation');
+      assert.match(result.content[0].text, /支出：1\.90 SGD/u);
+      assert.match(result.content[0].text, /备注：食堂\/打包/u);
+      assert.equal(requests.length, 0);
+      const outgoing = harness.inboundHooks.get('reply_payload_sending')({
+        kind: 'final', payload: { text: '错误的已记账回复' }, runId,
+      }, { runId });
+      assert.equal(outgoing.payload.text, result.content[0].text);
+      harness.restore();
+      harness = createPluginHarness(directory, successfulExpenseFetch(requests));
+      if (ending === 'new-message') await receiveTrustedOwnerMessage(harness.inboundHooks, {
+        content: '今天花了多少钱', messageId: 'division-unrelated', timestamp,
+      });
+      if (ending === 'expired') now += 11 * 60 * 1000;
+      await receiveTrustedOwnerMessage(harness.inboundHooks, {
+        content: ending === 'cancel' ? '取消' : '确认', messageId: 'division-answer', timestamp: Math.floor(now / 1000),
+      });
+      const resolved = await harness.resolveExpenseConfirmationFactory(trustedOwnerContext()).execute(
+        'division-resolve', { decision: ending === 'cancel' ? 'cancel' : 'confirm' },
+      );
+      assert.equal(resolved.details.status, { confirm: 'created', cancel: 'cancelled', 'new-message': 'missing', expired: 'expired' }[ending]);
+      const posts = requests.filter(({ url }) => url.endsWith('/transactions/add.json'));
+      assert.equal(posts.length, ending === 'confirm' ? 1 : 0);
+      if (ending === 'confirm') {
+        const body = JSON.parse(posts[0].options.body);
+        assert.equal(body.sourceAmount, 190);
+        assert.equal(body.comment, '食堂/打包');
+        assert.equal(body.time, timestamp);
+        // Redelivery of the very same confirmation and another confirm must
+        // both preserve one write, including after reopening persistent state.
+        for (const messageId of ['division-answer', 'division-answer-again']) {
+          await receiveTrustedOwnerMessage(harness.inboundHooks, { content: '确认', messageId, timestamp });
+          await harness.resolveExpenseConfirmationFactory(trustedOwnerContext()).execute(`repeat-${messageId}`, { decision: 'confirm' });
+        }
+        assert.equal(requests.filter(({ url }) => url.endsWith('/transactions/add.json')).length, 1);
+      } else assert.equal(requests.length, 0);
+    } finally {
+      Date.now = originalNow;
+      harness.restore();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const [content, amount] of [
+  ['午饭6.7×0.9', '6.03'], ['午饭6.7*0.9', '6.03'],
+  ['午饭10-3.8', '6.20'], ['午饭10减去3.8', '6.20'],
+  ['午饭10-2*3', '4.00'],
+  ['午饭3.8÷2', '1.90'], ['午饭3.8 备注食堂/咖啡', '3.80'],
+]) test(`arithmetic tool writes the exact amount once: ${content}`, async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'clawbot-multiply-'));
+  writeFileSync(join(directory, 'token.txt'), 'test-token', 'utf8');
+  const requests = [];
+  const harness = createPluginHarness(directory, successfulExpenseFetch(requests));
+  try {
+    for (const callId of ['first', 'redelivery']) {
+      await receiveTrustedOwnerMessage(harness.inboundHooks, { content, messageId: 'multiply-source' });
+      const result = await harness.recordExpenseFactory(trustedOwnerContext()).execute(callId, receivedExpenseParams({ amount }));
+      assert.equal(result.details.status, callId === 'first' ? 'created' : 'duplicate');
+    }
+    const posts = requests.filter(({ url }) => url.endsWith('/transactions/add.json'));
+    assert.equal(posts.length, 1);
+    assert.equal(JSON.parse(posts[0].options.body).sourceAmount, Math.round(Number(amount) * 100));
+  } finally {
+    harness.restore();
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

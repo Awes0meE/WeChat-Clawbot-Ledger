@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { logger } from "../util/logger.js";
 import { generateId } from "../util/random.js";
 import { MessageItemType } from "../api/types.js";
@@ -114,6 +115,16 @@ export function findAccountIdsByContextToken(accountIds, userId) {
 function generateMessageSid() {
     return generateId("openclaw-weixin");
 }
+const imageContextKey = Symbol.for('clawbot.weixin.inbound-image-context.v1');
+/** Keep transport identity across the official harness without changing its prompt or code. */
+export function withWeixinInboundContext(ctx, operation) {
+    const shared = globalThis;
+    const storage = shared[imageContextKey] ??= new AsyncLocalStorage();
+    const media = ctx.media?.length === 1 ? ctx.media[0] : undefined;
+    const image = media?.messageId === ctx.MessageSid && media.contentType.startsWith('image/')
+        ? { messageId: ctx.MessageSid, accountId: ctx.AccountId, senderId: ctx.SenderId, imagePath: media.path } : undefined;
+    return storage.run(image, operation);
+}
 /** Returns true if the message item is a media type (image, video, file, or voice). */
 export function isMediaItem(item) {
     return (item.type === MessageItemType.IMAGE ||
@@ -182,6 +193,9 @@ export function weixinMessageToMsgContext(msg, accountId, opts) {
     if (opts?.decryptedPicPath) {
         ctx.MediaPath = opts.decryptedPicPath;
         ctx.MediaType = "image/*";
+        ctx.media = [{ path: opts.decryptedPicPath, contentType: 'image/*',
+                ...(msg.item_list?.filter((item) => item.type === MessageItemType.IMAGE).length === 1
+                    ? { messageId: ctx.MessageSid } : {}) }];
     }
     else if (opts?.decryptedVideoPath) {
         ctx.MediaPath = opts.decryptedVideoPath;

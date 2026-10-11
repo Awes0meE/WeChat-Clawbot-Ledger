@@ -12,6 +12,7 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 const directory = join(homedir(), 'Library/Application Support/Clawbot/acceptance/wechat-corpus-2026-09-13');
 mkdirSync(directory, {recursive:true, mode:0o700});
 const image = process.env.CLAWBOT_CORPUS_IMAGE;
+const imageCasesDirectory = process.env.CLAWBOT_IMAGE_CASES_DIR;
 // A targeted regression needs enough credential lifetime for its own cases,
 // not the four-hour reserve used by the full corpus.
 const selectedCaseCount = process.argv[2] === 'run' ? process.argv.slice(3).length : 0;
@@ -21,9 +22,10 @@ assert.ok(image, 'Set CLAWBOT_CORPUS_IMAGE to the exact isolated image being ver
 assert.match(image, /^clawbot-message-acceptance:[a-z0-9.-]+$/u);
 const override = join(directory, 'compose.override.json');
 writeFileSync(override, JSON.stringify({ services: Object.fromEntries(['init','openclaw','cli'].map((name) => [name, { image,
-  ...(name === 'cli' ? { volumes: [
+  ...(name === 'cli' ? { ...(imageCasesDirectory ? { environment: { CLAWBOT_IMAGE_CASES: '/image-cases/cases.json' } } : {}), volumes: [
     `${join(root,'test-cases')}:/test-cases:ro`,
     `${join(root,'deploy/docker/verify-wechat-corpus.mjs')}:/opt/clawbot/docker/verify-wechat-corpus.mjs:ro`,
+    ...(imageCasesDirectory ? [`${imageCasesDirectory}:/image-cases:ro`] : []),
   ] } : {}) }])) }), {mode:0o600});
 const compose = ['compose','-f',join(root,'deploy/docker/compose.test.yml'),'-f',override];
 function run(args, input, timeout=120000) {
@@ -36,6 +38,8 @@ try {
   assert.equal(run([...compose,'ps','-q','openclaw']), '');
   assert.equal(run(['ps','-q','--filter','label=com.docker.compose.project=clawbot-test','--filter','label=com.docker.compose.service=cli']), '', 'An isolated model CLI is already running');
   run([...compose,'--profile','setup','run','--rm','-T','init']);
+  run([...compose,'--profile','setup','run','--rm','-T','init','refresh-agent-limits']);
+  run([...compose,'--profile','setup','run','--rm','-T','init','refresh-image-understanding']);
   run([...compose,'up','-d','--wait','origin']);
   const id=run([...compose,'ps','-q','origin']);
   const origin=JSON.parse(run(['inspect',id]))[0];

@@ -1,13 +1,18 @@
 import { createHash } from 'node:crypto';
 import { currencyBesideAmount, normalizeCurrency, startsWithCurrency, hasNegativeAmountPrefix } from './currency.mjs';
+import { validateImageExpense, imageExpenseTimeParts } from './image-expense.mjs';
 
 const MAX_EZBOOKKEEPING_AMOUNT_MINOR = 9_999_999_999_999;
 const MAX_COMMENT_CHARACTERS = 255;
-const DECIMAL_AMOUNT_SOURCE = String.raw`\d+(?:\.\d{1,2})?`;
+// Consume the complete decimal, then reject unsupported precision rather than
+// treating a trailing digit as a separate candidate.
+const DECIMAL_AMOUNT_SOURCE = String.raw`\d+(?:\.\d+)?`;
 const SPOKEN_FRACTION_DIGIT_SOURCE = String.raw`(?:\d|[零一二两三四五六七八九])`;
 const SPOKEN_AMOUNT_SOURCE = String.raw`(?:\d+|[一二两三四五六七八九十]+)块(?:(?:${SPOKEN_FRACTION_DIGIT_SOURCE}毛(?:${SPOKEN_FRACTION_DIGIT_SOURCE}(?:分)?)?)|(?:\d{1,2}|[零一二两三四五六七八九]{1,2}))?`;
 const AMOUNT_PART_SOURCE = `(?:${SPOKEN_AMOUNT_SOURCE}|${DECIMAL_AMOUNT_SOURCE})`;
-const AMOUNT_EXPRESSION = new RegExp(`${AMOUNT_PART_SOURCE}(?:\\s*(?:[+＋]|加)\\s*${AMOUNT_PART_SOURCE})*`, 'gu');
+const AMOUNT_OPERATOR_SOURCE = String.raw`(?:[+＋*＊×xX÷/／−－-]|加|减去?|減去?|乘以?|除以?)`;
+const AMOUNT_EXPRESSION = new RegExp(`${AMOUNT_PART_SOURCE}(?:\\s*${AMOUNT_OPERATOR_SOURCE}\\s*${AMOUNT_PART_SOURCE})*`, 'gu');
+const AMOUNT_OPERATOR = new RegExp(`\\s*(${AMOUNT_OPERATOR_SOURCE})\\s*`, 'u');
 const INSTRUCTION_INJECTION = /(?:record_expense|summarize_expenses|query_transactions|绕过.{0,8}(?:安全|限制|规则)|(?:忽略|无视|跳过).{0,12}(?:之前|前面|以上|规则|指令)|(?:调用|执行|使用).{0,8}(?:工具|函数))/iu;
 const QUANTITY_OR_TIME_UNIT = /^(?:个|位|人|根|件|张|瓶|杯|盒|包|份|次|天|小时|分钟|秒|公里|千米|米|厘米|毫米|km|kg|公斤|斤|克|年|月|日|号|点)/iu;
 const ADMIN_AMOUNT_CUE = /(?:订单(?:号)?|余额|原价|标价|用券|券|优惠(?:后)?|折扣|编号|单号)\s*$/u;
@@ -23,10 +28,10 @@ const RECEIVED_TIME_CUE = /^(?:今天|今日|凌晨|早上|上午|中午|下午|
 // A canteen number identifies the venue. Preserve decimal amounts and arithmetic
 // after the name, and never discard arbitrary digits merely because a model put
 // them in a comment.
-const NUMBERED_CANTEEN = /(?<![A-Za-z0-9])canteen[ \t]*(?:#[ \t]*)?\d+(?![\d.A-Za-z]|[ \t]*(?:[+＋加块元毛分$＄¥￥]|新币|新元|人民币|美元|SGD\b|USD\b|CNY\b|RMB\b))/giu;
+const NUMBERED_CANTEEN = /(?<![A-Za-z0-9])canteen[ \t]*(?:#[ \t]*)?\d+(?![\d.A-Za-z]|[ \t]*(?:[+＋*＊×÷/／−－乘除加减減块元毛分$＄¥￥-]|新币|新元|人民币|美元|SGD\b|USD\b|CNY\b|RMB\b))/giu;
 // F1 is a racing/product name, not one dollar. Do not strip arbitrary merchant
 // suffixes: NTUC8.25 and Canteen7.2 still contain payment evidence.
-const FORMULA_ONE = /(?<![A-Za-z0-9])F1(?![\d.]|[ \t]*(?:[+＋加块元毛分$＄¥￥]|新币|新元|SGD\b|USD\b|CNY\b|RMB\b))/giu;
+const FORMULA_ONE = /(?<![A-Za-z0-9])F1(?![\d.]|[ \t]*(?:[+＋*＊×xX÷/／−－乘除加减減块元毛分$＄¥￥-]|新币|新元|SGD\b|USD\b|CNY\b|RMB\b))/giu;
 
 // Voice input uses 点 for both a decimal separator and a clock. Classify the
 // complete token once for both validators: never accept only its trailing digit.
@@ -53,7 +58,7 @@ function expenseNumberText(text, maskClocks = false) {
 }
 
 export class ExpenseRecordingError extends Error {
-  constructor(outcome, { dedupeStatus, rejectionReason } = {}) {
+  constructor(outcome, { dedupeStatus, rejectionReason, imageIssue } = {}) {
     const message = outcome === 'not_written'
       ? 'expense was not written'
       : outcome === 'rejected'
@@ -63,7 +68,8 @@ export class ExpenseRecordingError extends Error {
     this.name = 'ExpenseRecordingError';
     this.outcome = outcome;
     if (dedupeStatus) this.dedupeStatus = dedupeStatus;
-    if (['time', 'amount', 'currency'].includes(rejectionReason)) this.rejectionReason = rejectionReason;
+    if (['time', 'amount', 'currency', 'image', 'image_lookup'].includes(rejectionReason)) this.rejectionReason = rejectionReason;
+    if (rejectionReason === 'image' && ['image-source', 'image-payment', 'image-evidence', 'image-total', 'image-currency', 'image-order', 'image-date', 'image-purpose'].includes(imageIssue)) this.imageIssue = imageIssue;
   }
 }
 
@@ -83,9 +89,41 @@ export function parseAmountToMinorUnits(value) {
 
 function expressionAmountToMinorUnits(expression) {
   try {
-    return expression
-      .split(/[+＋加]/u)
-      .reduce((sum, part) => sum + amountPartToMinorUnits(part.trim()), 0);
+    if (expression.length > 512) return undefined;
+    const parts = expression.split(AMOUNT_OPERATOR);
+    if (parts.length > 127) return undefined;
+    // Exact rational arithmetic: multiplication/division before addition/subtraction, with
+    // equal-precedence operators evaluated left to right. Never round money.
+    const operand = (part) => /^(?:0|0\.0{1,2})$/u.test(part.trim())
+      ? 0n : BigInt(amountPartToMinorUnits(part.trim()));
+    let numerator = operand(parts[0]);
+    let denominator = 100n;
+    let sumNumerator = 0n;
+    let sumDenominator = 1n;
+    let sign = 1n;
+    for (let i = 1; i < parts.length; i += 2) {
+      const operator = parts[i];
+      const value = operand(parts[i + 1]);
+      if (/^(?:[+＋加−－-]|减去?|減去?)$/u.test(operator)) {
+        sumNumerator = sumNumerator * denominator + sign * numerator * sumDenominator;
+        sumDenominator *= denominator;
+        sign = /^[+＋加]$/u.test(operator) ? 1n : -1n;
+        numerator = value;
+        denominator = 100n;
+      } else if (/^(?:[÷/／]|除以?)$/u.test(operator)) {
+        if (value === 0n) return undefined;
+        numerator *= 100n;
+        denominator *= value;
+      } else {
+        numerator *= value;
+        denominator *= 100n;
+      }
+    }
+    numerator = (sumNumerator * denominator + sign * numerator * sumDenominator) * 100n;
+    denominator *= sumDenominator;
+    if (numerator % denominator !== 0n) return undefined;
+    const minor = numerator / denominator;
+    return minor > 0n && minor <= BigInt(MAX_EZBOOKKEEPING_AMOUNT_MINOR) ? Number(minor) : undefined;
   } catch {
     return undefined;
   }
@@ -138,11 +176,22 @@ function eligibleAmountCandidates(clause, clauseIndex) {
   const candidates = [];
   for (const match of amountText.matchAll(AMOUNT_EXPRESSION)) {
     const matchIndex = match.index ?? 0;
-    // Reject the whole clause: taking absolute values or keeping only the first
-    // term of subtraction would silently change the user's amount. Dates are masked.
+    // Unary negatives are not expenses. Binary subtraction is consumed as part
+    // of one complete expression; dates are masked before scanning.
     if (hasNegativeAmountPrefix(amountText.slice(0, matchIndex))) return [];
     const prefix = clause.slice(0, matchIndex);
     const suffix = clause.slice(matchIndex + match[0].length).trimStart();
+    // Unsupported or broken arithmetic must not become a valid operand-sized
+    // proposal. A slash beside words may still be an ordinary note separator.
+    if (/[+＋*＊×÷()（）^%％=]\s*$/u.test(prefix)
+      || /^[+＋*＊×÷()（）^%％=]/u.test(suffix)
+      || /[\d.+＋*＊×÷/／−－-]\s*(?:加|减去?|減去?|乘以?|除以?)\s*$/u.test(prefix)
+      || /^(?:加|减去?|減去?|乘以?|除以?)\s*(?:[\d.+＋*＊×÷/／−－-]|$)/u.test(suffix)
+      || /^[−－-]\s*(?:[\d.+＋*＊×÷/／−－-]|$)/u.test(suffix)
+      || /(?:[\d./／]|[xX])\s*[/／]\s*$/u.test(prefix)
+      || /^[/／]\s*(?:[\d./／+＋*＊×÷-]|$)/u.test(suffix)
+      || /[\d.*＊×xX]\s*[xX]\s*$/u.test(prefix)
+      || /^[xX]\s*(?:[\d.*＊×xX+＋/／÷-]|$)/u.test(suffix)) return [];
     const amountMinor = expressionAmountToMinorUnits(match[0]);
     if (amountMinor === undefined
       || /[\d.]$/u.test(prefix)
@@ -156,6 +205,7 @@ function eligibleAmountCandidates(clause, clauseIndex) {
       clauseIndex,
       matchIndex,
       expressionLength: match[0].length,
+      needsConfirmation: /[/／]/u.test(match[0]),
     });
   }
   return candidates;
@@ -181,7 +231,8 @@ export function requiresExpenseConfirmation(content) {
   const originalText = String(content ?? '');
   const commentIndex = originalText.indexOf('备注');
   const text = (commentIndex < 0 ? originalText : originalText.slice(0, commentIndex)).trim();
-  return EXPLICIT_QUESTION.test(text);
+  return EXPLICIT_QUESTION.test(text)
+    || expenseAmountCandidates(text).some((candidate) => candidate.needsConfirmation);
 }
 
 function normalizeTransactionId(value) {
@@ -235,6 +286,7 @@ export function formatExpenseReceipt({
   subcategory,
   comment,
   time,
+  showSeconds = false,
 }) {
   const singaporeTime = new Date((Number(time) + 8 * 60 * 60) * 1000);
   const twoDigits = (value) => String(value).padStart(2, '0');
@@ -242,7 +294,8 @@ export function formatExpenseReceipt({
     singaporeTime.getUTCFullYear(),
     twoDigits(singaporeTime.getUTCMonth() + 1),
     twoDigits(singaporeTime.getUTCDate()),
-  ].join('/') + ` ${twoDigits(singaporeTime.getUTCHours())}:${twoDigits(singaporeTime.getUTCMinutes())}`;
+  ].join('/') + ` ${twoDigits(singaporeTime.getUTCHours())}:${twoDigits(singaporeTime.getUTCMinutes())}`
+    + (showSeconds ? `:${twoDigits(singaporeTime.getUTCSeconds())}` : '');
   const resolvedComment = validateComment(comment);
   const displayComment = resolvedComment.replace(/[\r\n\u2028\u2029]/gu, ' ');
 
@@ -264,6 +317,7 @@ export function formatExpenseConfirmation({
   subcategory,
   comment,
   time,
+  showSeconds = false,
 }) {
   const receiptLines = formatExpenseReceipt({
     ledgerDisplayName,
@@ -273,6 +327,7 @@ export function formatExpenseConfirmation({
     subcategory,
     comment,
     time,
+    showSeconds,
   }).split('\n').slice(1);
   return [
     '帮你核对一下这笔～🤔',
@@ -340,7 +395,8 @@ export function resolveExpenseTimestamp({ input, inbound }) {
 
   const body = contentBeforeExplicitComment(inbound.content);
   const evidence = String(input.timeEvidence ?? '').trim();
-  if (!evidence || !body.includes(evidence) || !hasExplicitExpenseTimeCue(evidence)) {
+  const imageTime = inbound.image ? imageExpenseTimeParts(input) : undefined;
+  if (!imageTime && (!evidence || !body.includes(evidence) || !hasExplicitExpenseTimeCue(evidence))) {
     throw new Error('expense time evidence is not grounded');
   }
 
@@ -361,7 +417,7 @@ export function resolveExpenseTimestamp({ input, inbound }) {
     day: Number(dateMatch[3]),
     hour,
     minute,
-  });
+  }) + (imageTime?.second ?? 0);
   if (occurrenceTime > receivedTime + FUTURE_CLOCK_TOLERANCE_SECONDS) {
     throw new Error('expense occurrence time is in the future');
   }
@@ -391,6 +447,9 @@ function clientSessionIdFor(receiptKey) {
 }
 
 export function duplicateResponseText(result) {
+  if (result?.imageDuplicate) return result.previousStatus === 'created'
+    ? '这张图片对应的消费已经记过啦，我没有重复入账。'
+    : '这张图片已有处理记录，结果需要先核对账本；我没有重复入账。';
   if (result?.previousStatus === 'failed') {
     return '上次没有记成功，我也没有重复入账～ 请重新发一条消息再试吧。';
   }
@@ -401,12 +460,16 @@ export function duplicateResponseText(result) {
 }
 
 function validateExpenseInput(input, inbound, resolvedTime) {
+  if (input.imageEvidence || inbound.image) {
+    try { validateImageExpense(input, inbound); }
+    catch (error) { throw new ExpenseRecordingError('rejected', { rejectionReason: 'image', imageIssue: error?.message }); }
+  }
   const receiptKey = messageReceiptKey(inbound);
   const sourceAmount = parseAmountToMinorUnits(input.amount);
   const comment = resolveExpenseComment(inbound.content, input.comment);
   try {
     if (normalizeCurrency(input.currency) !== input.currency) throw new Error('noncanonical currency');
-    const candidates = expenseAmountCandidates(inbound.content);
+    const candidates = inbound.image ? [] : expenseAmountCandidates(inbound.content);
     if (candidates.some((candidate) => candidate.amountMinor === sourceAmount)
       && !candidates.some((candidate) => candidate.amountMinor === sourceAmount && candidate.currency === input.currency)) {
       throw new Error('currency disagrees with source message');
@@ -414,7 +477,8 @@ function validateExpenseInput(input, inbound, resolvedTime) {
   } catch { throw new ExpenseRecordingError('rejected', { rejectionReason: 'currency' }); }
   let time;
   try {
-    time = resolveExpenseTimestamp({ input, inbound });
+    time = resolveExpenseTimestamp({ input, inbound: inbound.image
+      ? { ...inbound, content: input.timeMode === 'explicit' ? input.timeEvidence : '' } : inbound });
     if (resolvedTime !== undefined
       && (!Number.isSafeInteger(resolvedTime) || resolvedTime !== time)) {
       throw new Error('stored expense occurrence time does not match its source');
@@ -429,7 +493,7 @@ export function prepareExpenseConfirmation({ input, inbound }) {
   const candidate = validateExpenseInput(input, inbound);
   // A proposal may select one grounded candidate; only user confirmation can
   // authorize its write. Direct recording still requires a unique amount.
-  if (!expenseAmountCandidates(inbound.content).some(({ amountMinor, currency }) => amountMinor === candidate.sourceAmount && currency === input.currency)) {
+  if (!inbound.image && !expenseAmountCandidates(inbound.content).some(({ amountMinor, currency }) => amountMinor === candidate.sourceAmount && currency === input.currency)) {
     throw new ExpenseRecordingError('rejected', { rejectionReason: 'amount' });
   }
   return {
@@ -437,6 +501,27 @@ export function prepareExpenseConfirmation({ input, inbound }) {
     comment: candidate.comment,
     time: candidate.time,
   };
+}
+
+export async function refreshImageReceipt({ api, store, inbound, evidenceKey, validateBeforeWrite }) {
+  // Replaying an old transport message never authorizes a replacement write,
+  // even after its transaction was deleted or its image link has moved on.
+  const original = store.receipt(messageReceiptKey(inbound));
+  if (original) return original;
+  const link = store.imageReceiptLink(evidenceKey);
+  if (!link) return undefined;
+  if (link.receipt.status !== 'created' || !link.receipt.transactionId) return link.receipt;
+  try {
+    const exists = await api.transactionExists(link.receipt.transactionId);
+    if (exists === true) return link.receipt;
+    if (exists !== false) throw new Error('unverified transaction absence');
+    if (validateBeforeWrite && validateBeforeWrite() !== true) throw new Error('image authority expired');
+    if (!store.releaseDeletedImageLinks(link)) throw new Error('image receipt changed during lookup');
+    // Another instance may have already claimed this image for a new message.
+    return store.imageReceiptLink(evidenceKey)?.receipt;
+  } catch {
+    throw new ExpenseRecordingError('not_written', { rejectionReason: 'image_lookup' });
+  }
 }
 
 async function writeExpense({
@@ -447,6 +532,7 @@ async function writeExpense({
   accountName = '日常支出',
   validateBeforeWrite,
   resolvedTime,
+  imageConfirmed = false,
 }) {
   const { receiptKey, sourceAmount, comment, time } = validateExpenseInput(
     input,
@@ -454,12 +540,19 @@ async function writeExpense({
     resolvedTime,
   );
   const clientSessionId = clientSessionIdFor(receiptKey);
-  const existing = store.claim(receiptKey);
+  const image = inbound.image ? imageExpenseKeys(input, inbound, imageConfirmed) : undefined;
+  if (image) {
+    for (const evidenceKey of [image.attachmentKey, ...(!imageConfirmed && image.orderKey ? [image.orderKey] : [])]) {
+      await refreshImageReceipt({ api, store, inbound, evidenceKey, validateBeforeWrite });
+    }
+  }
+  const existing = store.claim(receiptKey, image);
   if (existing) {
     return {
       status: 'duplicate',
       previousStatus: existing.status,
       transactionId: existing.transactionId,
+      ...(existing.imageDuplicate ? { imageDuplicate: true } : {}),
     };
   }
 
@@ -546,7 +639,11 @@ async function writeExpense({
 
 export async function recordExpense(options) {
   const sourceAmount = parseAmountToMinorUnits(options.input.amount);
-  if (!messageSupportsExpenseAmount(options.inbound.content, sourceAmount, options.input.currency)) {
+  if (options.inbound.image || options.input.imageEvidence) {
+    try {
+      if (validateImageExpense(options.input, options.inbound).needsConfirmation) throw new Error();
+    } catch (error) { throw new ExpenseRecordingError('rejected', { rejectionReason: 'image', imageIssue: error?.message }); }
+  } else if (!messageSupportsExpenseAmount(options.inbound.content, sourceAmount, options.input.currency)) {
     throw new ExpenseRecordingError('rejected', { rejectionReason: 'amount' });
   }
   if (requiresExpenseConfirmation(options.inbound.content)) {
@@ -556,5 +653,16 @@ export async function recordExpense(options) {
 }
 
 export async function recordConfirmedExpense(options) {
-  return writeExpense(options);
+  return writeExpense({ ...options, imageConfirmed: true });
+}
+
+export function imageExpenseKeys(input, inbound, confirmed = false) {
+  const { orderHash } = validateImageExpense(input, inbound, { confirmed });
+  const key = (kind, value) => createHash('sha256').update(`${inbound.recipientKey}\u0000${kind}\u0000${value}`).digest('hex');
+  return { attachmentKey: imageAttachmentKey(inbound), ...(orderHash ? { orderKey: key('order', orderHash) } : {}), confirmed };
+}
+
+export function imageAttachmentKey(inbound) {
+  if (!/^[a-f0-9]{64}$/u.test(inbound.recipientKey ?? '') || !/^[a-f0-9]{64}$/u.test(inbound.image?.sha256 ?? '')) throw new Error('invalid image identity');
+  return createHash('sha256').update(`${inbound.recipientKey}\u0000image\u0000${inbound.image.sha256}`).digest('hex');
 }

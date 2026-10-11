@@ -1,12 +1,26 @@
 # Ledger Cloudflare Tunnel 运维手册
 
-本文的计划任务、目录、PowerShell 安装与重启步骤适用于 Windows 原生部署。2026-09-09 参考部署已迁至 Mac；当前状态及启停、备份和凭据恢复使用 [Mac 清单](mac-before-windows-checklist.md) 中的入口，最新操作见 [2026-09-21 存储恢复](handoffs/2026-09-21-storage-check-recovery.md)；服务掉线先读取 [运行诊断](mac-runtime-diagnostics.md) 保存的状态时间线和失败步骤。下述公网域名、回环端口和 Cloudflare 边界由两条路线共同遵守。
+本文的计划任务、目录、PowerShell 安装与重启步骤适用于 Windows 原生部署。2026-09-09 参考部署已迁至 Mac；当前状态及启停、备份和凭据恢复使用 [Mac 清单](mac-before-windows-checklist.md) 中的入口，当前业务发布见 [2026-10-04 四则运算](handoffs/2026-10-04-arithmetic.md)，宿主策略修复与故障恢复见 [2026-10-03 上线记录](handoffs/2026-10-03-storage-observation.md)；服务掉线先读取 [运行诊断](mac-runtime-diagnostics.md) 保存的状态时间线和失败步骤。下述公网域名、回环端口和 Cloudflare 边界由两条路线共同遵守。
 
 Windows 无窗口启动的当前设置与迁移方法见 [后台启动维护说明](windows-background-startup.md)。新建账本和 Tunnel 任务使用同一账户的 `S4U` 后台会话；已有任务须精确核验后迁移，不通过关闭控制台来停止服务。
 
 本文说明如何把现有 ezBookkeeping 通过 `https://ledger.66ccff-labs.com` 安全发布，同时保持 `66ccff-labs.com` 和 `www.66ccff-labs.com` 的作品集不变。它是实施手册，不是凭据存放处；任何真实账户、密码、token、Tunnel UUID、Cloudflare 身份、微信身份、SQLite、交易正文、响应正文和运行日志都必须留在 Git 与仓库之外。
 
 Windows 历史发布见 [食堂编号修复上线记录](handoffs/2026-09-07-numbered-canteen-fix.md)；[历史明细审计](handoffs/2026-09-07-history-reply-audit.md)、[2026-09-07 较早系统检查](handoffs/2026-09-07-bookkeeping-system-audit.md) 和 [2026-09-05 Tunnel 交接](handoffs/2026-09-05-secure-ledger-tunnel-gpt6-handoff.md) 保留当时的部署证据。恢复工作前先只读核验，不能重复创建已存在的 Tunnel、DNS 或规则。
+
+## 四则运算的发布后核验
+
+用例与隔离实际模型报告见 [测试入口](../test-cases/README.md) 和 [四则运算发布](handoffs/2026-10-04-arithmetic.md)。明确减法、乘法和除法可直接记账；数字间斜杠先计算、再发完整确认单，收到确认才写入。备注分隔符、日期和无效算式须按同一金额校验规则处理。
+
+生产发布沿用当前九卷备份、独立恢复、新卷核对和显式恢复流程。上线后核验版本、服务、轮询、实际模型与公网访问；手机新消息确认写入单独验收。历史失败消息不得自动重放，测试只连接独立 18888 账本。
+
+## 图片功能的发布后核验
+
+当前规则与源码链路见 [部署方案](bookkeeping-deployment-brief.md) 和 [图片设计](superpowers/specs/2026-10-01-image-bookkeeping-design.md)。不增加微信工具或其他模型供应商；升级须同时保留微信接收端媒体桥接、编译产物及完整回执数据库。
+
+发布前在独立 18888 账本按 [图片用例入口](../test-cases/README.md#图片与时间的实际模型测试) 核验纯图、编号确认、重复防重和消费时间。`CLAWBOT_CORPUS_IMAGE` 固定本次隔离镜像，`CLAWBOT_IMAGE_CASES_DIR` 指向 Git 外的用例及原图；这两个变量仅用于测试，不写入生产配置。先核对新增交易与权威回执，再记录模型结果，不能只检查服务健康。
+
+上线后只读检查当前不可变版本、三服务、新鲜微信轮询、HTTP/MCP 及公网边界。手机端由所有者发送新图片试用，分别核对金额／币种／日期／秒数、歧义编号确认和回执；没有实际收件证据时保留“待确认”。排查失败时先区分接收或媒体关联、提取校验、账本 API 和回复发送，保留私有原图及对应回执状态；结果不确定时先查账，不自动重放旧失败图片。仅在所有者明确授权补录时，先审核原图、原消费时间及当前账本，使用独立运维回执标识和原图防重关联；补录后核对 API 交易与回执并重新备份，不伪造微信入站或补发旧回复。
 
 ## 固定合同
 

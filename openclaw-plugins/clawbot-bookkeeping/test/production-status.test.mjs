@@ -66,6 +66,13 @@ test('wrong gate, pid, generation, future or stale host reports fail before cred
     const f = fixture({ context: change }); assert.equal((await collectProductionStatus(f)).state, 'inspection-unavailable'); assert.equal(f.count(), 0);
   }
 });
+test('temporary storage observation states stay visible without claiming a healthy boundary', async () => {
+  for (const state of ['storage-observation-grace', 'storage-observation-paused']) {
+    const f = fixture({ context: v => { v.host.state = state; } });
+    const result = await collectProductionStatus(f);
+    assert.equal(result.state, state); assert.equal(result.boundaryHealthy, false); assert.equal(f.count(), 0);
+  }
+});
 test('maintenance, process replacement and any container restart during checks discard captured acceptance', async () => {
   const changes = [
     { context: (v, n) => { if (n > 1) v.maintenance = true; } },

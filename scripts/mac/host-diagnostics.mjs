@@ -19,7 +19,10 @@ const textKinds = [
 export function diagnosticError(error, { elapsedMs = 0, timeoutMs = 0 } = {}) {
   const output = `${error?.stderr ?? ''}\n${error?.stdout ?? ''}\n${error?.message ?? ''}`;
   const timedOut = error?.killed === true && timeoutMs > 0 && elapsedMs >= timeoutMs;
-  return { kind: timedOut ? 'timeout' : textKinds.find(([, pattern]) => pattern.test(output))?.[0] ?? 'unclassified',
+  const matched = textKinds.find(([, pattern]) => pattern.test(output))?.[0];
+  // A timeout must not hide explicit storage damage/full/read-only evidence.
+  const hardStorage = ['disk-full', 'io-error', 'read-only-filesystem', 'permission-denied'].includes(matched);
+  return { kind: hardStorage ? matched : timedOut ? 'timeout' : matched ?? 'unclassified',
     code: Number.isInteger(error?.code) ? error.code : codeSet.has(error?.code) ? error.code : null,
     signal: signalSet.has(error?.signal) ? error.signal : null, timedOut, elapsedMs, timeoutMs,
     outputBytes: Buffer.byteLength(output), outputSha256: createHash('sha256').update(output).digest('hex') };

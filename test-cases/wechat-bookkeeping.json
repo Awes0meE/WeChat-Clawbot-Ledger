@@ -1961,7 +1961,9 @@
       "group": "实测问题回归",
       "message": "午饭10-2",
       "expected": {
-        "action": "no_write"
+        "action": "record",
+        "amount": "8",
+        "currency": "SGD"
       }
     },
     {
@@ -2140,6 +2142,374 @@
       "message": "午饭6点666",
       "expected": {
         "action": "no_write"
+      }
+    },
+    {
+      "id": "WX-211",
+      "group": "multiply-divide",
+      "message": "午饭6.7×0.9",
+      "expected": {
+        "action": "record",
+        "amount": "6.03",
+        "currency": "SGD",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ]
+      }
+    },
+    {
+      "id": "WX-212",
+      "group": "multiply-divide",
+      "message": "午饭6.7*0.9",
+      "expected": {
+        "action": "record",
+        "amount": "6.03",
+        "currency": "SGD",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ]
+      }
+    },
+    {
+      "id": "WX-213",
+      "group": "multiply-divide",
+      "message": "午饭3.8/2",
+      "expected": {
+        "action": "prepare",
+        "amount": "1.90",
+        "currency": "SGD",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ]
+      },
+      "conversation": "slash-confirm"
+    },
+    {
+      "id": "WX-214",
+      "group": "multiply-divide",
+      "message": "确认",
+      "expected": {
+        "action": "record",
+        "amount": "1.90",
+        "currency": "SGD",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ]
+      },
+      "conversation": "slash-confirm"
+    },
+    {
+      "id": "WX-215",
+      "group": "multiply-divide",
+      "message": "午饭3.8／2",
+      "expected": {
+        "action": "prepare",
+        "amount": "1.90",
+        "currency": "SGD",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ]
+      },
+      "conversation": "slash-cancel"
+    },
+    {
+      "id": "WX-216",
+      "group": "multiply-divide",
+      "message": "取消",
+      "expected": {
+        "action": "cancel"
+      },
+      "conversation": "slash-cancel"
+    },
+    {
+      "id": "WX-217",
+      "group": "multiply-divide",
+      "message": "午饭3.8÷2",
+      "expected": {
+        "action": "record",
+        "amount": "1.90",
+        "currency": "SGD",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ]
+      }
+    },
+    {
+      "id": "WX-218",
+      "group": "multiply-divide",
+      "message": "午饭3.8除以2",
+      "expected": {
+        "action": "record",
+        "amount": "1.90",
+        "currency": "SGD",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ]
+      }
+    },
+    {
+      "id": "WX-219",
+      "group": "multiply-divide",
+      "message": "午饭2+3*4",
+      "expected": {
+        "action": "record",
+        "amount": "14",
+        "currency": "SGD",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ]
+      }
+    },
+    {
+      "id": "WX-220",
+      "group": "multiply-divide",
+      "message": "午饭12/2*3",
+      "expected": {
+        "action": "prepare",
+        "amount": "18",
+        "currency": "SGD",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ]
+      }
+    },
+    {
+      "id": "WX-221",
+      "group": "multiply-divide",
+      "message": "午饭3.8 备注食堂/咖啡",
+      "expected": {
+        "action": "record",
+        "amount": "3.80",
+        "currency": "SGD",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ],
+        "commentEquals": "食堂/咖啡"
+      }
+    },
+    {
+      "id": "WX-222",
+      "group": "multiply-divide",
+      "message": "午饭1/3",
+      "expected": {
+        "action": "no_write"
+      }
+    },
+    {
+      "id": "WX-223",
+      "group": "multiply-divide",
+      "message": "午饭3.8/0",
+      "expected": {
+        "action": "no_write"
+      }
+    },
+    {
+      "id": "WX-224",
+      "group": "multiply-divide",
+      "message": "午饭6.7*0.9人民币",
+      "expected": {
+        "action": "record",
+        "amount": "6.03",
+        "currency": "CNY",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ]
+      }
+    },
+    {
+      "id": "WX-225",
+      "group": "multiply-divide",
+      "message": "午饭6.7乘以0.9",
+      "expected": {
+        "action": "record",
+        "amount": "6.03",
+        "currency": "SGD",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ]
+      }
+    },
+    {
+      "id": "WX-226",
+      "group": "multiply-divide",
+      "message": "午饭3.8/2 备注食堂/打包",
+      "expected": {
+        "action": "prepare",
+        "amount": "1.90",
+        "currency": "SGD",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ],
+        "commentEquals": "食堂/打包"
+      },
+      "conversation": "slash-note"
+    },
+    {
+      "id": "WX-227",
+      "group": "multiply-divide",
+      "message": "是的",
+      "expected": {
+        "action": "record",
+        "amount": "1.90",
+        "currency": "SGD",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ],
+        "commentEquals": "食堂/打包"
+      },
+      "conversation": "slash-note"
+    },
+    {
+      "id": "WX-228",
+      "group": "subtract",
+      "message": "午饭10-3.8",
+      "expected": {
+        "action": "record",
+        "amount": "6.20",
+        "currency": "SGD",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ]
+      }
+    },
+    {
+      "id": "WX-229",
+      "group": "subtract",
+      "message": "午饭10减去3.8",
+      "expected": {
+        "action": "record",
+        "amount": "6.20",
+        "currency": "SGD",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ]
+      }
+    },
+    {
+      "id": "WX-230",
+      "group": "subtract",
+      "message": "午饭10-2*3",
+      "expected": {
+        "action": "record",
+        "amount": "4",
+        "currency": "SGD",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ]
+      }
+    },
+    {
+      "id": "WX-231",
+      "group": "subtract",
+      "message": "午饭3-5+4",
+      "expected": {
+        "action": "record",
+        "amount": "2",
+        "currency": "SGD",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ]
+      }
+    },
+    {
+      "id": "WX-232",
+      "group": "subtract",
+      "message": "午饭10-3.8/2",
+      "expected": {
+        "action": "prepare",
+        "amount": "8.10",
+        "currency": "SGD",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ]
+      },
+      "conversation": "sub-slash"
+    },
+    {
+      "id": "WX-233",
+      "group": "subtract",
+      "message": "确认",
+      "expected": {
+        "action": "record",
+        "amount": "8.10",
+        "currency": "SGD",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ]
+      },
+      "conversation": "sub-slash"
+    },
+    {
+      "id": "WX-234",
+      "group": "subtract",
+      "message": "午饭3.8-10",
+      "expected": {
+        "action": "no_write"
+      }
+    },
+    {
+      "id": "WX-235",
+      "group": "subtract",
+      "message": "午饭3.8-3.8",
+      "expected": {
+        "action": "no_write"
+      }
+    },
+    {
+      "id": "WX-236",
+      "group": "subtract",
+      "message": "午饭-3.8",
+      "expected": {
+        "action": "no_write"
+      }
+    },
+    {
+      "id": "WX-237",
+      "group": "subtract",
+      "message": "午饭10-3.8人民币",
+      "expected": {
+        "action": "record",
+        "amount": "6.20",
+        "currency": "CNY",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ]
+      }
+    },
+    {
+      "id": "WX-238",
+      "group": "subtract",
+      "message": "2026-10-03午饭10-3.8",
+      "expected": {
+        "action": "record",
+        "amount": "6.20",
+        "currency": "SGD",
+        "category": [
+          "食品酒水",
+          "早午晚餐"
+        ],
+        "localDate": "2026-10-03"
       }
     }
   ]

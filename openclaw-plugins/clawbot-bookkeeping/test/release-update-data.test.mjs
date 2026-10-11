@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { MIGRATION_ROLES } from '../../../deploy/docker/migration-format.mjs';
 import { releaseUpdateContract, rebindReleaseUpdateData, verifyReleaseUpdateData, enableOfficialOAuthRefresh } from '../../../deploy/docker/release-update-data.mjs';
 import { releaseUpdateStageTemplate, validateReleaseUpdateStage } from '../../../scripts/mac/release-update-review.mjs';
+import { BOOKKEEPING_IMAGE_UNDERSTANDING, LEGACY_BOOKKEEPING_IMAGE_UNDERSTANDING, withBookkeepingImageUnderstanding } from '../../../deploy/docker/bookkeeping-image-understanding.mjs';
 const before = { project: 'clawbot-import-check-123456abcdef', sourceCommit: 'a'.repeat(40), sourceSnapshotSha256: 'b'.repeat(64),
   cutoverId: '11111111-2222-3333-4444-555555555555', importManifestSha256: 'c'.repeat(64), volumeGeneration: null,
   services: { origin: { image: 'same-pinned-origin' }, openclaw: { image: `sha256:${'d'.repeat(64)}` }, guard: { image: `sha256:${'e'.repeat(64)}` } } };
@@ -32,6 +33,9 @@ test('release staging enables official renewal and preserves all unrelated files
   assert.deepEqual(readFileSync(join(source, 'guard-config/policy.json')), original);
   assert.equal(JSON.parse(readFileSync(join(target, 'guard-config/policy.json'))).sourceCommit, after.sourceCommit);
   const changed=JSON.parse(readFileSync(join(target,'runtime-config/openclaw.json')));assert.equal(changed.plugins.entries.openai.enabled,true);assert.deepEqual(changed.unknown,{keep:'same'});
+  assert.deepEqual(changed.tools.media.image, BOOKKEEPING_IMAGE_UNDERSTANDING);
+  assert.equal(JSON.parse(readFileSync(join(target, 'guard-config/policy.json'))).openclawConfigSha256,
+    createHash('sha256').update(readFileSync(join(target, 'runtime-config/openclaw.json'))).digest('hex'));
   assert.ok(verifyReleaseUpdateData(source, target, before, after, { final: false }).persistentFilesPreserved);
   assert.throws(() => verifyReleaseUpdateData(source, target, before, after), /ENOENT/);
   writeFileSync(join(target, 'receipts/unknown-preserved.bin'), 'changed');
@@ -59,3 +63,28 @@ test('release update review binds both versions and images, archive, generation 
 });
 
 test('official renewal upgrade rejects unknown grants or explicit disabled providers and is idempotent',()=>{const legacy={plugins:{allow:['clawbot-bookkeeping','codex','openclaw-weixin'],entries:{}}};const next=enableOfficialOAuthRefresh(legacy);assert.deepEqual(enableOfficialOAuthRefresh(next),next);assert.equal(legacy.plugins.allow.includes('openai'),false);assert.throws(()=>enableOfficialOAuthRefresh({plugins:{allow:[...legacy.plugins.allow,'unknown'],entries:{}}}));assert.throws(()=>enableOfficialOAuthRefresh({plugins:{...legacy.plugins,entries:{openai:{enabled:false}}}}));});
+
+test('image extraction upgrade preserves unrelated settings and refuses custom image configuration', () => {
+  const original = { tools: { allow: ['synthetic-tool'], media: { audio: { enabled: false } } }, identity: 'synthetic' };
+  const next = withBookkeepingImageUnderstanding(original);
+  assert.equal(original.tools.media.image, undefined);
+  assert.deepEqual(withBookkeepingImageUnderstanding(next), next);
+  const withoutImage = structuredClone(next); delete withoutImage.tools.media.image;
+  assert.deepEqual(withoutImage, original);
+  for (const image of [{ enabled: false }, { prompt: 'custom' }, { models: [{ provider: 'other' }] }]) {
+    assert.throws(() => withBookkeepingImageUnderstanding({ tools: { media: { image } } }), /Unrecognized image/u);
+  }
+  const patches = JSON.parse(readFileSync(new URL('../../../config/weixin-bookkeeper-agent.example.json', import.meta.url)));
+  assert.deepEqual(patches.find(p => p.path === 'tools.media.image').value, BOOKKEEPING_IMAGE_UNDERSTANDING);
+});
+
+test('semantic image extraction upgrades only the exact managed previous prompt', () => {
+  const original = { tools: { media: { image: structuredClone(LEGACY_BOOKKEEPING_IMAGE_UNDERSTANDING), audio: { enabled: false } } }, owner: 'synthetic' };
+  const next = withBookkeepingImageUnderstanding(original);
+  assert.deepEqual(next.tools.media.image, BOOKKEEPING_IMAGE_UNDERSTANDING);
+  assert.deepEqual(next.tools.media.audio, original.tools.media.audio);
+  assert.deepEqual(original.tools.media.image, LEGACY_BOOKKEEPING_IMAGE_UNDERSTANDING);
+  assert.deepEqual(withBookkeepingImageUnderstanding(next), next);
+  assert.throws(() => withBookkeepingImageUnderstanding({ tools: { media: { image: {
+    ...LEGACY_BOOKKEEPING_IMAGE_UNDERSTANDING, prompt: LEGACY_BOOKKEEPING_IMAGE_UNDERSTANDING.prompt + ' custom' } } } }), /Unrecognized image/u);
+});

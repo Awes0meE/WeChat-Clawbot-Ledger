@@ -907,7 +907,7 @@ test('today breakfast uses the original trusted message timestamp', () => {
 
 
 for (const content of ['午饭-7.2', '午饭 −7.2', '午饭－7.2', '午饭负7.2', '午饭負7.2', '午饭-$7.2', '午饭-¥7.2人民币', '午饭- SGD 7.2', '午饭SGD-7.2', '午饭10-2']) {
-  test(`WX-174 never turns a negative or subtraction into a positive expense: ${content}`, async () => {
+  test(`WX-174 never takes an absolute value or ignores subtraction: ${content}`, async () => {
     const amount = content.includes('10-2') ? '10' : '7.2';
     const args = { input: receivedExpenseInput({ amount }), inbound: { channel: 'ilink', messageId: 'negative', content, timestamp: 1_788_425_460 } };
     let writes = 0;
@@ -965,4 +965,91 @@ test('a spoken decimal does not erase a separate date or clock', () => {
   const input = receivedExpenseInput({ amount: '6.60', timeMode: 'explicit', localDate: '2026-09-12', localTime: '12:30', timeEvidence: '昨天中午12点30分' });
   assert.equal(messageSupportsExpenseAmount(inbound.content, 660), true);
   assert.equal(prepareExpenseConfirmation({ input, inbound }).time, Date.parse('2026-09-12T12:30:00+08:00') / 1000);
+});
+
+for (const [content, amount, confirmation = false, currency = 'SGD'] of [
+  ['午饭6.7×0.9', '6.03'], ['午饭6.7*0.9', '6.03'],
+  ['午饭6.7 x 0.9', '6.03'], ['午饭6.7X0.9', '6.03'],
+  ['午饭6.7＊0.9', '6.03'], ['午饭6.7乘0.9', '6.03'],
+  ['午饭6.7乘以0.9', '6.03'], ['午饭3.8÷2', '1.90'],
+  ['午饭3.8除2', '1.90'], ['午饭3.8除以2', '1.90'],
+  ['午饭3.8/2', '1.90', true], ['午饭3.8 ／ 2', '1.90', true],
+  ['午饭2+3*4', '14'], ['午饭12/2*3', '18', true],
+  ['午饭12÷2÷3', '2'], ['午饭1/3*3', '1', true],
+  ['午饭0.1*0.2', '0.02'], ['午饭1+0*2', '1'],
+  ['午饭3.8/2+0.1', '2', true], ['午饭6.7*0.9吗', '6.03', true],
+  ['午饭6.7*0.9人民币', '6.03', false, 'CNY'],
+  ['午饭3.8/2人民币', '1.90', true, 'CNY'],
+  ['午饭3.8 备注食堂/咖啡 8/2', '3.80'],
+  ['午饭3.8/食堂', '3.80'], ['食堂/午饭3.8', '3.80'],
+  ['午饭3.8/2 备注食堂/咖啡', '1.90', true],
+  ['Canteen2*3午饭', '6'],
+  ['午饭10-3.8', '6.20'], ['午饭10−3.8', '6.20'],
+  ['午饭10－3.8', '6.20'], ['午饭10减3.8', '6.20'],
+  ['午饭10减去3.8', '6.20'], ['午饭10減去3.8', '6.20'],
+  ['午饭10-2*3', '4'], ['午饭10-3-2', '5'], ['午饭3-5+4', '2'],
+  ['午饭10-3.8/2', '8.10', true], ['午饭10-3.8人民币', '6.20', false, 'CNY'],
+  ['午饭3.8×0.9-1', '2.42'], ['午饭6.7*0.9-1', '5.03'],
+  ['午饭0.3-0.1', '0.20'], ['Canteen10-2午饭', '8'],
+]) test(`grounds exact arithmetic and confirmation: ${content}`, async () => {
+  const input = receivedExpenseInput({ amount, currency });
+  const inbound = { channel: 'ilink', messageId: 'arithmetic-source', content, timestamp: 1_788_425_460 };
+  const minor = parseAmountToMinorUnits(amount);
+  assert.equal(messageSupportsExpenseAmount(content, minor, currency), true);
+  assert.equal(requiresExpenseConfirmation(content), confirmation);
+  assert.equal(prepareExpenseConfirmation({ input, inbound }).amountMinor, minor);
+  const writes = [];
+  const options = { input, inbound, store: { claim() { return null; }, complete() {} }, api: {
+    async resolveAccountId() { return 'account'; },
+    async resolveExpenseCategoryId() { return 'category'; },
+    async addTransaction(body) { writes.push(body); return { id: 'arithmetic-write' }; },
+  } };
+  if (confirmation) {
+    await assert.rejects(() => recordExpense(options), ExpenseRecordingError);
+    assert.equal(writes.length, 0);
+  } else {
+    assert.equal((await recordExpense(options)).status, 'created');
+    assert.equal(writes[0].sourceAmount, minor);
+  }
+});
+
+for (const [content, amounts] of [
+  ['午饭3.8/2', ['3.8', '2', '5.8']],
+  ['午饭10-3.8', ['10', '3.8', '13.8']], ['午饭3.8-10', ['6.2', '3.8', '10']],
+  ['午饭3.8-3.8', ['3.8']], ['午饭3.8--2', ['5.8', '3.8', '2']],
+  ['午饭3.8减去', ['3.8']], ['午饭3.8-', ['3.8']],
+  ['午饭-3.8+10', ['6.2']], ['午饭3.8减去-2', ['5.8']],
+  ['午饭6.7*0.9', ['6.7', '0.9', '7.6']],
+  ['午饭1/3', ['0.33', '0.34', '1', '3']],
+  ['午饭0.01/2', ['0.01', '2']], ['午饭3.8/0', ['3.8']],
+  ['午饭0*2', ['2']], ['午饭1.234*2', ['1.23', '2', '2.47']],
+  ['午饭3.8*-2', ['3.8', '2']], ['午饭-3.8*2', ['7.6']],
+  ['午饭3.8**2', ['3.8', '2']], ['午饭3.8xx2', ['3.8', '2']],
+  ['午饭3.8//2', ['3.8', '2']], ['午饭3.8/', ['3.8']],
+  ['午饭3.8*', ['3.8']], ['午饭3.8×0.9-1', ['6.03', '1']],
+  ['午饭(3+2)*2', ['3', '2', '5', '10']],
+  ['午饭3^2', ['3', '2', '9']], ['午饭3*90%', ['270', '2.7']],
+  ['午饭99999999999.99*2', ['99999999999.99', '2']],
+  ['午饭99999999999.99+0.01', ['99999999999.99', '0.01']],
+  ['午饭7 备注3.8/2', ['1.9', '3.8', '2']],
+  ['午饭7，订单3*2', ['6']], ['午饭7，优惠3*2', ['6']],
+]) test(`rejects arithmetic fragments or invented rounding: ${content}`, () => {
+  for (const amount of amounts) {
+    assert.equal(messageSupportsExpenseAmount(content, parseAmountToMinorUnits(amount)), false);
+    assert.throws(() => prepareExpenseConfirmation({
+      input: receivedExpenseInput({ amount }),
+      inbound: { channel: 'ilink', messageId: 'bad-arithmetic', content, timestamp: 1_788_425_460 },
+    }), ExpenseRecordingError);
+  }
+});
+
+test('slash-form calendar dates remain explicit times, never division proposals', () => {
+  const content = '2026/09/03午饭6.7*0.9';
+  const input = receivedExpenseInput({ amount: '6.03', timeMode: 'explicit',
+    localDate: '2026-09-03', timeEvidence: '2026/09/03' });
+  assert.equal(requiresExpenseConfirmation(content), false);
+  assert.equal(messageSupportsExpenseAmount(content, 603), true);
+  assert.equal(prepareExpenseConfirmation({ input,
+    inbound: { channel: 'ilink', messageId: 'arithmetic-date', content, timestamp: 1_788_425_460 },
+  }).amountMinor, 603);
 });

@@ -27,6 +27,7 @@ import {
   bodyFromItemList,
   setContextToken,
   weixinMessageToMsgContext,
+  withWeixinInboundContext,
   getContextTokenFromMsgContext,
   isMediaItem,
 } from "./inbound.js";
@@ -447,7 +448,7 @@ export async function processOneMessage(
     await deps.channelRuntime.reply.withReplyDispatcher({
       dispatcher,
       run: () =>
-        deps.channelRuntime.reply.dispatchReplyFromConfig({
+        withWeixinInboundContext(ctx, () => deps.channelRuntime.reply.dispatchReplyFromConfig({
           ctx: finalized,
           cfg: deps.config,
           dispatcher,
@@ -456,7 +457,7 @@ export async function processOneMessage(
             ...(replyProgressSender?.replyOptions ?? {}),
             disableBlockStreaming: true,
           },
-        }),
+        })),
     });
     logger.debug(`dispatchReplyFromConfig: done agentId=${route.agentId ?? "(none)"}`);
   } catch (err) {

@@ -6,9 +6,11 @@ import { assertDeploymentOrigin, PRODUCTION_DEPLOYMENT } from './deployment-prof
 import { normalizeCurrency, validateExchangeRates } from './currency.mjs';
 import { scopedExpenseAccounts, selectExpenseWriteAccount } from './expense-accounts.mjs';
 import { fetchBankOfChinaSpotSell } from './bank-of-china-rates.mjs';
+import { normalizeImageAttachment, validateImageExpense } from './image-expense.mjs';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_REQUEST_TIMEOUT_MS = 60_000;
+const TRANSACTION_NOT_FOUND = Symbol('verified-transaction-not-found');
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const SQLITE_BUSY_RETRY_MS = 10;
 const TRUSTED_RUN_END_TTL_MS = 10 * 60 * 1000;
@@ -60,6 +62,8 @@ function normalizeTrustedInboundPayload(value) {
     timestamp: value.timestamp,
     observedAt: value.observedAt,
     timeSource: value.timeSource,
+    ...(normalizeImageAttachment(value.image) ? { image: normalizeImageAttachment(value.image), imageAccountId: value.imageAccountId,
+      recipientKey: value.recipientKey } : {}),
   };
 }
 
@@ -96,11 +100,15 @@ function normalizePendingExpenseProposal(value) {
       && (typeof input.comment !== 'string' || Array.from(input.comment).length > 255))) {
     return undefined;
   }
+  if (sourceInbound.image) {
+    try { validateImageExpense(input, sourceInbound); } catch { return undefined; }
+  }
   return {
     sourceMessageKey: value.sourceMessageKey,
     resolvedTime: value.resolvedTime,
     sourceInbound: { ...sourceInbound, conversationKey },
     input: {
+      ...(sourceInbound.image ? { imageEvidence: input.imageEvidence } : {}),
       amount: input.amount,
       currency: input.currency,
       timeMode: input.timeMode,
@@ -207,6 +215,18 @@ export class SqliteReceiptStore {
       CREATE TABLE IF NOT EXISTS processed_expense_confirmations (
         message_key TEXT PRIMARY KEY,
         processed_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS image_expense_links (
+        evidence_key TEXT PRIMARY KEY,
+        receipt_key TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS image_expense_proposals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_key TEXT NOT NULL,
+        source_message_key TEXT NOT NULL UNIQUE,
+        payload_json TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active'
       );
       CREATE TABLE IF NOT EXISTS receipt_store_migrations (
         migration_key TEXT PRIMARY KEY,
@@ -388,7 +408,22 @@ export class SqliteReceiptStore {
     `);
   }
 
-  claim(key) {
+  claim(key, image) {
+    if (image) return this.#withImmediateTransaction(() => {
+      const keys = [image.attachmentKey, ...(!image.confirmed && image.orderKey ? [image.orderKey] : [])];
+      for (const evidenceKey of keys) {
+        const link = this.database.prepare('SELECT receipt_key FROM image_expense_links WHERE evidence_key = ?').get(evidenceKey);
+        if (link && link.receipt_key !== key) {
+          const row = this.selectReceipt.get(link.receipt_key);
+          return { ...(row ? JSON.parse(row.payload_json) : { status: 'unknown' }), imageDuplicate: true };
+        }
+      }
+      const existing = this.claim(key);
+      if (!existing) for (const evidenceKey of [image.attachmentKey, ...(image.orderKey ? [image.orderKey] : [])]) {
+        this.database.prepare('INSERT OR IGNORE INTO image_expense_links VALUES (?, ?)').run(evidenceKey, key);
+      }
+      return existing;
+    });
     const result = this.insertPending.run(key, Date.now());
     if (Number(result.changes) === 1) return null;
     const existing = this.selectReceipt.get(key);
@@ -397,6 +432,38 @@ export class SqliteReceiptStore {
 
   complete(key, payload) {
     this.#update(key, 'created', payload);
+  }
+
+  imageOrderNeedsConfirmation({ attachmentKey, orderKey }) {
+    const find = this.database.prepare('SELECT receipt_key FROM image_expense_links WHERE evidence_key = ?');
+    return Boolean(orderKey && !find.get(attachmentKey) && find.get(orderKey));
+  }
+
+  imageReceipt(attachmentKey) {
+    return this.imageReceiptLink(attachmentKey)?.receipt;
+  }
+
+  receipt(key) {
+    const row = this.selectReceipt.get(key);
+    return row ? JSON.parse(row.payload_json) : undefined;
+  }
+
+  imageReceiptLink(evidenceKey) {
+    const link = this.database.prepare('SELECT receipt_key FROM image_expense_links WHERE evidence_key = ?').get(evidenceKey);
+    if (!link) return undefined;
+    return { receiptKey: link.receipt_key, receipt: this.receipt(link.receipt_key) ?? { status: 'unknown' } };
+  }
+
+  releaseDeletedImageLinks({ receiptKey, receipt }) {
+    return this.#withImmediateTransaction(() => {
+      const current = this.receipt(receiptKey);
+      if (receipt?.status !== 'created' || !receipt.transactionId
+        || JSON.stringify(current) !== JSON.stringify(receipt)) return false;
+      // The original message and confirmation tombstones stay permanent. Only
+      // links still owned by this exact, verified-deleted write can be retired.
+      this.database.prepare('DELETE FROM image_expense_links WHERE receipt_key = ?').run(receiptKey);
+      return true;
+    });
   }
 
   fail(key, payload) {
@@ -425,6 +492,52 @@ export class SqliteReceiptStore {
       );
       return true;
     });
+  }
+
+  storeImageProposal(conversationKey, proposal, expiresAt, now = Date.now()) {
+    const normalized = normalizePendingExpenseProposal(proposal);
+    if (!Number.isSafeInteger(expiresAt) || expiresAt <= now || !HASH_KEY_PATTERN.test(conversationKey)
+      || !normalized?.sourceInbound.image || normalized.sourceInbound.conversationKey !== conversationKey
+      || !this.database.prepare('SELECT 1 FROM real_inbound_message_history WHERE message_key = ?').get(proposal.sourceMessageKey)) {
+      throw new Error('invalid image proposal source');
+    }
+    return this.#withImmediateTransaction(() => {
+      const existing = this.database.prepare('SELECT id, status, expires_at FROM image_expense_proposals WHERE source_message_key = ?').get(proposal.sourceMessageKey);
+      if (existing) return existing.status === 'active' && existing.expires_at >= now ? { id: existing.id } : { status: 'expired' };
+      const active = this.database.prepare("SELECT id, payload_json FROM image_expense_proposals WHERE conversation_key = ? AND status = 'active' AND expires_at >= ?").all(conversationKey, now);
+      const duplicate = active.find(row => JSON.parse(row.payload_json).sourceInbound?.image?.sha256 === normalized.sourceInbound.image.sha256);
+      if (duplicate) return { id: duplicate.id, status: 'duplicate' };
+      const count = this.database.prepare("SELECT count(*) AS n FROM image_expense_proposals WHERE conversation_key = ? AND status = 'active' AND expires_at >= ?").get(conversationKey, now).n;
+      if (count >= 10) return { status: 'full' };
+      const row = this.database.prepare('INSERT INTO image_expense_proposals (conversation_key,source_message_key,payload_json,expires_at) VALUES (?,?,?,?)')
+        .run(conversationKey, proposal.sourceMessageKey, JSON.stringify(normalized), expiresAt);
+      return { id: Number(row.lastInsertRowid) };
+    });
+  }
+
+  consumeImageOrTextConfirmation(conversationKey, confirmationMessageKey, proposalId, now = Date.now()) {
+    if (!HASH_KEY_PATTERN.test(conversationKey) || !HASH_KEY_PATTERN.test(confirmationMessageKey)
+      || (proposalId !== undefined && (!Number.isSafeInteger(proposalId) || proposalId < 1))) throw new Error('invalid image confirmation');
+    return this.#withImmediateTransaction(() => {
+      const rows = this.database.prepare("SELECT * FROM image_expense_proposals WHERE conversation_key = ? AND status = 'active' AND expires_at >= ?").all(conversationKey, now);
+      const text = this.selectPendingExpenseConfirmation.get(conversationKey);
+      if (proposalId === undefined && !rows.length) return this.consumePendingExpenseConfirmationUnlocked(conversationKey, confirmationMessageKey, now);
+      if (proposalId === undefined && rows.length + (text?.expires_at >= now ? 1 : 0) !== 1) return { status: 'ambiguous', ids: rows.map(r => r.id) };
+      const claimed = this.insertProcessedExpenseConfirmation.run(confirmationMessageKey, now);
+      if (Number(claimed.changes) !== 1) return { status: 'duplicate' };
+      const row = proposalId === undefined ? rows[0] : this.database.prepare('SELECT * FROM image_expense_proposals WHERE id = ? AND conversation_key = ?').get(proposalId, conversationKey);
+      if (!row || row.status !== 'active') return { status: 'missing' };
+      this.database.prepare("UPDATE image_expense_proposals SET status = 'consumed' WHERE id = ?").run(row.id);
+      if (row.expires_at < now) return { status: 'expired' };
+      const proposal = normalizePendingExpenseProposal(JSON.parse(row.payload_json));
+      return proposal?.sourceInbound.image ? { status: 'active', proposal } : { status: 'missing' };
+    });
+  }
+
+  consumePendingExpenseConfirmationUnlocked(conversationKey, messageKey, now) {
+    const claimed = this.insertProcessedExpenseConfirmation.run(messageKey, now);
+    if (Number(claimed.changes) !== 1) return { status: 'duplicate' };
+    return this.#takePendingExpenseConfirmation(conversationKey, now);
   }
 
   takePendingExpenseConfirmation(conversationKey, now = Date.now()) {
@@ -882,7 +995,7 @@ export class EzBookkeepingApi {
     this.exchangeRateSource = exchangeRateSource;
   }
 
-  async #request(path, { method = 'GET', body, query } = {}) {
+  async #request(path, { method = 'GET', body, query, allowTransactionNotFound = false } = {}) {
     let token;
     try {
       token = readFileSync(this.tokenPath, 'utf8').trim();
@@ -923,6 +1036,12 @@ export class EzBookkeepingApi {
         timeout,
       ]);
       const payload = await Promise.race([response.json(), timeout]);
+      // ezBookkeeping v1.6.1 ErrTransactionNotFound. Other HTTP 400 responses
+      // (including timezone/auth errors) cannot establish that a row was deleted.
+      if (allowTransactionNotFound && method === 'GET' && path === 'transactions/get.json'
+        && response.status === 400 && payload?.success === false
+        && payload.errorCode === 205001 && payload.errorMessage === 'transaction not found'
+        && payload.result === undefined) return TRANSACTION_NOT_FOUND;
       if (!response.ok || payload.success !== true) {
         throw new Error(`ezBookkeeping request failed (HTTP ${response.status})`);
       }
@@ -1169,5 +1288,21 @@ export class EzBookkeepingApi {
 
   async addTransaction(body) {
     return this.#request('transactions/add.json', { method: 'POST', body });
+  }
+
+  async transactionExists(transactionId) {
+    if (typeof transactionId !== 'string' || !transactionId || transactionId.trim() !== transactionId
+      || transactionId.length > 128 || /[\p{C}\p{Zl}\p{Zp}]/u.test(transactionId)) {
+      throw new Error('invalid transaction lookup id');
+    }
+    const transaction = await this.#request('transactions/get.json', {
+      query: { id: transactionId, with_pictures: false, trim_account: true, trim_category: true, trim_tag: true },
+      allowTransactionNotFound: true,
+    });
+    if (transaction === TRANSACTION_NOT_FOUND) return false;
+    if (!transaction || Array.isArray(transaction) || transaction.id !== transactionId) {
+      throw new Error('transaction lookup response is invalid');
+    }
+    return true;
   }
 }

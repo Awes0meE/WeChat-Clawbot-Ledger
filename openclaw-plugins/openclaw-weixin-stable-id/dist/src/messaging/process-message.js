@@ -15,7 +15,7 @@ import { redactBody, redactToken } from "../util/redact.js";
 import { isDebugMode } from "./debug-mode.js";
 import { sendWeixinErrorNotice } from "./error-notice.js";
 import { applyWeixinMessageSendingHook, emitWeixinMessageSent } from "./outbound-hooks.js";
-import { bodyFromItemList, setContextToken, weixinMessageToMsgContext, getContextTokenFromMsgContext, isMediaItem, } from "./inbound.js";
+import { bodyFromItemList, setContextToken, weixinMessageToMsgContext, withWeixinInboundContext, getContextTokenFromMsgContext, isMediaItem, } from "./inbound.js";
 import { sendWeixinMediaFile } from "./send-media.js";
 import { StreamingMarkdownFilter } from "./markdown-filter.js";
 import { sendMessageWeixin } from "./send.js";
@@ -347,7 +347,7 @@ export async function processOneMessage(full, deps) {
     try {
         await deps.channelRuntime.reply.withReplyDispatcher({
             dispatcher,
-            run: () => deps.channelRuntime.reply.dispatchReplyFromConfig({
+            run: () => withWeixinInboundContext(ctx, () => deps.channelRuntime.reply.dispatchReplyFromConfig({
                 ctx: finalized,
                 cfg: deps.config,
                 dispatcher,
@@ -356,7 +356,7 @@ export async function processOneMessage(full, deps) {
                     ...(replyProgressSender?.replyOptions ?? {}),
                     disableBlockStreaming: true,
                 },
-            }),
+            })),
         });
         logger.debug(`dispatchReplyFromConfig: done agentId=${route.agentId ?? "(none)"}`);
     }

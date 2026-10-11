@@ -6,6 +6,7 @@ import { MIGRATION_ROLES } from './migration-format.mjs';
 import { generationReceipt } from './generation-receipts.mjs';
 import { validateGuardPolicy } from '../guard/origin-identity.mjs';
 import { validateActivation } from '../guard/tunnel-policy.mjs';
+import { withBookkeepingImageUnderstanding } from './bookkeeping-image-understanding.mjs';
 
 export function enableOfficialOAuthRefresh(config) {
   const result = structuredClone(config), plugins = result.plugins;
@@ -78,7 +79,7 @@ function replacements(source, before, after) {
   assert.equal(policy.sourceCommit, before.sourceCommit); assert.equal(policy.sourceSnapshotSha256, before.sourceSnapshotSha256);
   const activation = read('guard-config/activation.json'); validateActivation(activation, policy); assert.equal(activation.cutoverId, before.cutoverId);
   const configPath = 'runtime-config/openclaw.json';
-  const config = read(configPath), upgraded = enableOfficialOAuthRefresh(config);
+  const config = read(configPath), upgraded = withBookkeepingImageUnderstanding(enableOfficialOAuthRefresh(config));
   assert.equal(policy.openclawConfigSha256, fileDigest(join(source, configPath)));
   if (JSON.stringify(config) !== JSON.stringify(upgraded)) {
     const bytes = Buffer.from(JSON.stringify(upgraded));
@@ -88,7 +89,7 @@ function replacements(source, before, after) {
   for (const [path, value] of [['guard-config/policy.json', policy], ['guard-config/activation.json', activation]]) {
     result.set(path, Buffer.from(JSON.stringify({ ...value, sourceCommit: after.sourceCommit })));
   }
-  // Upgrade the reviewed official OAuth provider grant, keeping the model,
+  // Upgrade the reviewed official OAuth grant and same-Codex image prompt, keeping the model,
   // six tools, owners, routes, tokens and every other configuration field.
   return result;
 }

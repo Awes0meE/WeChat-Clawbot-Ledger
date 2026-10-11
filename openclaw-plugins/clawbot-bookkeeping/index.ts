@@ -1,5 +1,6 @@
 import { DailyBankOfChinaRates } from './daily-exchange-rates.mjs';
 import { Type } from 'typebox';
+import { Check } from 'typebox/value';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -17,10 +18,13 @@ import {
   formatExpenseReceipt,
   formatTrustedExpenseTimeContext,
   messageSupportsExpenseAmount,
+  imageExpenseKeys,
+  imageAttachmentKey,
   parseAmountToMinorUnits,
   prepareExpenseConfirmation,
   recordConfirmedExpense,
   recordExpense,
+  refreshImageReceipt,
   requiresExpenseConfirmation,
 } from './bookkeeping-core.mjs';
 import {
@@ -38,6 +42,7 @@ import { resolveExpenseSearch } from './expense-search.mjs';
 import { HISTORY_TOOL_NAME, HISTORY_FAILURE_TEXT, normalizeExpenseHistoryQuery, formatExpenseHistory } from './expense-history.mjs';
 import { CURRENCY_CODES } from './currency.mjs';
 import { answerBookkeepingQuestions, normalizeReadQuestion, questionsFromSummaryParams } from './bookkeeping-queries.mjs';
+import { readInboundImage, imageRunMatches, imageConfirmationSelection, validateImageExpense, imageExpenseTimeDisplay, imageExpenseCurrencyNote } from './image-expense.mjs';
 
 type InboundMessage = {
   channel: string;
@@ -49,6 +54,8 @@ type InboundMessage = {
   conversationKey: string;
   deliveryKey: string;
   recipientKey: string;
+  image?: { path: string; sha256: string; bytes: number; type: string };
+  imageAccountId?: string;
 };
 
 type SummaryParams = {
@@ -75,6 +82,7 @@ type ExpenseBaseParams = {
   primaryCategory: string;
   subcategory: string;
   comment?: string;
+  imageEvidence?: { semanticVersion?: number; expenseStatus?: string; purposeEvidence?: string; dateAmbiguous?: boolean; purposeAmbiguous?: boolean; timeKind?: string; localSecond?: number; paymentStatus?: string; statusEvidence: string; totalEvidence: string; currencyEvidence: string; orderCount: number; amountAmbiguous: boolean; currencyAmbiguous?: boolean; currencyDefaulted?: boolean; orderReference?: string };
 };
 
 type ExpenseSearchParams = {
@@ -239,6 +247,8 @@ function correlatedRunLookupKey(runId: string) {
 }
 
 function confirmationDecision(content: string): 'confirm' | 'cancel' | undefined {
+  const imageSelection = imageConfirmationSelection(content);
+  if (imageSelection) return imageSelection.decision;
   const normalized = content.trim().replace(/[。.!！,，~～]+$/u, '').trim();
   if (AFFIRMATIVE_REPLIES.has(normalized)) return 'confirm';
   if (NEGATIVE_REPLIES.has(normalized)) return 'cancel';
@@ -306,6 +316,25 @@ const EXPENSE_PARAMETER_PROPERTIES = {
   primaryCategory: Type.Union(PRIMARY_CATEGORIES.map((value) => Type.Literal(value))),
   subcategory: Type.String({ minLength: 1, maxLength: 20 }),
   comment: Type.Optional(Type.String({ maxLength: 255 })),
+  imageEvidence: Type.Optional(Type.Object({
+    semanticVersion: Type.Literal(2),
+    expenseStatus: Type.Union(['expense', 'unclear', 'not_expense'].map(v => Type.Literal(v)), {
+      description: 'AI综合判断是否为已发生的支出；小票/消费详情不必带已支付标签。未付款、退款、收入、转账、报价或未来计划为not_expense；真实消费性质仍不确定为unclear。' }),
+    statusEvidence: Type.String({ minLength: 1, maxLength: 320, description: '当前图片支持上述判断的原文或上下文依据；没有付款标签就如实说明消费依据，不能编造已付字样。' }),
+    totalEvidence: Type.String({ minLength: 1, maxLength: 320, description: 'AI选择实际支出金额的图片依据，可含单价、找零等多个数字并解释为何选择该总额；不要求固定标签。amount传规范十进制最终金额。' }),
+    currencyEvidence: Type.String({ minLength: 1, maxLength: 320, description: 'AI结合可见币种与地区判断；没有币种信息（包括只有孤立$且无其他线索）按用户规则默认SGD，写明默认依据并设currencyDefaulted=true、currencyAmbiguous=false。与SGD不兼容的符号或明确币种冲突需澄清，不覆盖为SGD。' }),
+    purposeEvidence: Type.String({ minLength: 1, maxLength: 320, description: '图片中可辨认的商户、商品、服务或用途；comment给出有依据的简短摘要，不能用消费/其他等空泛描述补缺项。' }),
+    timeKind: Type.Union(['expense', 'payment', 'purchase', 'transaction', 'order'].map(v => Type.Literal(v)), {
+      description: '已明确是本笔消费的日期但没有付款/下单等标签时用expense，小票无标签日期或用户本条补充日期也用expense；无需细分具体时间类型。日期缺失/有歧义或只有物流时间则先询问，不调用记账或拟单工具。' }),
+    localSecond: Type.Optional(Type.Integer({ minimum: 0, maximum: 59, description: '图片明确显示秒数时传；配合localDate/localTime保存完整时间，不显示秒则省略。' })),
+    orderCount: Type.Integer({ minimum: 1, maximum: 10 }),
+    amountAmbiguous: Type.Boolean(),
+    currencyAmbiguous: Type.Boolean(),
+    currencyDefaulted: Type.Optional(Type.Boolean({ description: '无币种信息按用户默认SGD时为true；有明确原币按原币，不因缺ISO代码就默认。' })),
+    dateAmbiguous: Type.Boolean({ description: '消费日期缺失或歧义时先询问，不以收图时间补齐；明确日期用explicit，AI规范日期和时区，无固定原文格式要求。' }),
+    purposeAmbiguous: Type.Boolean(),
+    orderReference: Type.Optional(Type.String({ maxLength: 160 })),
+  }, { additionalProperties: false })),
 };
 
 const EXPENSE_SEARCH_PROPERTIES = {
@@ -360,8 +389,8 @@ const EXPENSE_PARAMETERS = Type.Union([
     ...EXPENSE_PARAMETER_PROPERTIES,
     timeMode: Type.Literal('explicit'),
     localDate: Type.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' }),
-    localTime: Type.Optional(Type.String({ pattern: '^\\d{2}:\\d{2}$' })),
-    timeEvidence: Type.String({ minLength: 1, maxLength: 100 }),
+    localTime: Type.Optional(Type.String({ pattern: '^\\d{2}:\\d{2}$', description: '明确钟点的 HH:mm；图片中的秒保留在 timeEvidence，由工具写入。' })),
+    timeEvidence: Type.String({ minLength: 1, maxLength: 100, description: '原文时间依据；图片由AI识别任意语言和日期格式后规范localDate/localTime，原文无需固定标签；明确秒数传imageEvidence.localSecond。' }),
   }, { additionalProperties: false }),
 ]);
 
@@ -372,6 +401,19 @@ function expenseCategoryBlockReason(toolName: string, params: unknown): string |
     normalizeSubcategory(input?.primaryCategory, input?.subcategory);
   } catch {
     return '分类参数不匹配，尚未执行记账或生成确认单。请按分类清单纠正参数后重试。';
+  }
+}
+
+function summaryQueryBlockReason(toolName: string, params: unknown): string | undefined {
+  if (toolName !== 'summarize_expenses') return;
+  try {
+    if (!Check(SUMMARY_PARAMETERS, params)) throw new Error('invalid summary parameters');
+    const input = params as SummaryParams & { questions?: Array<Record<string, unknown>> };
+    const questions = input.questions === undefined
+      ? [{ kind: 'summary', ...input }] : questionsFromSummaryParams(input);
+    questions.forEach(normalizeReadQuestion);
+  } catch {
+    return '查询参数不完整或不正确，尚未执行查询。汇总必须指定 period；自定义范围还需有效的 startDate 和 endDate。请纠正参数后重试。';
   }
 }
 
@@ -536,6 +578,7 @@ export default definePluginEntry({
       );
       const hasMessageTimestamp = Number.isFinite(event.timestamp) && Number(event.timestamp) > 0;
       const observedAt = Date.now();
+      const image = channel === 'openclaw-weixin' ? readInboundImage({ ...event, messageId }) : undefined;
       const inbound = {
         channel,
         messageId,
@@ -546,6 +589,7 @@ export default definePluginEntry({
         conversationKey,
         deliveryKey,
         recipientKey,
+        ...(image ? { image, imageAccountId: accountId } : {}),
       } satisfies InboundMessage;
       const lookupKeys = trustedInboundLookupKeys({ sessionKey, channel, senderId });
       lookupKeys.push(trustedInboundLookupKey(
@@ -599,7 +643,7 @@ export default definePluginEntry({
             const trusted = candidate as Partial<InboundMessage>;
             return trusted.channel === channel
               && trusted.conversationKey === conversationKey
-              && trusted.content === event.prompt
+              && !trusted.image && trusted.content !== '' && trusted.content === event.prompt
               && typeof trusted.observedAt === 'number'
               && now - trusted.observedAt >= 0
               && now - trusted.observedAt <= TRUSTED_PROMPT_CORRELATION_MAX_AGE_MS;
@@ -664,7 +708,8 @@ export default definePluginEntry({
           return trusted.channel === channel
             && (!conversationKey || trusted.conversationKey === conversationKey)
             && typeof trusted.content === 'string'
-            && promptEndsWithInboundMessage(event.prompt, trusted.content)
+            && (trusted.image ? imageRunMatches(trusted)
+              : trusted.content !== '' && promptEndsWithInboundMessage(event.prompt, trusted.content))
             && typeof trusted.observedAt === 'number'
             && now - trusted.observedAt >= 0
             && now - trusted.observedAt <= TRUSTED_PROMPT_CORRELATION_MAX_AGE_MS;
@@ -692,6 +737,10 @@ export default definePluginEntry({
       // A corrected call must still pass the original owner/run binding below.
       const categoryBlockReason = expenseCategoryBlockReason(event.toolName, event.params);
       if (categoryBlockReason) return { block: true, blockReason: categoryBlockReason };
+      // Validate before reserving the message, so a schema rejection cannot
+      // lock the first failure reply ahead of a corrected read-only query.
+      const summaryBlockReason = summaryQueryBlockReason(event.toolName, event.params);
+      if (summaryBlockReason) return { block: true, blockReason: summaryBlockReason };
       let historyQuery: Record<string, unknown> | undefined;
       if (event.toolName === HISTORY_TOOL_NAME) {
         try {
@@ -816,7 +865,8 @@ export default definePluginEntry({
       if (!AUTHORITATIVE_REPLY_TOOL_NAMES.has(event.toolName)) return;
       // These calls were blocked before execution; they cannot establish an
       // unknown-write result or replace the corrected call's final authority.
-      const categoryBlockReason = expenseCategoryBlockReason(event.toolName, event.params);
+      const categoryBlockReason = expenseCategoryBlockReason(event.toolName, event.params)
+        ?? summaryQueryBlockReason(event.toolName, event.params);
       const blockedDetails = (event.result as { details?: { status?: string; reason?: string } } | undefined)?.details;
       if (!event.error && categoryBlockReason && blockedDetails?.status === 'blocked'
         && blockedDetails.reason === categoryBlockReason) return;
@@ -1217,7 +1267,7 @@ export default definePluginEntry({
 
     const expenseFailureResponse = (error: ExpenseRecordingError) => {
       api.logger?.error?.(
-        `clawbot-bookkeeping: ExpenseRecordingError outcome=${error.outcome} rejectionReason=${error.rejectionReason ?? 'unspecified'} message=${error.message}`,
+        `clawbot-bookkeeping: ExpenseRecordingError outcome=${error.outcome} rejectionReason=${error.rejectionReason ?? 'unspecified'} imageIssue=${error.imageIssue ?? 'unspecified'} message=${error.message}`,
       );
       if (error.dedupeStatus === 'unconfirmed') {
         api.logger?.warn?.(
@@ -1229,8 +1279,20 @@ export default definePluginEntry({
       return {
         content: [{
           type: 'text' as const,
-          text: rejected
-            ? error.rejectionReason === 'currency'
+          text: error.rejectionReason === 'image_lookup'
+            ? '暂时无法核对这张图片原来的账目是否还在，这次没有重新入账。请稍后重发图片再试。'
+            : rejected
+            ? error.rejectionReason === 'image'
+              ? ({
+                'image-currency': '这张图的币种没能核对明确，这次没有入账。请补充是人民币、日元还是其他币种。',
+                'image-total': '这张图的最终实付款没能核对一致，这次没有入账。请补充实际支付总额。',
+                'image-payment': '这张图的付款或退款状态、消费性质不支持记支出，这次没有入账。请核对消费性质。',
+                'image-date': '这张图缺少明确的消费日期，这次没有入账。请补充日期或发带日期的完整图片。',
+                'image-purpose': '这张图还不能确定钱花在哪，这次没有入账。请补充商户、商品或用途。',
+                'image-order': '这张图不能对应一笔明确支出，这次没有入账。请拆开发送或明确要记哪一笔。',
+                'image-source': '这次没有取得当前图片的有效来源，所以没有入账。请重新发送原图。',
+              }[error.imageIssue] ?? '这张图的记账信息未通过校验，这次没有入账。请补充清楚的付款截图，或用文字说明金额和币种。')
+              : error.rejectionReason === 'currency'
               ? '这笔金额旁的币种没能核对一致，所以没有入账。请把金额和币种一起标明，例如“35人民币”或“35 CNY”哦～'
               : error.rejectionReason === 'time'
               ? '这笔消费的时间没能正确识别，所以还没有入账。请补充日期或具体时间后再发一次哦～'
@@ -1244,6 +1306,7 @@ export default definePluginEntry({
         details: {
           status: rejected ? 'rejected' : unknown ? 'unknown' : 'failed',
           ...(error.rejectionReason === undefined ? {} : { rejectionReason: error.rejectionReason }),
+          ...(error.imageIssue === undefined ? {} : { imageIssue: error.imageIssue }),
           ...(error.dedupeStatus === undefined ? {} : { dedupeStatus: error.dedupeStatus }),
         },
       };
@@ -1265,6 +1328,7 @@ export default definePluginEntry({
           details,
         };
       }
+      const timeDisplay = imageExpenseTimeDisplay(input);
       return {
         content: [{
           type: 'text' as const,
@@ -1276,10 +1340,75 @@ export default definePluginEntry({
             subcategory: input.subcategory,
             comment: result.comment,
             time: result.time,
-          }),
+            showSeconds: timeDisplay.showSeconds,
+          }) + [timeDisplay.note, imageExpenseCurrencyNote(input)].filter(Boolean).map(note => `\n${note}`).join(''),
         }],
         details,
       };
+    };
+
+    const imageExpenseResponse = async (
+      input: RecordExpenseParams, inbound: InboundMessage, isStillAuthorized: () => boolean, forcePrepare: boolean,
+    ): Promise<AuthoritativeToolResponse> => {
+      try {
+        // Check the ledger before reporting an exact image resend as a duplicate.
+        // A confirmed deletion retires image links, never old message receipts.
+        const existing = inbound.image ? await refreshImageReceipt({ api: bookkeepingApi, store: receiptStore,
+          inbound, evidenceKey: imageAttachmentKey(inbound), validateBeforeWrite: isStillAuthorized }) : undefined;
+        if (existing) return recordedExpenseResponse({ status: 'duplicate', previousStatus: existing.status,
+          imageDuplicate: true } as RecordExpenseResult, input);
+        let evidence;
+        try {
+          if (input.imageEvidence?.semanticVersion !== 2) throw new Error('image-evidence');
+          evidence = validateImageExpense(input, inbound);
+        }
+        catch (error) { throw new ExpenseRecordingError('rejected', { rejectionReason: 'image',
+          imageIssue: error instanceof Error ? error.message : undefined }); }
+        const keys = imageExpenseKeys(input, inbound);
+        if (keys.orderKey) await refreshImageReceipt({ api: bookkeepingApi, store: receiptStore,
+          inbound, evidenceKey: keys.orderKey, validateBeforeWrite: isStillAuthorized });
+        const orderDuplicate = receiptStore.imageOrderNeedsConfirmation(keys);
+        if (forcePrepare || evidence.needsConfirmation || orderDuplicate || requiresExpenseConfirmation(inbound.content)) {
+          const candidate = prepareExpenseConfirmation({ input, inbound });
+          if (!isStillAuthorized()) throw new Error('当前图片的可信绑定已变化，没有入账。');
+          const stored = receiptStore.storeImageProposal(inbound.conversationKey, {
+            sourceMessageKey: trustedInboundMessageKey(inbound.channel, inbound.messageId),
+            resolvedTime: candidate.time, sourceInbound: inbound, input,
+          }, Date.now() + PENDING_CONFIRMATION_TTL_MS);
+          if (stored.status === 'duplicate') return {
+            content: [{ type: 'text', text: `这张图片已有第${stored.id}笔待确认，没有重复拟单。请回复“确认第${stored.id}笔”或“取消第${stored.id}笔”。` }],
+            details: { status: 'pending_confirmation', proposalId: stored.id },
+          };
+          if (!stored.id) return {
+            content: [{ type: 'text', text: stored.status === 'full'
+              ? '已有10笔图片支出待确认，请先按编号确认或取消，再发送新图片。这张没有入账。'
+              : '这张图片的确认单已处理或过期，没有再次入账。请重新发送图片。' }],
+            details: { status: stored.status },
+          };
+          const timeDisplay = imageExpenseTimeDisplay(input);
+          const form = formatExpenseConfirmation({ ledgerDisplayName, amountMinor: candidate.amountMinor,
+            currency: input.currency, primaryCategory: input.primaryCategory, subcategory: input.subcategory,
+            comment: candidate.comment, time: candidate.time, showSeconds: timeDisplay.showSeconds }).split('\n').filter(line => !line.startsWith('- 确认：')).join('\n');
+          const notes = [
+            orderDuplicate ? '疑似相同订单已有记账记录；只有确定这是另一笔消费时才确认。' : '',
+            (input.imageEvidence?.semanticVersion === 2 ? input.imageEvidence.expenseStatus === 'unclear' : input.imageEvidence?.paymentStatus !== 'paid')
+              ? '图片消费性质仍有疑问，请确认这笔确实是已发生的支出。' : '',
+            input.imageEvidence?.currencyAmbiguous ? `图片币种不明确，暂按 ${input.currency} 拟单，请核对。` : '',
+            imageExpenseCurrencyNote(input),
+            input.imageEvidence?.amountAmbiguous ? '图片中有多个可能金额，请核对下方实付总额。' : '',
+          ].filter(Boolean).join('\n');
+          return {
+            content: [{ type: 'text', text: `图片支出第${stored.id}笔，尚未入账。\n${notes ? notes + '\n' : ''}${form}\n${timeDisplay.note ? timeDisplay.note + '\n' : ''}回复“确认第${stored.id}笔”入账，或“取消第${stored.id}笔”。10分钟内有效。` }],
+            details: { status: 'pending_confirmation', proposalId: stored.id, currency: input.currency },
+          };
+        }
+        const result = await recordExpense({ api: bookkeepingApi, store: receiptStore, input, inbound,
+          accountName, validateBeforeWrite: isStillAuthorized }) as RecordExpenseResult;
+        return recordedExpenseResponse(result, input);
+      } catch (error) {
+        if (!(error instanceof ExpenseRecordingError)) throw error;
+        return expenseFailureResponse(error);
+      }
     };
 
     api.registerTool({
@@ -1420,14 +1549,15 @@ export default definePluginEntry({
           catalogMode: 'direct-only',
           description: [
             '将当前明确、已发生的一条消费消息按声明的原币记为一笔支出；没有币种时默认 SGD。由你理解语义并选择金额、一级和二级分类。',
+            '当前图片由你做语义校验：钱（实际总额和币种）、消费日期、用途三项明确且是一笔已发生支出，就直接record_expense。imageEvidence使用semanticVersion=2，逐项提供图片依据与歧义标志，不要求实付款/已支付等固定标签。小票、卡交易、付款凭证、订单、其他语言都按含义理解；未付、退款、收入、转账、报价、未来计划不记支出。日期或用途缺失先询问，不得用收图日期或泛化备注补齐。日期用explicit，按可见格式/地区解析localDate、localTime，秒数另传localSecond；只有日期可省略localTime，工具披露钟点回退。物流、到货、状态栏时间不可用。图片无币种信息或只有孤立$且无其他线索时默认SGD并标currencyDefaulted=true，不因此要求确认；有明确币种按原币，冲突才澄清。图片字段不得用于普通文字消息。',
             '不要把“备注”后的文字放进参数；工具会从可信原始消息中原样提取。',
             '若原始消息未明确标注“备注”，可提供简短且有依据的商户、商品或用途说明；不得编造信息。',
             '超市消费整笔归食品酒水/超市购物；网线归学习进修/数码装备。',
             '早餐、午餐、晚餐、早饭、午饭、晚饭或一般餐饮，二级分类一律使用“早午晚餐”，不要使用“餐饮”“午餐”等非正式名称。',
-            '同一消息中的加法金额表示一笔消费总额，例如“6.5+2.5”必须只调用一次并传入“9”。',
+            '同一笔消费支持加、减、乘、除：6.5+2.5=9，10-3.8=6.20，6.7×0.9 或 6.7*0.9=6.03；也支持 x/X/＊/乘/乘以/÷/除/除以/-/−/－/减/减去。先乘除后加减，同级从左到右，一条消息只调用一次并传计算结果。数字间 / 或 ／ 默认按除法，但必须改用 prepare_expense 展示结果确认，例如 3.8/2 拟单 1.90，用户确认后才写入。明确的一笔支出使用 ÷、除、除以且金额精确时直接用本工具，例如午饭3.8÷2或午饭3.8除以2直接记1.90，不因除法一律拟单。备注中的斜杠不计算。除零、结果非正、不能精确到分或不支持的括号/百分数/幂运算，先请用户明确最终金额，不舍入、不取操作数拟单。',
             '如果消息像“午饭7.2吗”一样含有不确定或疑问语气，不要调用本工具，改用 prepare_expense。',
             '如果有多个可疑金额，先由你根据消费语义选择最可能的实付金额，再调用 prepare_expense 请用户确认；不要直接入账。工具若发现所选金额仍不唯一，也只返回确认单，不写账。',
-            '必须判断当前消息是否给出消费时间：没有则使用 timeMode=received；仅写今天或今日且没有其他日期或具体钟点时也可用 received；currency 按原文明确币种传 ISO 代码，未声明时传 SGD；有则使用 timeMode=explicit，并提供 localDate、原文 timeEvidence，以及仅在具体钟点明确时提供 localTime。',
+            '普通文字消息（不含图片）必须判断原文是否给出消费时间：没有则使用 timeMode=received；仅写今天或今日且没有其他日期或具体钟点时也可用 received；currency 按原文明确币种传 ISO 代码，未声明时传 SGD；有则使用 timeMode=explicit，并提供 localDate、原文 timeEvidence，以及仅在具体钟点明确时提供 localTime。图片需检查订单信息中的付款、下单或创建时间，不能因为没有附带文字就使用 received。',
             '“中午吃饭”“晚上吃饭”和“午饭”“晚饭”一样是消费描述，不是指定时间；没有另外写日期或具体钟点时统一用 timeMode=received，按可信消息发送时间记账。“中午吃饭7.1+2.5”是一笔9.60，不是疑问。',
             '否定、举例、转述、代付、退款、收款、未来计划或查询不是已发生的本人支出；正常对话或查询即可，不要调用写入工具。',
             '工具成功后，最终回复只能原样采用工具返回的“已记账”结果；不得展示思考、参数校验、候选分类或重试过程。',
@@ -1442,6 +1572,8 @@ export default definePluginEntry({
             const binding = takeToolCallBinding(_id, 'record_expense', toolContext, params);
             if ('cachedResponse' in binding) return binding.cachedResponse;
             const { inbound, isStillAuthorized, authoritativeResponse } = binding;
+            if (inbound.image || normalizedInput.imageEvidence) return authoritativeResponse(
+              await imageExpenseResponse(normalizedInput, inbound, isStillAuthorized, false));
             if (requiresExpenseConfirmation(inbound.content)
               || !messageSupportsExpenseAmount(inbound.content, parseAmountToMinorUnits(normalizedInput.amount), normalizedInput.currency)) {
               let candidate;
@@ -1517,10 +1649,11 @@ export default definePluginEntry({
         catalogMode: 'direct-only',
         description: [
           '为语义或金额仍需用户确认的一笔候选支出生成确认单；本工具绝不会写入账本。',
+          '图片金额、币种或消费性质有可确认的合理候选时，附semanticVersion=2的imageEvidence拟单；日期和用途必须明确，缺失先询问。使用与record_expense相同的AI语义规则和证据。已知非支出或多笔不拟单。更正先取消原编号，再重发完整消费。',
           '例如“午饭7.2吗”应使用本工具，让用户确认你的金额、分类、备注和原消息时间理解。',
-          '有多个可能金额时，根据消费语义选择当前消息中最可能的一个金额（或明确加法合计）拟单，不必要求原文只有一个数字；没有合理候选时才追问。数量、型号、日期、原价、余额不能当作实付金额。',
+          '有多个可能金额时，根据消费语义选择当前消息中最可能的一个金额（或明确加、减、乘、除算式的结果）拟单，不必要求原文只有一个数字；没有合理候选时才追问。数量、型号、日期、原价、余额不能当作实付金额。数字间 / 或 ／ 按除法拟单，例如 3.8/2 传 1.90；不能直接写入，也不能选操作数。明确的一笔支出使用 ÷、除、除以且金额精确时应调用 record_expense，不要仅因除法就调用本工具。算式结果必须为正且精确到分，不舍入，除零或无法精确到分时请用户明确金额。',
           '金额、分类和备注由你根据当前消息理解；不得猜测消息中没有的信息。',
-          '必须判断当前消息是否给出消费时间：没有则使用 timeMode=received；仅写今天或今日且没有其他日期或具体钟点时也可用 received；currency 按原文明确币种传 ISO 代码，未声明时传 SGD；有则使用 timeMode=explicit，并提供 localDate、原文 timeEvidence，以及仅在具体钟点明确时提供 localTime。',
+          '普通文字消息（不含图片）必须判断原文是否给出消费时间：没有则使用 timeMode=received；仅写今天或今日且没有其他日期或具体钟点时也可用 received；currency 按原文明确币种传 ISO 代码，未声明时传 SGD；有则使用 timeMode=explicit，并提供 localDate、原文 timeEvidence，以及仅在具体钟点明确时提供 localTime。图片需检查订单信息中的付款、下单或创建时间，不能因为没有附带文字就使用 received。',
           '“中午吃饭”“晚上吃饭”和“午饭”“晚饭”一样是消费描述，不是指定时间；没有另外写日期或具体钟点时统一用 timeMode=received，按可信消息发送时间记账。',
           '工具返回后只逐字回复确认单，不展示思考、参数或工具名。',
           CATEGORY_GUIDE,
@@ -1535,6 +1668,8 @@ export default definePluginEntry({
           if ('cachedResponse' in binding) return binding.cachedResponse;
           const { inbound, isStillAuthorized, authoritativeResponse } = binding;
           let candidate;
+          if (inbound.image || normalizedInput.imageEvidence) return authoritativeResponse(
+            await imageExpenseResponse(normalizedInput, inbound, isStillAuthorized, true));
           try {
             candidate = prepareExpenseConfirmation({ input: normalizedInput, inbound });
           } catch (error) {
@@ -1590,6 +1725,7 @@ export default definePluginEntry({
         catalogMode: 'direct-only',
         description: [
           '处理用户对上一张待确认支出单独回复的确认或取消。',
+          '图片候选支持“确认第3笔”“取消第3笔”；编号由工具从可信原文读取。多个候选时必须指定编号，不能自行选择。',
           '只有当前消息本身是简短确认词或取消词时才调用；不要传金额、分类或备注。',
           `确认词：${[...AFFIRMATIVE_REPLIES].join('、')}。取消词：${[...NEGATIVE_REPLIES].join('、')}。可带句尾句号、感叹号、逗号或波浪号。`,
           '用户发送其他新内容时，按新请求正常处理，不要调用本工具。',
@@ -1616,10 +1752,15 @@ export default definePluginEntry({
           if (!isStillAuthorized()) {
             throw new Error('当前微信消息的可信绑定已变化，本次没有操作账本。');
           }
-          const pending = receiptStore.consumePendingExpenseConfirmation(
+          const pending = receiptStore.consumeImageOrTextConfirmation(
             inbound.conversationKey,
             trustedInboundMessageKey(inbound.channel, inbound.messageId),
+            imageConfirmationSelection(inbound.content)?.proposalId,
           );
+          if (pending.status === 'ambiguous') return authoritativeResponse({
+            content: [{ type: 'text', text: `有多笔支出待确认，请指定编号，例如“确认第${pending.ids[0]}笔”或“取消第${pending.ids[0]}笔”。本次没有入账。` }],
+            details: { status: 'ambiguous' },
+          });
           if (pending.status === 'duplicate') {
             return authoritativeResponse({
               content: [{

@@ -1,17 +1,28 @@
 // Both the production host and the isolated three-service rehearsal use this
 // controller. The driver verifies identities; only verified handles are stopped.
 export function storageDecision(sample, wasStopped = false) {
+  if (sample === undefined) return 'unavailable';
+  const GiB = 2 ** 30;
+  if (sample?.error === 'STORAGE_UNAVAILABLE'
+    && ['timeout', 'daemon-unavailable'].includes(sample.diagnostic?.kind)) {
+    // A partial reading can prove low space even when its other half timed out.
+    for (const key of ['hostFreeBytes', 'volumeFreeBytes']) {
+      if (sample[key] !== undefined && (!Number.isSafeInteger(sample[key]) || sample[key] < 0)) return 'fault';
+    }
+    if (sample.hostFreeBytes < 5 * GiB || sample.volumeFreeBytes < 2 * GiB) return 'stop';
+    return 'unavailable';
+  }
   if (!sample || sample.error || !['hostFreeBytes', 'volumeFreeBytes'].every((key) =>
     Number.isSafeInteger(sample[key]) && sample[key] >= 0)) return 'fault';
-  const GiB = 2 ** 30;
   if (sample.hostFreeBytes < 5 * GiB || sample.volumeFreeBytes < 2 * GiB) return 'stop';
   if (sample.hostFreeBytes < 10 * GiB || sample.volumeFreeBytes < 4 * GiB) return wasStopped ? 'hold' : 'warn';
   return 'ok';
 }
 
-export async function reconcileRuntime(driver, state, { now = Date.now(), storage, maintenance = false } = {}) {
+export async function reconcileRuntime(driver, state, { now, storage, maintenance = false, view: inspectedView } = {}) {
+  const sampledAt = now ?? Date.now();
   if (maintenance) return 'maintenance';
-  const view = await driver.inspect();
+  const view = inspectedView ?? await driver.inspect();
   if (!view.available) return 'waiting-for-docker';
   const stop = async (roles) => {
     // Sequential stop is deliberate: close publication first, then quiesce
@@ -19,12 +30,17 @@ export async function reconcileRuntime(driver, state, { now = Date.now(), storag
     for (const role of roles) if (view.trusted[role]) await driver.stop(role, view.trusted[role]);
   };
   if (!view.identityValid) {
+    delete state.healthyStorageAt;
+    delete state.healthyStorageContainers;
     await stop(['guard', 'openclaw']);
     return 'identity-needs-attention';
   }
   let allowed;
   try { allowed = await driver.validateInputs(); } catch { allowed = false; }
   if (!allowed) { await stop(['guard', 'openclaw']); return 'activation-needs-attention'; }
+  // Slow validation consumes the existing grace period; it must not move the
+  // observation timestamp forward. Explicit time remains injectable in tests.
+  now ??= Date.now();
   const disk = storageDecision(storage, state.storageStopped);
   if (disk === 'fault') {
     state.storageFault = true;
@@ -37,9 +53,31 @@ export async function reconcileRuntime(driver, state, { now = Date.now(), storag
     await stop(['guard', 'openclaw', 'origin']);
     return state.storageFault ? 'storage-fault-latched' : 'stopped-low-disk';
   }
+  const containers = ['guard', 'openclaw', 'origin'].map(role => view.trusted[role]);
+  if (disk === 'unavailable') {
+    // Missing observations never authorize a start. Only the same healthy
+    // containers may continue briefly after a complete, safely sized sample.
+    const age = now - state.healthyStorageAt;
+    if (!state.storageStopped && view.healthy && view.namespaceValid && containers.every(Boolean)
+      && Number.isFinite(age) && age >= 0 && age < 60000
+      && containers.every((id, index) => id === state.healthyStorageContainers?.[index])) return 'storage-observation-grace';
+    state.storageStopped = true;
+    delete state.healthyStorageAt;
+    delete state.healthyStorageContainers;
+    await stop(['guard', 'openclaw', 'origin']);
+    return 'storage-observation-paused';
+  }
+  if (!view.healthy || !view.namespaceValid) {
+    delete state.healthyStorageAt;
+    delete state.healthyStorageContainers;
+  }
   if (disk === 'warn' && !view.healthy) return 'low-disk-no-restart';
   if (view.healthy && view.namespaceValid) {
     state.storageStopped = false;
+    if (disk === 'ok') {
+      state.healthyStorageAt = sampledAt;
+      state.healthyStorageContainers = containers;
+    }
     return disk === 'warn' ? 'healthy-low-disk' : 'healthy';
   }
   // A connected process can be temporarily unready while cloudflared retries

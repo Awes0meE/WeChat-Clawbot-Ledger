@@ -37,3 +37,14 @@ test('falls back to a generated id only when Weixin omitted message_id', () => {
 
   assert.match(context.MessageSid, /^openclaw-weixin:/);
 });
+
+test('only a single current image carries provider message identity into media facts', () => {
+  const opts = { decryptedPicPath: '/synthetic/media/inbound/image.jpg' };
+  const direct = weixinMessageToMsgContext(textMessage({ item_list: [{ type: 2 }] }), 'default', opts);
+  assert.equal(direct.Body, '');
+  assert.deepEqual(direct.media, [{ path: opts.decryptedPicPath, contentType: 'image/*', messageId: '745418' }]);
+  const quoted = weixinMessageToMsgContext(textMessage({ item_list: [{ type: 1, text_item: { text: '看之前的图' }, ref_msg: { message_item: { type: 2 } } }] }), 'default', opts);
+  assert.equal(quoted.media[0].messageId, undefined);
+  const multiple = weixinMessageToMsgContext(textMessage({ item_list: [{ type: 2 }, { type: 2 }] }), 'default', opts);
+  assert.equal(multiple.media[0].messageId, undefined);
+});
